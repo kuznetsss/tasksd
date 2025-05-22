@@ -1,24 +1,37 @@
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
-struct ServerMessage {
+struct ServerResponse {
     #[serde(flatten)]
     payload: Payload,
     id: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
+#[serde(rename_all = "snake_case")]
 enum Payload {
-    Status(Status),
-    RunOutput { output: String },
-    Error { code: i32, message: String },
+    Result(Result),
+    Error { code: usize, message: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "result", rename_all = "snake_case")]
+#[serde(untagged)]
+enum Result {
+    RunResponse { pid: usize },
+    SendSignalResult(Status),
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum Status {
     Ok,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case", tag = "method", content = "params")]
+enum ServerNotification {
+    ProcessOutput { pid: usize, line: String },
+    ProcessExited { pid: usize, exit_code: usize },
 }
 
 #[cfg(test)]
@@ -26,25 +39,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ok_message() {
-        let message = ServerMessage {
-            payload: Payload::Status(Status::Ok),
+    fn run_response_serialization() {
+        let message = ServerResponse {
+            payload: Payload::Result(Result::RunResponse { pid: 456 }),
             id: 123,
         };
-        let message_string = serde_json::to_string(&message).unwrap();
-        assert_eq!(message_string, r#"{"result":"ok","id":123}"#);
+        let serialized_message = serde_json::to_string(&message).unwrap();
+        assert_eq!(serialized_message, r#"{"result":{"pid":456},"id":123}"#);
     }
 
     #[test]
-    fn run_output_message() {
-        let message = ServerMessage {
-            payload: Payload::RunOutput{output: "some output".to_string()},
-            id: 321,
+    fn send_siganl_response_serialization() {
+        let message = ServerResponse {
+            payload: Payload::Result(Result::SendSignalResult(Status::Ok)),
+            id: 123,
         };
-        let message_string = serde_json::to_string(&message).unwrap();
+        let serialized_message = serde_json::to_string(&message).unwrap();
+        assert_eq!(serialized_message, r#"{"result":"ok","id":123}"#);
+    }
+
+    #[test]
+    fn error_serialization() {
+        let message = ServerResponse {
+            payload: Payload::Error {
+                code: 123,
+                message: "some message".to_string(),
+            },
+            id: 456,
+        };
+        let serialized_message = serde_json::to_string(&message).unwrap();
         assert_eq!(
-            message_string,
-            r#"{"result":{"run_output":"some output"},"id":321}"#
-        );
+            serialized_message,
+            r#"{"error":{"code":123,"message":"some message"},"id":456}"#
+        )
+    }
+
+    #[test]
+    fn process_output_serialization() {
+        let message = ServerNotification::ProcessOutput {
+            pid: 123,
+            line: "some output".to_string(),
+        };
+        let serialized_message = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized_message,
+            r#"{"method":"process_output","params":{"pid":123,"line":"some output"}}"#
+        )
+    }
+
+    #[test]
+    fn process_exited_serialization() {
+        let message = ServerNotification::ProcessExited {
+            pid: 123,
+            exit_code: 456,
+        };
+        let serialized_message = serde_json::to_string(&message).unwrap();
+        assert_eq!(
+            serialized_message,
+            r#"{"method":"process_exited","params":{"pid":123,"exit_code":456}}"#
+        )
     }
 }

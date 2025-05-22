@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
-struct ClientMessage {
+struct ClientRequest {
     #[serde(flatten)]
     payload: Payload,
     id: usize,
@@ -10,14 +10,8 @@ struct ClientMessage {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Payload {
-    Init(InitParams),
     Run(RunParams),
     SendSignal(SendSignalParams),
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct InitParams {
-    client_version: (u32, u32, u32),
 }
 
 #[derive(Debug, Clone, Deserialize)]
