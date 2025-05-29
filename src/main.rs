@@ -1,17 +1,32 @@
 use tokio::io::AsyncWriteExt;
 
-mod service;
 mod api;
+mod io;
+mod service;
 
 fn main() -> anyhow::Result<()> {
-    tokio::runtime::Builder::new_current_thread()
+    tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .worker_threads(4)
         .build()
         .unwrap()
         .block_on(async {
-            run().await;
+            // run().await;
+            for _ in 0..40 {
+                tokio::spawn(async {
+                    print().await;
+                });
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         });
     Ok(())
+}
+
+async fn print() {
+    use tokio::io::{AsyncBufReadExt, BufReader, BufWriter};
+    let mut out = tokio::io::stdout();
+    out.write_all("hello world\n".as_bytes()).await.unwrap();
+    out.flush().await.unwrap();
 }
 
 async fn run() {

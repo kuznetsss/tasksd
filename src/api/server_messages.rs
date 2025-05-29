@@ -58,7 +58,7 @@ enum Status {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "method", content = "params")]
-enum ServerNotification {
+pub enum ServerNotification {
     ProcessOutput { pid: usize, line: String },
     ProcessExited { pid: usize, exit_code: i32 },
 }
