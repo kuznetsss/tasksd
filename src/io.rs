@@ -108,6 +108,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::AsyncReadExt;
+
     use super::*;
 
     #[tokio::test]
@@ -132,5 +134,29 @@ mod tests {
                 .unwrap(),
             IoError::EOF
         );
+    }
+
+    #[tokio::test]
+    async fn writer_sends_response() {
+        let (mut stdout_mock_reader, stdout_mock_writer) = tokio::io::simplex(128);
+        let (writer, response_sender, _) = Writer::new(stdout_mock_writer);
+
+        tokio::spawn(async move {
+            println!("run() started");
+            writer.run().await.unwrap();
+            println!("run() finished");
+        });
+
+        let response_to_send = ServerResponse::send_signal_response(123);
+        println!("sending response");
+        response_sender.send(response_to_send.clone()).await.unwrap();
+        println!("sent response");
+
+        let expected_message = serde_json::to_string(&response_to_send).unwrap();
+        let mut buffer = vec![0u8; expected_message.len()];
+        println!("reading response");
+        stdout_mock_reader.read_exact(buffer.as_mut_slice()).await.unwrap();
+        println!("read");
+        assert_eq!(&buffer, expected_message.as_bytes());
     }
 }

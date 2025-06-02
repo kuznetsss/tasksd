@@ -8,31 +8,28 @@ pub struct ServerResponse {
 }
 
 impl ServerResponse {
-    pub fn run_response(id: usize, pid: usize) -> String {
-        let message = ServerResponse {
+    pub fn run_response(id: usize, pid: usize) -> ServerResponse {
+        ServerResponse {
             payload: Payload::Result(Result::RunResponse { pid }),
             id,
-        };
-        serde_json::to_string(&message).unwrap()
+        }
     }
 
-    pub fn send_signal_response(id: usize) -> String {
-        let message = ServerResponse {
+    pub fn send_signal_response(id: usize) -> ServerResponse {
+        ServerResponse {
             payload: Payload::Result(Result::SendSignalResponse(Status::Ok)),
             id: 123,
-        };
-        serde_json::to_string(&message).unwrap()
+        }
     }
 
-    pub fn error(id: usize, error_code: usize) -> String {
-        let message = ServerResponse {
+    pub fn error(id: usize, error_code: usize) -> ServerResponse {
+        ServerResponse {
             payload: Payload::Error {
                 code: error_code,
                 message: "todo".to_string(),
             },
             id,
-        };
-        serde_json::to_string(&message).unwrap()
+        }
     }
 }
 
@@ -64,14 +61,12 @@ pub enum ServerNotification {
 }
 
 impl ServerNotification {
-    pub fn process_output(pid: usize, line: String) -> String {
-        let message = ServerNotification::ProcessOutput { pid, line };
-        serde_json::to_string(&message).unwrap()
+    pub fn process_output(pid: usize, line: String) -> ServerNotification {
+        ServerNotification::ProcessOutput { pid, line }
     }
 
-    pub fn process_exited(pid: usize, exit_code: i32) -> String {
-        let message = ServerNotification::ProcessExited { pid, exit_code };
-        serde_json::to_string(&message).unwrap()
+    pub fn process_exited(pid: usize, exit_code: i32) -> ServerNotification {
+        ServerNotification::ProcessExited { pid, exit_code }
     }
 }
 
@@ -81,39 +76,45 @@ mod tests {
 
     #[test]
     fn run_response_serialization() {
-        let serialized_message = ServerResponse::run_response(123, 456);
-        assert_eq!(serialized_message, r#"{"result":{"pid":456},"id":123}"#);
+        let response = ServerResponse::run_response(123, 456);
+        assert_eq!(
+            serde_json::to_string(&response).unwrap(),
+            r#"{"result":{"pid":456},"id":123}"#
+        );
     }
 
     #[test]
-    fn send_siganl_response_serialization() {
-        let serialized_message = ServerResponse::send_signal_response(123);
-        assert_eq!(serialized_message, r#"{"result":"ok","id":123}"#);
+    fn send_signal_response_serialization() {
+        let response = ServerResponse::send_signal_response(123);
+        assert_eq!(
+            serde_json::to_string(&response).unwrap(),
+            r#"{"result":"ok","id":123}"#
+        );
     }
 
     #[test]
     fn error_serialization() {
-        let serialized_message = ServerResponse::error(456, 123);
+        let error = ServerResponse::error(456, 123);
         assert_eq!(
-            serialized_message,
+            serde_json::to_string(&error).unwrap(),
             r#"{"error":{"code":123,"message":"todo"},"id":456}"#
         )
     }
 
     #[test]
     fn process_output_serialization() {
-        let serialized_message = ServerNotification::process_output(123, "some output".to_string());
+        let notification = ServerNotification::process_output(123, "some output".to_string());
         assert_eq!(
-            serialized_message,
+            serde_json::to_string(&notification).unwrap(),
             r#"{"method":"process_output","params":{"pid":123,"line":"some output"}}"#
         )
     }
 
     #[test]
     fn process_exited_serialization() {
-        let serialized_message = ServerNotification::process_exited(123, 456);
+        let notification = ServerNotification::process_exited(123, 456);
         assert_eq!(
-            serialized_message,
+            serde_json::to_string(&notification).unwrap(),
             r#"{"method":"process_exited","params":{"pid":123,"exit_code":456}}"#
         )
     }
