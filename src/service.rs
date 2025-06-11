@@ -1,10 +1,8 @@
-pub struct Service {
-
-}
+pub struct Service {}
 
 impl Service {
     pub fn new() -> Self {
-        Self{}
+        Self {}
     }
 
     pub async fn run() -> anyhow::Result<()> {

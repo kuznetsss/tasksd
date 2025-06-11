@@ -110,6 +110,8 @@ where
 mod tests {
     use tokio::io::AsyncReadExt;
 
+    use crate::types::MessageID;
+
     use super::*;
 
     #[tokio::test]
@@ -141,7 +143,7 @@ mod tests {
         let (mut stdout_mock_reader, stdout_mock_writer) = tokio::io::simplex(128);
         let (writer, response_sender, _notification_sender) = Writer::new(stdout_mock_writer);
 
-        let response_to_send = ServerResponse::send_signal_response(123);
+        let response_to_send = ServerResponse::send_signal_response(MessageID(123));
         response_sender
             .send(response_to_send.clone())
             .await

@@ -2,7 +2,9 @@ use tokio::io::AsyncWriteExt;
 
 mod api;
 mod io;
+mod process_manager;
 mod service;
+mod types;
 
 fn main() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()

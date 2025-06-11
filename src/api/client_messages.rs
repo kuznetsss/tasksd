@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use crate::types::ProcessID;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClientRequest {
     #[serde(flatten)]
@@ -16,7 +18,7 @@ pub enum Method {
         working_directory: String,
     },
     SendSignal {
-        pid: u32,
+        pid: ProcessID,
         signal: u32,
     },
 }
@@ -67,7 +69,7 @@ mod tests {
         let parsed_message: ClientRequest = serde_json::from_str(message).unwrap();
         assert_eq!(parsed_message.id, 123);
         if let Method::SendSignal { pid, signal } = parsed_message.method {
-            assert_eq!(pid, 456);
+            assert_eq!(pid, ProcessID(456));
             assert_eq!(signal, 9);
         } else {
             panic!("Expected Method::Run");

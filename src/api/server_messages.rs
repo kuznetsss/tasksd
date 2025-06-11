@@ -1,28 +1,30 @@
 use serde::Serialize;
 
+use crate::types::{MessageID, ProcessID};
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerResponse {
     #[serde(flatten)]
     payload: Payload,
-    id: usize,
+    id: MessageID,
 }
 
 impl ServerResponse {
-    pub fn run_response(id: usize, pid: usize) -> ServerResponse {
+    pub fn run_response(id: MessageID, pid: ProcessID) -> ServerResponse {
         ServerResponse {
             payload: Payload::Result(Result::RunResponse { pid }),
             id,
         }
     }
 
-    pub fn send_signal_response(id: usize) -> ServerResponse {
+    pub fn send_signal_response(id: MessageID) -> ServerResponse {
         ServerResponse {
             payload: Payload::Result(Result::SendSignalResponse(Status::Ok)),
-            id: 123,
+            id,
         }
     }
 
-    pub fn error(id: usize, error_code: usize) -> ServerResponse {
+    pub fn error(id: MessageID, error_code: usize) -> ServerResponse {
         ServerResponse {
             payload: Payload::Error {
                 code: error_code,
@@ -43,7 +45,7 @@ enum Payload {
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 enum Result {
-    RunResponse { pid: usize },
+    RunResponse { pid: ProcessID },
     SendSignalResponse(Status),
 }
 
@@ -56,16 +58,16 @@ enum Status {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "method", content = "params")]
 pub enum ServerNotification {
-    ProcessOutput { pid: usize, line: String },
-    ProcessExited { pid: usize, exit_code: i32 },
+    ProcessOutput { pid: ProcessID, line: String },
+    ProcessExited { pid: ProcessID, exit_code: i32 },
 }
 
 impl ServerNotification {
-    pub fn process_output(pid: usize, line: String) -> ServerNotification {
+    pub fn process_output(pid: ProcessID, line: String) -> ServerNotification {
         ServerNotification::ProcessOutput { pid, line }
     }
 
-    pub fn process_exited(pid: usize, exit_code: i32) -> ServerNotification {
+    pub fn process_exited(pid: ProcessID, exit_code: i32) -> ServerNotification {
         ServerNotification::ProcessExited { pid, exit_code }
     }
 }
@@ -76,7 +78,7 @@ mod tests {
 
     #[test]
     fn run_response_serialization() {
-        let response = ServerResponse::run_response(123, 456);
+        let response = ServerResponse::run_response(MessageID(123), ProcessID(456));
         assert_eq!(
             serde_json::to_string(&response).unwrap(),
             r#"{"result":{"pid":456},"id":123}"#
@@ -85,7 +87,7 @@ mod tests {
 
     #[test]
     fn send_signal_response_serialization() {
-        let response = ServerResponse::send_signal_response(123);
+        let response = ServerResponse::send_signal_response(MessageID(123));
         assert_eq!(
             serde_json::to_string(&response).unwrap(),
             r#"{"result":"ok","id":123}"#
@@ -94,7 +96,7 @@ mod tests {
 
     #[test]
     fn error_serialization() {
-        let error = ServerResponse::error(456, 123);
+        let error = ServerResponse::error(MessageID(456), 123);
         assert_eq!(
             serde_json::to_string(&error).unwrap(),
             r#"{"error":{"code":123,"message":"todo"},"id":456}"#
@@ -103,7 +105,8 @@ mod tests {
 
     #[test]
     fn process_output_serialization() {
-        let notification = ServerNotification::process_output(123, "some output".to_string());
+        let notification =
+            ServerNotification::process_output(ProcessID(123), "some output".to_string());
         assert_eq!(
             serde_json::to_string(&notification).unwrap(),
             r#"{"method":"process_output","params":{"pid":123,"line":"some output"}}"#
@@ -112,7 +115,7 @@ mod tests {
 
     #[test]
     fn process_exited_serialization() {
-        let notification = ServerNotification::process_exited(123, 456);
+        let notification = ServerNotification::process_exited(ProcessID(123), 456);
         assert_eq!(
             serde_json::to_string(&notification).unwrap(),
             r#"{"method":"process_exited","params":{"pid":123,"exit_code":456}}"#
