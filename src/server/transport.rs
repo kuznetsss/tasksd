@@ -1,8 +1,8 @@
 use std::pin::pin;
 use std::{path::Path, sync::Arc};
 
-use anyhow::Result;
-use tokio::io::AsyncWriteExt;
+use anyhow::{Context, Result};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::net::unix::OwnedReadHalf;
 use tokio::sync::mpsc::{Sender, channel};
 use tokio::{
@@ -32,10 +32,12 @@ impl Transport<OwnedReadHalf> {
             out_sender: Self::spawn_writing(out_part, cancellation_token),
         })
     }
-
 }
 
-impl<In> Transport<In> {
+impl<In> Transport<In>
+where
+    In: AsyncReadExt + Send + 'static,
+{
     const CHANNEL_BUFFER_SIZE: usize = 16;
 
     fn spawn_writing<Writer>(
@@ -58,8 +60,76 @@ impl<In> Transport<In> {
                     cancellation_token.cancel();
                     return;
                 }
+                if let Err(e) = writer.flush().await {
+                    error!("Error writing to output: {e}. Message: {msg}");
+                    cancellation_token.cancel();
+                    return;
+                }
             }
         });
         sender
+    }
+
+    pub fn split_into(self) -> (BufReader<In>, Sender<Arc<String>>) {
+        (self.in_part, self.out_sender)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs::create_dir, path::PathBuf};
+
+    use super::*;
+    use tempfile::{TempDir, tempdir};
+    use tokio::net::UnixListener;
+
+    struct TestContext {
+        dir: TempDir,
+        socket_path: PathBuf,
+        cancellation_token: CancellationToken,
+        listener: UnixListener,
+    }
+
+    impl TestContext {
+        fn new() -> Self {
+            let dir = tempdir().unwrap();
+            let socket_path = dir.path().join("socket_send_test.socket");
+            let cancellation_token = CancellationToken::new();
+            let listener = UnixListener::bind(&socket_path).unwrap();
+            Self {
+                dir,
+                socket_path,
+                cancellation_token,
+                listener,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn socket_send() {
+        let context = TestContext::new();
+        let msg = Arc::new("hello world\n".to_string());
+        let listener_handle = tokio::spawn({
+            let listener = context.listener;
+            let msg = Arc::clone(&msg);
+            async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                stream
+                    .ready(Interest::READABLE | Interest::WRITABLE)
+                    .await
+                    .unwrap();
+                let (input, output) = stream.into_split();
+                let mut input = BufReader::new(input);
+                let mut s = String::new();
+                input.read_line(&mut s).await.unwrap();
+                assert_eq!(s, *msg);
+            }
+        });
+        let transport =
+            Transport::open_socket(&context.socket_path, context.cancellation_token.clone())
+                .await
+                .unwrap();
+        transport.out_sender.send(msg).await.unwrap();
+        listener_handle.await.unwrap();
     }
 }
