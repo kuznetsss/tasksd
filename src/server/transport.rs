@@ -12,6 +12,11 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
+
+pub trait Output: Clone {
+    async fn write_line(&mut self, line: Arc<String>) -> Result<()>;
+}
+
 pub struct Transport<In> {
     in_part: BufReader<In>,
     out_sender: Sender<Arc<String>>,
