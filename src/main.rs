@@ -1,4 +1,4 @@
-#[allow(unused)]
+#[allow(dead_code)] // prevent to many warnings while developing
 // mod api;
 mod server;
 
