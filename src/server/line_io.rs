@@ -1,4 +1,5 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
     sync::mpsc::{Sender, channel},
@@ -9,13 +10,15 @@ use tracing::error;
 
 use super::types::OutputMessage;
 
+#[async_trait]
 pub trait LineReader {
     async fn read_line(&mut self) -> Result<String>;
 }
 
+#[async_trait]
 impl<R> LineReader for BufReader<R>
 where
-    R: AsyncRead + Unpin,
+    R: AsyncRead + Send + Unpin,
 {
     async fn read_line(&mut self) -> Result<String> {
         let mut buf = String::new();
@@ -24,15 +27,14 @@ where
     }
 }
 
+#[async_trait]
 pub trait LineWriter {
-    fn write_line(
-        &mut self,
-        message: OutputMessage,
-    ) -> impl std::future::Future<Output = Result<()>> + std::marker::Send;
+    async fn write_line(&mut self, message: OutputMessage) -> Result<()>;
 }
 
 pub struct BackgroundLineWriter {
     tx: Sender<OutputMessage>,
+    // TODO: hold the cancellation_token
     writing_handle: JoinHandle<()>,
 }
 
@@ -82,6 +84,7 @@ where
     Ok(())
 }
 
+#[async_trait]
 impl LineWriter for BackgroundLineWriter {
     async fn write_line(&mut self, message: OutputMessage) -> Result<()> {
         self.tx.send(message).await.map_err(Into::into)
