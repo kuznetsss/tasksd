@@ -1,6 +1,6 @@
 use anyhow::Result;
 use tokio::{
-    io::{AsyncWrite, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
     sync::mpsc::{Sender, channel},
     task::JoinHandle,
 };
@@ -11,6 +11,17 @@ use super::types::OutputMessage;
 
 pub trait LineReader {
     async fn read_line(&mut self) -> Result<String>;
+}
+
+impl<R> LineReader for BufReader<R>
+where
+    R: AsyncRead + Unpin,
+{
+    async fn read_line(&mut self) -> Result<String> {
+        let mut buf = String::new();
+        AsyncBufReadExt::read_line(self, &mut buf).await?;
+        Ok(buf)
+    }
 }
 
 pub trait LineWriter {
@@ -81,10 +92,11 @@ impl LineWriter for BackgroundLineWriter {
 mod tests {
     use std::sync::Arc;
 
+    use tokio::io::BufReader;
     use tokio_test::io::Builder;
     use tokio_util::sync::CancellationToken;
 
-    use crate::server::line_io::{BackgroundLineWriter, LineWriter};
+    use crate::server::line_io::{BackgroundLineWriter, LineReader, LineWriter};
 
     struct BackgroundLineWriterTestCtx {
         writer: BackgroundLineWriter,
@@ -152,5 +164,23 @@ mod tests {
             .unwrap();
         ctx.writer.finish().await.unwrap();
         assert!(ctx.token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn line_reader_for_bufread_reads() {
+        let msg = "test\n";
+        let mock = Builder::new().read(msg.as_bytes()).build();
+        let mut reader = BufReader::new(mock);
+        assert_eq!(reader.read_line().await.unwrap(), msg);
+    }
+
+    #[tokio::test]
+    async fn line_reader_for_bufread_propagates_error() {
+        use std::io::{Error, ErrorKind};
+        let mock = Builder::new()
+            .read_error(Error::from(ErrorKind::ConnectionRefused))
+            .build();
+        let mut reader = BufReader::new(mock);
+        reader.read_line().await.unwrap_err();
     }
 }
