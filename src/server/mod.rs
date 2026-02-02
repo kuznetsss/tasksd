@@ -41,7 +41,7 @@ impl Server {
 }
 
 pub struct Connection {
-    pub reader: Box<dyn LineReader>,
-    pub writer: Box<dyn LineWriter>,
+    pub reader: Box<dyn LineReader + Send>,
+    pub writer: Box<dyn LineWriter + Send>,
     pub cancellation_token: CancellationToken,
 }
