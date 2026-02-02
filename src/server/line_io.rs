@@ -27,6 +27,7 @@ where
     async fn read_line(&mut self) -> Result<String> {
         let mut buf = String::new();
         AsyncBufReadExt::read_line(self, &mut buf).await?;
+        // TODO: maybe we should that buf ends with '\n'. Otherwise means EOF
         Ok(buf)
     }
 }

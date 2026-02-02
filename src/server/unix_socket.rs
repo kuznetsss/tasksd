@@ -121,5 +121,26 @@ mod tests {
             .unwrap();
     }
 
-    // TODO: add test for client disconnect
+    #[tokio::test]
+    async fn server_client_disconnects() {
+        let ctx = ServerTestContext::new();
+        let handle = tokio::spawn({
+            let server = ctx.server;
+            async move {
+                let (mut reader, _) = server
+                    .wait_for_connection(CancellationToken::new())
+                    .await
+                    .unwrap();
+                reader.read_line().await.unwrap();
+            }
+        });
+
+        let stream = UnixStream::connect(ctx.socket_path).await.unwrap();
+        drop(stream);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+    }
 }
