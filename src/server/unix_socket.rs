@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use tokio::{
-    io::{BufReader, BufWriter, Interest},
+    io::{BufReader, Interest},
     net::{UnixListener, unix::OwnedReadHalf},
 };
 use tokio_util::sync::CancellationToken;
@@ -34,8 +34,7 @@ impl Server {
         let (in_part, out_part) = stream.into_split();
         Ok((
             Input::new(in_part),
-            // TODO: remove BufWriter
-            Output::spawn(BufWriter::new(out_part), cancellation_token),
+            Output::spawn(out_part, cancellation_token),
         ))
     }
 }

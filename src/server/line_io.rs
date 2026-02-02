@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
-    sync::mpsc::{Sender, channel},
-    task::JoinHandle,
+    sync::{
+        Notify,
+        mpsc::{Sender, channel},
+    },
 };
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -34,8 +38,8 @@ pub trait LineWriter {
 
 pub struct BackgroundLineWriter {
     tx: Sender<OutputMessage>,
-    // TODO: hold the cancellation_token
-    writing_handle: JoinHandle<()>,
+    cancellation_token: CancellationToken,
+    completion_notification: Arc<Notify>,
 }
 
 impl BackgroundLineWriter {
@@ -47,28 +51,42 @@ impl BackgroundLineWriter {
     {
         let (sender, mut receiver) = channel::<OutputMessage>(Self::CHANNEL_BUFFER_SIZE);
 
-        let handle = tokio::spawn(async move {
-            while let Some(Some(msg)) = cancellation_token
-                .run_until_cancelled(receiver.recv())
-                .await
-            {
-                if let Err(e) = write_line(&mut writer, &msg).await {
-                    error!("Error writing message: {e}. Message: {msg}");
-                    cancellation_token.cancel();
-                    return;
+        let completion_notification = Arc::new(Notify::new());
+        tokio::spawn({
+            let cancellation_token = cancellation_token.clone();
+            let completion_notification = completion_notification.clone();
+            async move {
+                while let Some(Some(msg)) = cancellation_token
+                    .run_until_cancelled(receiver.recv())
+                    .await
+                {
+                    if let Err(e) = write_line(&mut writer, &msg).await {
+                        error!("Error writing message: {e}. Message: {msg}");
+                        cancellation_token.cancel();
+                        break;
+                    }
                 }
+                completion_notification.notify_one();
             }
         });
         Self {
             tx: sender,
-            writing_handle: handle,
+            cancellation_token,
+            completion_notification,
         }
     }
 
-    pub async fn finish(self) -> Result<()> {
+    /// Stops the writer as soon as possible
+    pub async fn stop(self) {
+        self.cancellation_token.cancel();
+        self.completion_notification.notified().await;
+    }
+
+    /// Writes everything queued and then stops
+    /// NOTE: this method may hung if there are other senders
+    pub async fn finish(self) {
         drop(self.tx);
-        self.writing_handle.await?;
-        Ok(())
+        self.completion_notification.notified().await;
     }
 }
 
@@ -132,7 +150,7 @@ mod tests {
             .write_line(Arc::new(msg.to_string()))
             .await
             .unwrap();
-        ctx.writer.finish().await.unwrap();
+        ctx.writer.finish().await;
     }
 
     #[tokio::test]
@@ -143,7 +161,7 @@ mod tests {
             .write_line(Arc::new(msg.to_string()))
             .await
             .unwrap();
-        ctx.writer.finish().await.unwrap();
+        ctx.writer.finish().await;
     }
 
     #[tokio::test]
@@ -152,7 +170,7 @@ mod tests {
         ctx.token.cancel();
         // It's not deterministic if there will be an error here
         let _ = ctx.writer.write_line(Arc::new("msg".to_string())).await;
-        ctx.writer.finish().await.unwrap();
+        ctx.writer.finish().await;
     }
 
     #[tokio::test]
@@ -165,7 +183,7 @@ mod tests {
             .write_line(Arc::new("msg".to_string()))
             .await
             .unwrap();
-        ctx.writer.finish().await.unwrap();
+        ctx.writer.finish().await;
         assert!(ctx.token.is_cancelled());
     }
 
