@@ -14,9 +14,15 @@ use tracing::error;
 
 use super::types::OutputMessage;
 
+// TODO: rename to message reader
 #[async_trait]
 pub trait LineReader {
     async fn read_line(&mut self) -> Result<String>;
+
+    // async fn read_header(&mut self) -> Result<String>
+    // async fn read_body(&mut self, n: usize) -> Result<String>;
+    // or
+    // async fn read_message(&mut self) -> Result<String>; // returns body only
 }
 
 #[async_trait]
@@ -28,6 +34,7 @@ where
         let mut buf = String::new();
         AsyncBufReadExt::read_line(self, &mut buf).await?;
         // TODO: maybe we should that buf ends with '\n'. Otherwise means EOF
+        // TODO: add test case for an empty buffer
         if buf.is_empty() {
             Err(anyhow::anyhow!("EOF"))
         } else {

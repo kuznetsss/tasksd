@@ -29,7 +29,16 @@ impl Server {
         match &self.inner {
             Inner::UnixSocket(s) => {
                 let connection_token = self.cancellation_token.child_token();
-                let (reader, writer) = s.wait_for_connection(connection_token.clone()).await?;
+                let (reader, writer) = match self
+                    .cancellation_token
+                    .run_until_cancelled(s.wait_for_connection(connection_token.clone()))
+                    .await
+                {
+                    Some(res) => res?,
+                    None => {
+                        anyhow::bail!("Cancelled");
+                    }
+                };
                 Ok(Connection {
                     reader: Box::new(reader),
                     writer: Box::new(writer),
@@ -45,3 +54,5 @@ pub struct Connection {
     pub writer: Box<dyn LineWriter + Send>,
     pub cancellation_token: CancellationToken,
 }
+
+// TODO: add tests
