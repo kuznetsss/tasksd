@@ -5,6 +5,7 @@ use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
 mod line_io;
+mod io;
 mod types;
 mod unix_socket;
 
