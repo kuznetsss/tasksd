@@ -1,12 +1,15 @@
 use std::path::Path;
 
-use crate::server::io::{Reader, Writer};
+pub use crate::server::io::{Reader, Writer};
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
 mod background_writer;
 mod io;
 mod unix_socket;
+
+#[cfg(test)]
+pub use io::{MockReader, MockWriter};
 
 pub struct Server {
     cancellation_token: CancellationToken,

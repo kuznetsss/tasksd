@@ -1,5 +1,5 @@
 #[allow(dead_code)] // prevent too many warnings while developing
-// mod api;
+mod api;
 mod server;
 
 use std::path::PathBuf;
@@ -9,6 +9,23 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::server::Server;
+
+/// tasksd - Editor companion to manage processes
+#[derive(clap::Parser, Debug)]
+#[command(version, about)]
+struct CliOptions {
+    /// Number of threads to use (default to the number of cpu cores available)
+    #[arg(short = 'j', long, default_value_t = 4)]
+    thread_number: usize,
+
+    /// Buffer size in lines for each running process
+    #[arg(short = 'b', long, default_value_t = 10000)]
+    process_buffer_size: usize,
+
+    /// Path to unix socket to open
+    #[arg(short = 'u', long)]
+    unix_socket_path: PathBuf,
+}
 
 fn main() -> anyhow::Result<()> {
     let cli_args = CliOptions::parse();
@@ -40,23 +57,6 @@ async fn run_server(server: Server) {
             println!("Client disconnected");
         });
     }
-}
-
-/// tasksd - Editor companion to manage processes
-#[derive(clap::Parser, Debug)]
-#[command(version, about)]
-struct CliOptions {
-    /// Number of threads to use (default to the number of cpu cores available)
-    #[arg(short = 'j', long, default_value_t = 4)]
-    thread_number: usize,
-
-    /// Buffer size in lines for each running process
-    #[arg(short = 'b', long, default_value_t = 10000)]
-    process_buffer_size: usize,
-
-    /// Path to unix socket to open
-    #[arg(short = 'u', long)]
-    unix_socket_path: PathBuf,
 }
 
 async fn ctrl_c_handler(root_cancellation: CancellationToken) {

@@ -1,7 +1,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use mockall::automock;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 
+#[automock]
 #[async_trait]
 pub trait Reader {
     async fn read_line(&mut self) -> Result<String>;
@@ -10,11 +12,13 @@ pub trait Reader {
 
 pub type OutputMessage = String;
 
+#[automock]
 #[async_trait]
 pub trait Writer {
     async fn write(&mut self, msg: OutputMessage) -> Result<()>;
 }
 
+#[automock]
 #[async_trait]
 impl<R> Reader for BufReader<R>
 where
