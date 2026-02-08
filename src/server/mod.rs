@@ -26,26 +26,15 @@ impl Server {
     }
 
     pub async fn wait_for_connection(&self) -> Result<Connection> {
-        match &self.inner {
-            Inner::UnixSocket(s) => {
-                let connection_token = self.cancellation_token.child_token();
-                let (reader, writer) = match self
-                    .cancellation_token
-                    .run_until_cancelled(s.wait_for_connection(connection_token.clone()))
-                    .await
-                {
-                    Some(res) => res?,
-                    None => {
-                        anyhow::bail!("Cancelled");
-                    }
-                };
-                Ok(Connection {
-                    reader: Box::new(reader),
-                    writer: Box::new(writer),
-                    cancellation_token: connection_token,
-                })
-            }
-        }
+        let connection_token = self.cancellation_token.child_token();
+        let (reader, writer) = match &self.inner {
+            Inner::UnixSocket(s) => s.wait_for_connection(connection_token.clone()).await?,
+        };
+        Ok(Connection {
+            reader: Box::new(reader),
+            writer: Box::new(writer),
+            cancellation_token: connection_token,
+        })
     }
 }
 
@@ -54,5 +43,3 @@ pub struct Connection {
     pub writer: Box<dyn Writer + Send>,
     pub cancellation_token: CancellationToken,
 }
-
-// TODO: add tests
