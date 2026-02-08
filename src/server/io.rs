@@ -8,7 +8,7 @@ pub trait Reader {
     async fn read_some(&mut self, n: usize) -> Result<String>;
 }
 
-type OutputMessage = String;
+pub type OutputMessage = String;
 
 #[async_trait]
 pub trait Writer {

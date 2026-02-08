@@ -1,12 +1,11 @@
 use std::path::Path;
 
-use crate::server::line_io::{LineReader, LineWriter};
+use crate::server::io::{Reader, Writer};
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
-mod line_io;
+mod background_writer;
 mod io;
-mod types;
 mod unix_socket;
 
 pub struct Server {
@@ -51,8 +50,8 @@ impl Server {
 }
 
 pub struct Connection {
-    pub reader: Box<dyn LineReader + Send>,
-    pub writer: Box<dyn LineWriter + Send>,
+    pub reader: Box<dyn Reader + Send>,
+    pub writer: Box<dyn Writer + Send>,
     pub cancellation_token: CancellationToken,
 }
 

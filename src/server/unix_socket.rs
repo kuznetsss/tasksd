@@ -7,10 +7,10 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::server::line_io::BackgroundLineWriter;
+use crate::server::background_writer::BackgroundWriter;
 
 pub type Input = BufReader<OwnedReadHalf>;
-pub type Output = BackgroundLineWriter;
+pub type Output = BackgroundWriter;
 
 pub struct Server {
     listener: UnixListener,
@@ -27,7 +27,16 @@ impl Server {
         &self,
         cancellation_token: CancellationToken,
     ) -> Result<(Input, Output)> {
-        let (stream, _) = self.listener.accept().await?;
+        let stream = match cancellation_token
+            .run_until_cancelled(self.listener.accept())
+            .await
+        {
+            Some(Ok((s, _))) => s,
+            Some(Err(e)) => {
+                return Err(e.into());
+            }
+            None => anyhow::bail!("Cancelled"),
+        };
         stream
             .ready(Interest::READABLE | Interest::WRITABLE)
             .await?;
@@ -41,11 +50,10 @@ impl Server {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, sync::Arc};
-
-    use crate::server::line_io::{LineReader, LineWriter};
+    use crate::server::io::{Reader, Writer};
 
     use super::*;
+    use std::path::PathBuf;
     use tempfile::TempDir;
     use tokio::{io::AsyncWriteExt, net::UnixStream};
 
@@ -99,10 +107,7 @@ mod tests {
                     .wait_for_connection(CancellationToken::new())
                     .await
                     .unwrap();
-                writer
-                    .write_line(Arc::new(msg_to_write.to_string()))
-                    .await
-                    .unwrap();
+                writer.write(msg_to_write.to_string()).await.unwrap();
                 let msg = reader.read_line().await.unwrap();
                 assert_eq!(msg, msg_to_read);
             }
@@ -131,12 +136,33 @@ mod tests {
                     .wait_for_connection(CancellationToken::new())
                     .await
                     .unwrap();
-                reader.read_line().await.unwrap();
+                reader.read_line().await.unwrap_err();
             }
         });
 
         let stream = UnixStream::connect(ctx.socket_path).await.unwrap();
         drop(stream);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn server_wait_for_connection_cancelled() {
+        let ctx = ServerTestContext::new();
+        let cancellation_token = CancellationToken::new();
+        cancellation_token.cancel();
+        let handle = tokio::spawn({
+            let server = ctx.server;
+            async move {
+                server
+                    .wait_for_connection(cancellation_token)
+                    .await
+                    .unwrap_err();
+            }
+        });
 
         tokio::time::timeout(std::time::Duration::from_secs(1), handle)
             .await

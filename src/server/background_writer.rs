@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
+    io::{AsyncWrite, AsyncWriteExt},
     sync::{
         Notify,
         mpsc::{Sender, channel},
@@ -12,49 +12,16 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-use super::types::OutputMessage;
+use crate::server::io::{OutputMessage, Writer};
 
-// TODO: rename to message reader
-#[async_trait]
-pub trait LineReader {
-    async fn read_line(&mut self) -> Result<String>;
-
-    // async fn read_header(&mut self) -> Result<String>
-    // async fn read_body(&mut self, n: usize) -> Result<String>;
-    // or
-    // async fn read_message(&mut self) -> Result<String>; // returns body only
-}
-
-#[async_trait]
-impl<R> LineReader for BufReader<R>
-where
-    R: AsyncRead + Send + Unpin,
-{
-    async fn read_line(&mut self) -> Result<String> {
-        let mut buf = String::new();
-        AsyncBufReadExt::read_line(self, &mut buf).await?;
-        // TODO: maybe we should that buf ends with '\n'. Otherwise means EOF
-        // TODO: add test case for an empty buffer
-        if buf.is_empty() {
-            Err(anyhow::anyhow!("EOF"))
-        } else {
-            Ok(buf)
-        }
-    }
-}
-
-#[async_trait]
-pub trait LineWriter {
-    async fn write_line(&mut self, message: OutputMessage) -> Result<()>;
-}
-
-pub struct BackgroundLineWriter {
+#[derive(Debug)]
+pub struct BackgroundWriter {
     tx: Sender<OutputMessage>,
     cancellation_token: CancellationToken,
     completion_notification: Arc<Notify>,
 }
 
-impl BackgroundLineWriter {
+impl BackgroundWriter {
     const CHANNEL_BUFFER_SIZE: usize = 16;
 
     pub fn spawn<W>(mut writer: W, cancellation_token: CancellationToken) -> Self
@@ -72,7 +39,7 @@ impl BackgroundLineWriter {
                     .run_until_cancelled(receiver.recv())
                     .await
                 {
-                    if let Err(e) = write_line(&mut writer, &msg).await {
+                    if let Err(e) = writer.write_all(msg.as_bytes()).await {
                         error!("Error writing message: {e}. Message: {msg}");
                         cancellation_token.cancel();
                         break;
@@ -96,46 +63,31 @@ impl BackgroundLineWriter {
 
     /// Writes everything queued and then stops
     /// NOTE: this method may hung if there are other senders
-    pub async fn finish(self) {
+    async fn finish(self) {
         drop(self.tx);
         self.completion_notification.notified().await;
     }
 }
 
-async fn write_line<W>(writer: &mut W, msg: &OutputMessage) -> Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    writer.write_all(msg.as_bytes()).await?;
-    if !msg.ends_with('\n') {
-        writer.write_all(b"\n").await?;
-    }
-    writer.flush().await?;
-    Ok(())
-}
-
 #[async_trait]
-impl LineWriter for BackgroundLineWriter {
-    async fn write_line(&mut self, message: OutputMessage) -> Result<()> {
+impl Writer for BackgroundWriter {
+    async fn write(&mut self, message: OutputMessage) -> Result<()> {
         self.tx.send(message).await.map_err(Into::into)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
 
     use tokio_test::io::Builder;
-    use tokio_util::sync::CancellationToken;
 
-    use crate::server::line_io::{BackgroundLineWriter, LineReader, LineWriter};
-
-    struct BackgroundLineWriterTestCtx {
-        writer: BackgroundLineWriter,
+    struct BackgroundWriterTestCtx {
+        writer: BackgroundWriter,
         token: CancellationToken,
     }
 
-    impl BackgroundLineWriterTestCtx {
+    impl BackgroundWriterTestCtx {
         fn new(expected_messages: &[&str]) -> Self {
             let mut builder = Builder::new();
             expected_messages.iter().for_each(|s| {
@@ -147,7 +99,7 @@ mod tests {
         fn from_builder(mut builder: Builder) -> Self {
             let token = CancellationToken::new();
             Self {
-                writer: BackgroundLineWriter::spawn(builder.build(), token.clone()),
+                writer: BackgroundWriter::spawn(builder.build(), token.clone()),
                 token,
             }
         }
@@ -156,31 +108,17 @@ mod tests {
     #[tokio::test]
     async fn background_line_writer_write_test() {
         let msg = "test";
-        let mut ctx = BackgroundLineWriterTestCtx::new(&[format!("{msg}\n").as_str()]);
-        ctx.writer
-            .write_line(Arc::new(msg.to_string()))
-            .await
-            .unwrap();
-        ctx.writer.finish().await;
-    }
-
-    #[tokio::test]
-    async fn background_line_writer_doesnt_add_new_line_test() {
-        let msg = "test\n";
-        let mut ctx = BackgroundLineWriterTestCtx::new(&[msg]);
-        ctx.writer
-            .write_line(Arc::new(msg.to_string()))
-            .await
-            .unwrap();
+        let mut ctx = BackgroundWriterTestCtx::new(&[format!("{msg}\n").as_str()]);
+        ctx.writer.write(msg.to_string()).await.unwrap();
         ctx.writer.finish().await;
     }
 
     #[tokio::test]
     async fn background_line_writer_doesnt_write_when_cancelled() {
-        let mut ctx = BackgroundLineWriterTestCtx::new(&[]);
+        let mut ctx = BackgroundWriterTestCtx::new(&[]);
         ctx.token.cancel();
         // It's not deterministic if there will be an error here
-        let _ = ctx.writer.write_line(Arc::new("msg".to_string())).await;
+        let _ = ctx.writer.write("msg".to_string()).await;
         ctx.writer.finish().await;
     }
 
@@ -189,13 +127,9 @@ mod tests {
         use std::io::{Error, ErrorKind};
         let mut builder = Builder::new();
         builder.write_error(Error::from(ErrorKind::PermissionDenied));
-        let mut ctx = BackgroundLineWriterTestCtx::from_builder(builder);
-        ctx.writer
-            .write_line(Arc::new("msg".to_string()))
-            .await
-            .unwrap();
+        let mut ctx = BackgroundWriterTestCtx::from_builder(builder);
+        ctx.writer.write("msg".to_string()).await.unwrap();
         ctx.writer.finish().await;
         assert!(ctx.token.is_cancelled());
     }
-
 }
