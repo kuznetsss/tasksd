@@ -106,12 +106,20 @@ mod tests {
 
     #[tokio::test]
     async fn message_reader_read_error_third_read_failed() {
+        let content_length = 123;
         let mut mock = MockReader::new();
         let mut seq = Sequence::new();
         mock.expect_read_line()
             .times(1)
             .in_sequence(&mut seq)
-            .return_once(|| Ok(format!("{CONTENT_LENGTH_HEADER}123{END_LINE_SYMBOLS}")));
+            .return_once({
+                move || {
+                    Ok(format!(
+                        "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}",
+                        content_length
+                    ))
+                }
+            });
         mock.expect_read_line()
             .times(1)
             .in_sequence(&mut seq)
@@ -119,7 +127,7 @@ mod tests {
         mock.expect_read_some()
             .times(1)
             .in_sequence(&mut seq)
-            .with(eq(123))
+            .with(eq(content_length))
             .return_once(|_| Err(anyhow!("some error")));
         let mut reader = MessageReader::new(Box::new(mock));
         let err = reader.read_message().await.unwrap_err().to_string();
@@ -145,8 +153,10 @@ mod tests {
             .in_sequence(&mut seq)
             .return_once(|| Ok(END_LINE_SYMBOLS.to_string()));
         mock.expect_read_some()
+            .times(1)
+            .in_sequence(&mut seq)
             .with(eq(msg.len()))
-            .returning(|_| Ok(msg.to_string()));
+            .return_once(|_| Ok(msg.to_string()));
         let mut reader = MessageReader::new(Box::new(mock));
         assert_eq!(reader.read_message().await.unwrap(), msg);
     }
