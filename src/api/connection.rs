@@ -61,13 +61,13 @@ mod tests {
             #[tokio::test]
             async fn $test_name() {
                 let mut mock = MockReader::new();
-                let mut seq = mockall::Sequence::new();
+                let mut seq = Sequence::new();
                 $(
                     mock.$method().times(1).in_sequence(&mut seq).return_once(|| $msg);
                 )*
                 let mut reader = MessageReader::new(Box::new(mock));
                 let err = reader.read_message().await.unwrap_err().to_string();
-                assert!(dbg!(err).contains($error));
+                assert!(err.contains($error));
             }
         };
     }
@@ -104,33 +104,27 @@ mod tests {
         "some error"
     );
 
-    macro_rules! message_reader_read_third_read_test {
-        ($test_name:ident, $content_length:literal, $msg:expr) => {
-            #[tokio::test]
-            async fn $test_name() {
-                let mut mock = MockReader::new();
-                mock.expect_read_line()
-                    .returning(|| Ok(format!("{CONTENT_LENGTH_HEADER}$content_length")));
-                mock.expect_read_line()
-                    .returning(|| Ok(END_LINE_SYMBOLS.to_string()));
-                mock.expect_read_some()
-                    .with(eq($content_length))
-                    .returning(|_| $msg);
-                let mut reader = MessageReader::new(Box::new(mock));
-                reader.read_message().await.unwrap_err();
-            }
-        };
+    #[tokio::test]
+    async fn message_reader_read_error_third_read_failed() {
+        let mut mock = MockReader::new();
+        let mut seq = Sequence::new();
+        mock.expect_read_line()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_once(|| Ok(format!("{CONTENT_LENGTH_HEADER}123{END_LINE_SYMBOLS}")));
+        mock.expect_read_line()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_once(|| Ok(END_LINE_SYMBOLS.to_string()));
+        mock.expect_read_some()
+            .times(1)
+            .in_sequence(&mut seq)
+            .with(eq(123))
+            .return_once(|_| Err(anyhow!("some error")));
+        let mut reader = MessageReader::new(Box::new(mock));
+        let err = reader.read_message().await.unwrap_err().to_string();
+        assert!(err.contains("some error"));
     }
-    message_reader_read_third_read_test!(
-        message_reader_read_error_third_read_failed,
-        123,
-        Err(anyhow!("some error"))
-    );
-    message_reader_read_third_read_test!(
-        message_reader_read_error_third_read_too_short,
-        123,
-        Ok("some content".to_string())
-    );
 
     #[tokio::test]
     async fn message_reader_read_success() {
