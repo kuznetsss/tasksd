@@ -51,15 +51,114 @@ impl MessageWriter {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use mockall::predicate::eq;
+    use mockall::{Sequence, predicate::eq};
 
     use super::*;
-    use crate::server::MockWriter;
+    use crate::server::{MockReader, MockWriter};
 
-    // TODO: write test for reader
+    macro_rules! message_reader_read_error_test {
+        ($test_name:ident, $($method:ident: $msg:expr),+ ; $error:expr) => {
+            #[tokio::test]
+            async fn $test_name() {
+                let mut mock = MockReader::new();
+                let mut seq = mockall::Sequence::new();
+                $(
+                    mock.$method().times(1).in_sequence(&mut seq).return_once(|| $msg);
+                )*
+                let mut reader = MessageReader::new(Box::new(mock));
+                let err = reader.read_message().await.unwrap_err().to_string();
+                assert!(dbg!(err).contains($error));
+            }
+        };
+    }
+    message_reader_read_error_test!(
+        message_reader_read_error_not_header,
+        expect_read_line: Ok("not header\r\n".to_string());
+        "Got unexpected symbols"
+    );
+    message_reader_read_error_test!(
+        message_reader_read_error_no_end_line_symbols,
+        expect_read_line: Ok("no endl".to_string());
+        "Got unexpected symbols"
+    );
+    message_reader_read_error_test!(
+        message_reader_read_error_reading,
+        expect_read_line: Err(anyhow!("some error"));
+        "some error"
+    );
+    message_reader_read_error_test!(
+        message_reader_read_error_invalid_content_length,
+        expect_read_line: Ok(format!("{}123abc\r\n", CONTENT_LENGTH_HEADER));
+        "invalid digit found"
+    );
+    message_reader_read_error_test!(
+        message_reader_read_error_non_empty_line,
+        expect_read_line: Ok(format!("{}123\r\n", CONTENT_LENGTH_HEADER)),
+        expect_read_line: Ok("a\r\n".to_string());
+        "Expected a new line"
+    );
+    message_reader_read_error_test!(
+        message_reader_read_error_second_read_failed,
+        expect_read_line: Ok(format!("{CONTENT_LENGTH_HEADER}123\r\n")),
+        expect_read_line: Err(anyhow!("some error"));
+        "some error"
+    );
+
+    macro_rules! message_reader_read_third_read_test {
+        ($test_name:ident, $content_length:literal, $msg:expr) => {
+            #[tokio::test]
+            async fn $test_name() {
+                let mut mock = MockReader::new();
+                mock.expect_read_line()
+                    .returning(|| Ok(format!("{CONTENT_LENGTH_HEADER}$content_length")));
+                mock.expect_read_line()
+                    .returning(|| Ok(END_LINE_SYMBOLS.to_string()));
+                mock.expect_read_some()
+                    .with(eq($content_length))
+                    .returning(|_| $msg);
+                let mut reader = MessageReader::new(Box::new(mock));
+                reader.read_message().await.unwrap_err();
+            }
+        };
+    }
+    message_reader_read_third_read_test!(
+        message_reader_read_error_third_read_failed,
+        123,
+        Err(anyhow!("some error"))
+    );
+    message_reader_read_third_read_test!(
+        message_reader_read_error_third_read_too_short,
+        123,
+        Ok("some content".to_string())
+    );
 
     #[tokio::test]
-    async fn lsp_writer_writes() {
+    async fn message_reader_read_success() {
+        let msg = "some message";
+        let mut mock = MockReader::new();
+        let mut seq = Sequence::new();
+        mock.expect_read_line()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_once(|| {
+                Ok(format!(
+                    "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}",
+                    msg.len()
+                ))
+            });
+        mock.expect_read_line()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_once(|| Ok(END_LINE_SYMBOLS.to_string()));
+        mock.expect_read_some()
+            .with(eq(msg.len()))
+            .returning(|_| Ok(msg.to_string()));
+        let mut reader = MessageReader::new(Box::new(mock));
+        assert_eq!(reader.read_message().await.unwrap(), msg);
+    }
+
+    #[tokio::test]
+    async fn message_writer_writes() {
         let mut mock = MockWriter::new();
         mock.expect_write()
             .with(eq("Content length: 4\r\n\r\ntest".to_string()))
@@ -69,12 +168,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lsp_writer_write_error() {
+    async fn message_writer_write_error() {
+        let error_msg = "some error".to_string();
         let mut mock = MockWriter::new();
         mock.expect_write()
             .with(eq("Content length: 4\r\n\r\ntest".to_string()))
-            .returning(|_| Err(anyhow!("Some error")));
+            .returning({
+                let error_msg = error_msg.clone();
+                move |_| Err(anyhow!("{}", error_msg))
+            });
         let mut writer = MessageWriter::new(Box::new(mock));
-        writer.write_message("test").await.unwrap_err();
+        assert_eq!(
+            writer.write_message("test").await.unwrap_err().to_string(),
+            error_msg
+        );
     }
 }

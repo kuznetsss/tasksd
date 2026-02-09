@@ -1,1 +1,1 @@
-pub mod lsp_connection;
+pub mod connection;
