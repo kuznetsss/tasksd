@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-pub const CONTENT_LENGTH_HEADER: &str = "Content length: ";
+pub const CONTENT_LENGTH_HEADER: &str = "Content-Length: ";
 pub const END_LINE_SYMBOLS: &str = "\r\n";
 
 #[async_trait]

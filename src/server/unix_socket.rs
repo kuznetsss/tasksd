@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use tokio::{
@@ -11,13 +11,25 @@ use crate::server::{ServerImpl, background_writer::BackgroundWriter};
 
 pub struct UnixSocketServerImpl {
     listener: UnixListener,
+    socket_path: PathBuf,
 }
 
 impl UnixSocketServerImpl {
     pub fn new(path: &Path) -> Result<Self> {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+
         Ok(Self {
             listener: UnixListener::bind(path)?,
+            socket_path: path.to_path_buf(),
         })
+    }
+}
+
+impl Drop for UnixSocketServerImpl {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.socket_path);
     }
 }
 
