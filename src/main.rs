@@ -8,7 +8,7 @@ use clap::Parser;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::server::Server;
+use crate::server::{Server, UnixSocketServer};
 
 /// tasksd - Editor companion to manage processes
 #[derive(clap::Parser, Debug)]
@@ -47,13 +47,23 @@ fn main() -> anyhow::Result<()> {
         })
 }
 
-async fn run_server(server: Server) {
-    while let Ok(mut c) = server.wait_for_connection().await {
+async fn run_server(server: UnixSocketServer) {
+    while let Ok(c) = server.wait_for_connection().await {
         println!("Client connected");
         tokio::spawn(async move {
-            while let Ok(line) = c.reader.read_line().await {
-                println!("Got message: '{line}'");
+            let mut c = api::connection::Connection::new(c);
+            loop {
+                match c.reader.read_message().await {
+                    Ok(msg) => {
+                        println!("Got message: '{msg}'");
+                    }
+                    Err(e) => {
+                        println!("Error reading message: {e}");
+                        break;
+                    }
+                };
             }
+
             println!("Client disconnected");
         });
     }

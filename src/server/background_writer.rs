@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use async_trait::async_trait;
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt},
     sync::{
@@ -69,7 +68,6 @@ impl BackgroundWriter {
     }
 }
 
-#[async_trait]
 impl Writer for BackgroundWriter {
     async fn write(&mut self, message: OutputMessage) -> Result<()> {
         self.tx.send(message).await.map_err(Into::into)

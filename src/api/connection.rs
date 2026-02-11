@@ -1,20 +1,36 @@
 use crate::server::{Reader, Writer};
 
 use anyhow::Result;
+use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 pub const CONTENT_LENGTH_HEADER: &str = "Content length: ";
 pub const END_LINE_SYMBOLS: &str = "\r\n";
 
-pub struct MessageReader {
-    inner: Box<dyn Reader + Send>,
+#[async_trait]
+pub trait MessageReader {
+    async fn read_message(&mut self) -> Result<String>;
 }
 
-impl MessageReader {
-    pub fn new(inner: Box<dyn Reader + Send>) -> Self {
+pub struct MessageReaderImpl<R> {
+    inner: R,
+}
+
+impl<R> MessageReaderImpl<R>
+where
+    R: Reader + Send,
+{
+    pub fn new(inner: R) -> Self {
         Self { inner }
     }
+}
 
-    pub async fn read_message(&mut self) -> Result<String> {
+#[async_trait]
+impl<R> MessageReader for MessageReaderImpl<R>
+where
+    R: Reader + Send,
+{
+    async fn read_message(&mut self) -> Result<String> {
         let header = self.inner.read_line().await?;
         if !header.starts_with(CONTENT_LENGTH_HEADER) || !header.ends_with(END_LINE_SYMBOLS) {
             anyhow::bail!("Got unexpected symbols: {header}");
@@ -30,21 +46,55 @@ impl MessageReader {
     }
 }
 
-pub struct MessageWriter {
-    inner: Box<dyn Writer + Send>,
+#[async_trait]
+pub trait MessageWriter {
+    async fn write_message(&mut self, s: &str) -> Result<()>;
 }
 
-impl MessageWriter {
-    pub fn new(inner: Box<dyn Writer + Send>) -> Self {
+pub struct MessageWriterImpl<W> {
+    inner: W,
+}
+
+impl<W> MessageWriterImpl<W>
+where
+    W: Writer + Send,
+{
+    pub fn new(inner: W) -> Self {
         Self { inner }
     }
+}
 
-    pub async fn write_message(&mut self, s: &str) -> Result<()> {
+#[async_trait]
+impl<W> MessageWriter for MessageWriterImpl<W>
+where
+    W: Writer + Send,
+{
+    async fn write_message(&mut self, s: &str) -> Result<()> {
         let message = format!(
             "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}{END_LINE_SYMBOLS}{s}",
             s.len()
         );
         self.inner.write(message).await
+    }
+}
+
+pub struct Connection {
+    pub reader: Box<dyn MessageReader + Send>,
+    pub writer: Box<dyn MessageWriter + Send>,
+    pub cancellation_token: CancellationToken,
+}
+
+impl Connection {
+    pub fn new<R, W>(c: crate::server::Connection<R, W>) -> Self
+    where
+        R: Reader + Send + 'static,
+        W: Writer + Send + 'static,
+    {
+        Self {
+            reader: Box::new(MessageReaderImpl::new(c.reader)),
+            writer: Box::new(MessageWriterImpl::new(c.writer)),
+            cancellation_token: c.cancellation_token,
+        }
     }
 }
 
@@ -63,9 +113,11 @@ mod tests {
                 let mut mock = MockReader::new();
                 let mut seq = Sequence::new();
                 $(
-                    mock.$method().times(1).in_sequence(&mut seq).return_once(|| $msg);
+                    mock.$method().times(1).in_sequence(&mut seq).return_once(
+                        || { Box::pin( async { $msg } ) }
+                    );
                 )*
-                let mut reader = MessageReader::new(Box::new(mock));
+                let mut reader = MessageReaderImpl::new(mock);
                 let err = reader.read_message().await.unwrap_err().to_string();
                 assert!(err.contains($error));
             }
@@ -114,22 +166,24 @@ mod tests {
             .in_sequence(&mut seq)
             .return_once({
                 move || {
-                    Ok(format!(
-                        "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}",
-                        content_length
-                    ))
+                    Box::pin(async move {
+                        Ok(format!(
+                            "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}",
+                            content_length
+                        ))
+                    })
                 }
             });
         mock.expect_read_line()
             .times(1)
             .in_sequence(&mut seq)
-            .return_once(|| Ok(END_LINE_SYMBOLS.to_string()));
+            .return_once(|| Box::pin(async { Ok(END_LINE_SYMBOLS.to_string()) }));
         mock.expect_read_some()
             .times(1)
             .in_sequence(&mut seq)
             .with(eq(content_length))
-            .return_once(|_| Err(anyhow!("some error")));
-        let mut reader = MessageReader::new(Box::new(mock));
+            .return_once(|_| Box::pin(async { Err(anyhow!("some error")) }));
+        let mut reader = MessageReaderImpl::new(mock);
         let err = reader.read_message().await.unwrap_err().to_string();
         assert!(err.contains("some error"));
     }
@@ -143,21 +197,23 @@ mod tests {
             .times(1)
             .in_sequence(&mut seq)
             .return_once(|| {
-                Ok(format!(
-                    "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}",
-                    msg.len()
-                ))
+                Box::pin(async {
+                    Ok(format!(
+                        "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}",
+                        msg.len()
+                    ))
+                })
             });
         mock.expect_read_line()
             .times(1)
             .in_sequence(&mut seq)
-            .return_once(|| Ok(END_LINE_SYMBOLS.to_string()));
+            .return_once(|| Box::pin(async { Ok(END_LINE_SYMBOLS.to_string()) }));
         mock.expect_read_some()
             .times(1)
             .in_sequence(&mut seq)
             .with(eq(msg.len()))
-            .return_once(|_| Ok(msg.to_string()));
-        let mut reader = MessageReader::new(Box::new(mock));
+            .return_once(|_| Box::pin(async { Ok(msg.to_string()) }));
+        let mut reader = MessageReaderImpl::new(mock);
         assert_eq!(reader.read_message().await.unwrap(), msg);
     }
 
@@ -166,8 +222,8 @@ mod tests {
         let mut mock = MockWriter::new();
         mock.expect_write()
             .with(eq("Content length: 4\r\n\r\ntest".to_string()))
-            .returning(|_| Ok(()));
-        let mut writer = MessageWriter::new(Box::new(mock));
+            .returning(|_| Box::pin(async { Ok(()) }));
+        let mut writer = MessageWriterImpl::new(mock);
         writer.write_message("test").await.unwrap();
     }
 
@@ -179,9 +235,14 @@ mod tests {
             .with(eq("Content length: 4\r\n\r\ntest".to_string()))
             .returning({
                 let error_msg = error_msg.clone();
-                move |_| Err(anyhow!("{}", error_msg))
+                move |_| {
+                    Box::pin({
+                        let error_msg = error_msg.clone();
+                        async move { Err(anyhow!("{}", error_msg)) }
+                    })
+                }
             });
-        let mut writer = MessageWriter::new(Box::new(mock));
+        let mut writer = MessageWriterImpl::new(mock);
         assert_eq!(
             writer.write_message("test").await.unwrap_err().to_string(),
             error_msg

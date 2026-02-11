@@ -1,28 +1,25 @@
+use std::{fmt::Debug, future::Future, marker::Send};
+
 use anyhow::Result;
-use async_trait::async_trait;
 use mockall::automock;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 
 #[automock]
-#[async_trait]
-pub trait Reader {
-    async fn read_line(&mut self) -> Result<String>;
-    async fn read_some(&mut self, n: usize) -> Result<String>;
+pub trait Reader: Debug + Send {
+    fn read_line(&mut self) -> impl Future<Output = Result<String>> + Send;
+    fn read_some(&mut self, n: usize) -> impl Future<Output = Result<String>> + Send;
 }
 
 pub type OutputMessage = String;
 
 #[automock]
-#[async_trait]
-pub trait Writer {
-    async fn write(&mut self, msg: OutputMessage) -> Result<()>;
+pub trait Writer: Debug + Send {
+    fn write(&mut self, msg: OutputMessage) -> impl Future<Output = Result<()>> + Send;
 }
 
-#[automock]
-#[async_trait]
 impl<R> Reader for BufReader<R>
 where
-    R: AsyncRead + Send + Unpin,
+    R: AsyncRead + Send + Unpin + Debug,
 {
     async fn read_line(&mut self) -> Result<String> {
         let mut buf = String::new();

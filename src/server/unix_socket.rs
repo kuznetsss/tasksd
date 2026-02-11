@@ -7,26 +7,28 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::server::background_writer::BackgroundWriter;
+use crate::server::{ServerImpl, background_writer::BackgroundWriter};
 
-pub type Input = BufReader<OwnedReadHalf>;
-pub type Output = BackgroundWriter;
-
-pub struct Server {
+pub struct UnixSocketServerImpl {
     listener: UnixListener,
 }
 
-impl Server {
+impl UnixSocketServerImpl {
     pub fn new(path: &Path) -> Result<Self> {
         Ok(Self {
             listener: UnixListener::bind(path)?,
         })
     }
+}
 
-    pub async fn wait_for_connection(
+impl ServerImpl for UnixSocketServerImpl {
+    type Reader = BufReader<OwnedReadHalf>;
+    type Writer = BackgroundWriter;
+
+    async fn wait_for_connection(
         &self,
         cancellation_token: CancellationToken,
-    ) -> Result<(Input, Output)> {
+    ) -> Result<(Self::Reader, Self::Writer)> {
         let stream = match cancellation_token
             .run_until_cancelled(self.listener.accept())
             .await
@@ -40,10 +42,10 @@ impl Server {
         stream
             .ready(Interest::READABLE | Interest::WRITABLE)
             .await?;
-        let (in_part, out_part) = stream.into_split();
+        let (reader, writer) = stream.into_split();
         Ok((
-            Input::new(in_part),
-            Output::spawn(out_part, cancellation_token),
+            Self::Reader::new(reader),
+            Self::Writer::spawn(writer, cancellation_token),
         ))
     }
 }
@@ -60,14 +62,14 @@ mod tests {
     struct ServerTestContext {
         temp_dir: TempDir,
         socket_path: PathBuf,
-        server: Server,
+        server: UnixSocketServerImpl,
     }
 
     impl ServerTestContext {
         fn new() -> Self {
             let temp_dir = TempDir::new().unwrap();
             let socket_path = temp_dir.path().join("test_socket");
-            let server = Server::new(&socket_path).unwrap();
+            let server = UnixSocketServerImpl::new(&socket_path).unwrap();
             Self {
                 temp_dir,
                 socket_path,
