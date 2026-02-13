@@ -518,6 +518,7 @@ dependencies = [
  "mockall",
  "num_cpus",
  "pin-project",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
