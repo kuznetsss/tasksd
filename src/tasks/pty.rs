@@ -1,16 +1,16 @@
 use std::{os::fd::OwnedFd, task::Poll};
 
 use anyhow::Result;
-use rustix::fs::{fcntl_getfl, fcntl_setfl};
-use tokio::io::{AsyncRead, unix::AsyncFd};
+use tokio::io::{AsyncRead, AsyncWrite, unix::AsyncFd};
 
+#[derive(Debug)]
 pub struct Pty(AsyncFd<OwnedFd>);
 
 pub type PtyChild = OwnedFd;
 
 pub fn create_pty_pair() -> Result<(Pty, PtyChild)> {
     use rustix::{
-        fs::{Mode, OFlags, open},
+        fs::{Mode, OFlags, fcntl_getfl, fcntl_setfl, open},
         io::{FdFlags, fcntl_getfd, fcntl_setfd},
         pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt},
     };
@@ -65,4 +65,45 @@ impl AsyncRead for Pty {
     }
 }
 
-// TODO: implement tokio async write for Pty
+impl AsyncWrite for Pty {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        loop {
+            let mut guard = match self.0.poll_write_ready(cx) {
+                Poll::Ready(guard) => guard?,
+                Poll::Pending => return Poll::Pending,
+            };
+            match guard.try_io(|inner| rustix::io::write(inner.get_ref(), buf).map_err(Into::into))
+            {
+                Ok(result) => return Poll::Ready(result),
+                Err(_) => continue,
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        loop {
+            let mut guard = match self.0.poll_write_ready(cx) {
+                Poll::Ready(guard) => guard?,
+                Poll::Pending => return Poll::Pending,
+            };
+            match guard.try_io(|_| Ok(())) {
+                Ok(result) => return Poll::Ready(result),
+                Err(_) => continue,
+            }
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
