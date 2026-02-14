@@ -43,21 +43,19 @@ impl Task {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Read};
+    use tokio::io::AsyncReadExt;
 
     use super::*;
 
     #[tokio::test]
     async fn try_task() {
-        let mut t =
-            Task::new("echo".to_string(), vec!["hello from pty".to_string()], None).unwrap();
+        let msg = "hello from pty";
+        let mut t = Task::new("echo".to_string(), vec![msg.to_string()], None).unwrap();
 
-        let mut buf = [0u8; 4096];
-        let mut f = File::from(t.pty);
-        let n = f.read(&mut buf).unwrap();
-        let output = String::from_utf8_lossy(&buf[..n]);
-        println!("{output}");
-        assert!(output.contains("hello from pty"), "got: {output}");
+        let mut buf = String::new();
+        t.pty.read_to_string(&mut buf).await.unwrap();
+        assert_eq!(buf, format!("{msg}\r\n"));
+
         t.child.wait().await.unwrap();
     }
 }
