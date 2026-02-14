@@ -221,7 +221,7 @@ mod tests {
     async fn message_writer_writes() {
         let mut mock = MockWriter::new();
         mock.expect_write()
-            .with(eq("Content length: 4\r\n\r\ntest".to_string()))
+            .with(eq("Content-Length: 4\r\n\r\ntest".to_string()))
             .returning(|_| Box::pin(async { Ok(()) }));
         let mut writer = MessageWriterImpl::new(mock);
         writer.write_message("test").await.unwrap();
@@ -232,7 +232,7 @@ mod tests {
         let error_msg = "some error".to_string();
         let mut mock = MockWriter::new();
         mock.expect_write()
-            .with(eq("Content length: 4\r\n\r\ntest".to_string()))
+            .with(eq("Content-Length: 4\r\n\r\ntest".to_string()))
             .returning({
                 let error_msg = error_msg.clone();
                 move |_| {
