@@ -110,7 +110,15 @@ impl AsyncWrite for Pty {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        mem::MaybeUninit,
+        pin::{Pin, pin},
+        task::Context,
+        time::Duration,
+    };
+
     use super::*;
+    use tokio::io::{AsyncRead, ReadBuf};
 
     #[tokio::test]
     async fn create() {
@@ -156,4 +164,162 @@ mod tests {
         let mut buf = [0u8; 32];
         assert_eq!(rustix::io::read(&pty.0, &mut buf).unwrap(), 0);
     }
+
+    #[tokio::test]
+    async fn pty_async_read_pending() {
+        let (pty, _child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        let mut buf = [MaybeUninit::uninit(); 8];
+        let mut read_buf = tokio::io::ReadBuf::uninit(&mut buf);
+        match pty.as_mut().poll_read(&mut cx, &mut read_buf) {
+            Poll::Pending => (),
+            Poll::Ready(r) => panic!("Unexpected Ready: {r:?}"),
+        }
+    }
+
+    async fn read(pty: &mut Pin<&mut Pty>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) {
+        let mut attempt = 0;
+        const MAX_ATTEMPTS: i32 = 10;
+        while attempt < MAX_ATTEMPTS {
+            match pty.as_mut().poll_read(cx, buf) {
+                Poll::Pending => tokio::time::sleep(Duration::from_millis(5)).await,
+                Poll::Ready(r) => {
+                    r.unwrap();
+                    break;
+                }
+            }
+            attempt += 1;
+        }
+        assert!(attempt <= MAX_ATTEMPTS);
+    }
+
+    #[tokio::test]
+    async fn pty_async_read_ready() {
+        let (pty, child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        let mut buf = [MaybeUninit::uninit(); 8];
+        let mut read_buf = tokio::io::ReadBuf::uninit(&mut buf);
+        let msg = "test\n";
+        rustix::io::write(&child, msg.as_bytes()).unwrap();
+        read(&mut pty, &mut cx, &mut read_buf).await;
+        assert_eq!(read_buf.filled().len(), msg.len() + 1); // pty adds '\r'
+        assert_eq!(String::from_utf8_lossy(read_buf.filled()), "test\r\n");
+        assert_eq!(read_buf.initialized().len(), read_buf.filled().len());
+
+        rustix::io::write(&child, "second".as_bytes()).unwrap();
+        read(&mut pty, &mut cx, &mut read_buf).await;
+        assert_eq!(read_buf.filled().len(), read_buf.capacity());
+        assert_eq!(String::from_utf8_lossy(read_buf.filled()), "test\r\nse");
+        assert_eq!(read_buf.initialized().len(), read_buf.filled().len());
+    }
+
+    #[tokio::test]
+    async fn pty_async_read_0_bytes() {
+        let (pty, child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        let mut buf = [MaybeUninit::uninit(); 8];
+        let mut read_buf = tokio::io::ReadBuf::uninit(&mut buf);
+        let msg = "test\n";
+        rustix::io::write(&child, msg.as_bytes()).unwrap();
+        read(&mut pty, &mut cx, &mut read_buf).await;
+        assert_eq!(read_buf.filled().len(), msg.len() + 1); // pty adds '\r'
+        assert_eq!(String::from_utf8_lossy(read_buf.filled()), "test\r\n");
+        assert_eq!(read_buf.initialized().len(), read_buf.filled().len());
+
+        read(&mut pty, &mut cx, &mut read_buf).await;
+        assert_eq!(read_buf.filled().len(), msg.len() + 1);
+        assert_eq!(String::from_utf8_lossy(read_buf.filled()), "test\r\n");
+        assert_eq!(read_buf.initialized().len(), read_buf.filled().len());
+    }
+
+    #[tokio::test]
+    async fn pty_async_read_child_closed() {
+        let (pty, child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        let mut buf = [MaybeUninit::uninit(); 8];
+        let mut read_buf = tokio::io::ReadBuf::uninit(&mut buf);
+        drop(child);
+
+        read(&mut pty, &mut cx, &mut read_buf).await;
+        assert_eq!(read_buf.filled().len(), 0);
+        assert_eq!(read_buf.initialized().len(), 0);
+
+        read(&mut pty, &mut cx, &mut read_buf).await;
+        assert_eq!(read_buf.filled().len(), 0);
+        assert_eq!(read_buf.initialized().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn pty_async_read_into_full_buffer() {
+        let (pty, child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        let mut buf = [0; 8];
+        let mut read_buf = tokio::io::ReadBuf::new(&mut buf);
+        assert_eq!(read_buf.initialized().len(), read_buf.capacity());
+        read_buf.advance(read_buf.capacity());
+        assert_eq!(read_buf.filled().len(), read_buf.capacity());
+
+        rustix::io::write(&child, "test\n".as_bytes()).unwrap();
+        read(&mut pty, &mut cx, &mut read_buf).await;
+        assert_eq!(read_buf.initialized().len(), read_buf.capacity());
+        assert_eq!(read_buf.filled().len(), read_buf.capacity());
+        assert!(read_buf.filled().iter().all(|&e| e == 0));
+    }
+
+    #[tokio::test]
+    async fn pty_async_read_more_data_than_buffer_size() {
+        let (pty, child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        let mut buf = [0; 8];
+        let mut read_buf = tokio::io::ReadBuf::new(&mut buf);
+
+        rustix::io::write(&child, "some long line\n".as_bytes()).unwrap();
+
+        read(&mut pty, &mut cx, &mut read_buf).await;
+        assert_eq!(read_buf.initialized().len(), read_buf.capacity());
+        assert_eq!(read_buf.filled().len(), read_buf.capacity());
+        assert_eq!(String::from_utf8_lossy(read_buf.filled()), "some lon");
+
+        read_buf.clear();
+        match pty.as_mut().poll_read(&mut cx, &mut read_buf) {
+            Poll::Pending => panic!("Expected Ready"),
+            Poll::Ready(r) => r.unwrap(),
+        }
+        assert_eq!(read_buf.initialized().len(), read_buf.capacity());
+        assert_eq!(read_buf.filled().len(), read_buf.capacity());
+        assert_eq!(String::from_utf8_lossy(read_buf.filled()), "g line\r\n");
+    }
+
+    #[tokio::test]
+    async fn pty_async_read_multiple_lines() {
+        let (pty, child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        let mut buf = [MaybeUninit::uninit(); 64];
+        let mut read_buf = tokio::io::ReadBuf::uninit(&mut buf);
+
+        rustix::io::write(&child, "one\n".as_bytes()).unwrap();
+        rustix::io::write(&child, "two\n".as_bytes()).unwrap();
+        rustix::io::write(&child, "three\n".as_bytes()).unwrap();
+
+        read(&mut pty, &mut cx, &mut read_buf).await;
+        let expected = "one\r\ntwo\r\nthree\r\n";
+        assert_eq!(read_buf.initialized().len(), expected.len());
+        assert_eq!(read_buf.filled().len(), expected.len());
+        assert_eq!(String::from_utf8_lossy(read_buf.filled()), expected);
+    }
+    // TODO: Tests for async write
 }
