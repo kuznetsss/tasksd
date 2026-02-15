@@ -111,6 +111,7 @@ impl AsyncWrite for Pty {
 #[cfg(test)]
 mod tests {
     use std::{
+        io::ErrorKind,
         mem::MaybeUninit,
         pin::{Pin, pin},
         task::Context,
@@ -118,6 +119,7 @@ mod tests {
     };
 
     use super::*;
+    use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
     use tokio::io::{AsyncRead, ReadBuf};
 
     #[tokio::test]
@@ -321,5 +323,118 @@ mod tests {
         assert_eq!(read_buf.filled().len(), expected.len());
         assert_eq!(String::from_utf8_lossy(read_buf.filled()), expected);
     }
-    // TODO: Tests for async write
+
+    async fn write(pty: &mut Pin<&mut Pty>, cx: &mut Context<'_>, buf: &str) -> usize {
+        let mut attempt = 0;
+        const MAX_ATTEMPTS: i32 = 10;
+        loop {
+            match pty.as_mut().poll_write(cx, buf.as_bytes()) {
+                Poll::Pending => tokio::time::sleep(Duration::from_millis(5)).await,
+                Poll::Ready(r) => {
+                    return r.unwrap();
+                }
+            }
+            attempt += 1;
+            assert!(attempt <= MAX_ATTEMPTS);
+        }
+    }
+
+    #[tokio::test]
+    async fn pty_async_write() {
+        let (pty, child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        let msg = "test\n";
+        assert_eq!(write(&mut pty, &mut cx, msg).await, msg.len());
+        let mut buf = [0; 64];
+        let read_size = rustix::io::read(&child, &mut buf).unwrap();
+        assert_eq!(read_size, msg.len());
+        assert_eq!(String::from_utf8_lossy(&buf[..read_size]), msg);
+    }
+
+    fn set_non_blocking(fd: &OwnedFd) {
+        let mut flags = fcntl_getfl(fd).unwrap();
+        flags |= OFlags::NONBLOCK;
+        fcntl_setfl(fd, flags).unwrap();
+    }
+
+    #[tokio::test]
+    async fn pty_async_write_full_buffer() {
+        let (pty, child) = create_pty_pair().unwrap();
+        set_non_blocking(&child);
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+
+        let msg = "test\n";
+        let mut written_bytes = 0;
+        written_bytes += write(&mut pty, &mut cx, msg).await;
+        loop {
+            match pty.as_mut().poll_write(&mut cx, msg.as_bytes()) {
+                Poll::Pending => {
+                    break;
+                }
+                Poll::Ready(r) => {
+                    written_bytes += r.unwrap();
+                }
+            }
+            assert!(written_bytes < 1024 * 1024);
+        }
+        let mut buf = vec![0u8; written_bytes];
+        let mut read_bytes = 0;
+        let mut i = 0;
+        while i < 100000 {
+            match rustix::io::read(&child, &mut buf) {
+                Ok(read_size) => {
+                    assert_eq!(read_size, msg.len());
+                    assert_eq!(String::from_utf8_lossy(&buf[..read_size]), msg);
+                    read_bytes += read_size;
+                }
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    break;
+                }
+                Err(e) => panic!("Unexpected error: {e}"),
+            }
+            i += 1;
+        }
+        assert_eq!(read_bytes, written_bytes);
+    }
+
+    #[tokio::test]
+    async fn pty_async_write_child_dropped() {
+        let (pty, child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        drop(child);
+        let mut i = 0;
+        const MAX_ATTEMPTS: u32 = 1024 * 1024;
+        loop {
+            match pty.as_mut().poll_write(&mut cx, "test\n".as_bytes()) {
+                Poll::Pending => tokio::time::sleep(Duration::from_millis(5)).await,
+                Poll::Ready(r) => {
+                    r.unwrap_err();
+                    break;
+                }
+            };
+            i += 1;
+            assert!(i < MAX_ATTEMPTS);
+        }
+    }
+
+    #[tokio::test]
+    async fn pty_async_write_zero_bytes() {
+        let (pty, child) = create_pty_pair().unwrap();
+        set_non_blocking(&child);
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        assert_eq!(write(&mut pty, &mut cx, "").await, 0);
+        let mut buf = [0; 64];
+        assert_eq!(
+            rustix::io::read(&child, &mut buf).unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+    }
 }
