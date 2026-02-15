@@ -437,4 +437,36 @@ mod tests {
             ErrorKind::WouldBlock
         );
     }
+
+    #[tokio::test]
+    async fn pty_async_flush() {
+        let (pty, _child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        let mut attempt = 0;
+        const MAX_ATTEMPTS: i32 = 10;
+        loop {
+            match pty.as_mut().poll_flush(&mut cx) {
+                Poll::Ready(Ok(())) => break,
+                Poll::Ready(Err(e)) => panic!("Unexpected error: {e}"),
+                Poll::Pending => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+            attempt += 1;
+            assert!(attempt <= MAX_ATTEMPTS);
+        }
+    }
+
+    #[tokio::test]
+    async fn pty_async_shutdown() {
+        let (pty, _child) = create_pty_pair().unwrap();
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pty = pin!(pty);
+        match pty.as_mut().poll_shutdown(&mut cx) {
+            Poll::Ready(Ok(())) => (),
+            Poll::Ready(Err(e)) => panic!("Unexpected error: {e}"),
+            Poll::Pending => panic!("Expected Ready, got Pending"),
+        }
+    }
 }
