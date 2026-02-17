@@ -1,10 +1,13 @@
 use std::{os::fd::OwnedFd, task::Poll};
 
 use anyhow::Result;
-use tokio::io::{AsyncRead, AsyncWrite, unix::AsyncFd};
+use tokio::io::{AsyncRead, AsyncWrite, BufReader, unix::AsyncFd};
 
 #[derive(Debug)]
 pub struct Pty(AsyncFd<OwnedFd>);
+
+pub struct PtyReadPart(AsyncFd<OwnedFd>);
+pub struct PtyWritePart(AsyncFd<OwnedFd>);
 
 pub type PtyChild = OwnedFd;
 
@@ -33,9 +36,15 @@ pub fn create_pty_pair() -> Result<(Pty, PtyChild)> {
     Ok((pty, child))
 }
 
-// TODO: maybe make Pty splitable into reader and writer parts
+impl Pty {
+    pub fn into_split(self) -> Result<(PtyReadPart, PtyWritePart)> {
+        let pty_clone = self.0.get_ref().try_clone()?;
+        let pty_read = PtyReadPart(AsyncFd::new(pty_clone)?);
+        Ok((pty_read, PtyWritePart(self.0)))
+    }
+}
 
-impl AsyncRead for Pty {
+impl AsyncRead for PtyReadPart {
     fn poll_read(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -65,7 +74,7 @@ impl AsyncRead for Pty {
     }
 }
 
-impl AsyncWrite for Pty {
+impl AsyncWrite for PtyWritePart {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -170,6 +179,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_read_pending() {
         let (pty, _child) = create_pty_pair().unwrap();
+        let (pty, _) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
@@ -181,7 +191,7 @@ mod tests {
         }
     }
 
-    async fn read(pty: &mut Pin<&mut Pty>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) {
+    async fn read(pty: &mut Pin<&mut PtyReadPart>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) {
         let mut attempt = 0;
         const MAX_ATTEMPTS: i32 = 10;
         while attempt < MAX_ATTEMPTS {
@@ -200,6 +210,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_read_ready() {
         let (pty, child) = create_pty_pair().unwrap();
+        let (pty, _) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
@@ -222,6 +233,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_read_0_bytes() {
         let (pty, child) = create_pty_pair().unwrap();
+        let (pty, _) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
@@ -243,6 +255,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_read_child_closed() {
         let (pty, child) = create_pty_pair().unwrap();
+        let (pty, _) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
@@ -262,6 +275,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_read_into_full_buffer() {
         let (pty, child) = create_pty_pair().unwrap();
+        let (pty, _) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
@@ -281,6 +295,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_read_more_data_than_buffer_size() {
         let (pty, child) = create_pty_pair().unwrap();
+        let (pty, _) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
@@ -307,6 +322,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_read_multiple_lines() {
         let (pty, child) = create_pty_pair().unwrap();
+        let (pty, _) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
@@ -324,7 +340,7 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(read_buf.filled()), expected);
     }
 
-    async fn write(pty: &mut Pin<&mut Pty>, cx: &mut Context<'_>, buf: &str) -> usize {
+    async fn write(pty: &mut Pin<&mut PtyWritePart>, cx: &mut Context<'_>, buf: &str) -> usize {
         let mut attempt = 0;
         const MAX_ATTEMPTS: i32 = 10;
         loop {
@@ -342,6 +358,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_write() {
         let (pty, child) = create_pty_pair().unwrap();
+        let (_, pty) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
@@ -362,6 +379,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_write_full_buffer() {
         let (pty, child) = create_pty_pair().unwrap();
+        let (_, pty) = pty.into_split().unwrap();
         set_non_blocking(&child);
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
@@ -404,6 +422,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_write_child_dropped() {
         let (pty, child) = create_pty_pair().unwrap();
+        let (_, pty) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
@@ -426,6 +445,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_write_zero_bytes() {
         let (pty, child) = create_pty_pair().unwrap();
+        let (_, pty) = pty.into_split().unwrap();
         set_non_blocking(&child);
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
@@ -441,6 +461,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_flush() {
         let (pty, _child) = create_pty_pair().unwrap();
+        let (_, pty) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
@@ -460,6 +481,7 @@ mod tests {
     #[tokio::test]
     async fn pty_async_shutdown() {
         let (pty, _child) = create_pty_pair().unwrap();
+        let (_, pty) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
         let mut pty = pin!(pty);
