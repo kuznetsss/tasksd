@@ -7,7 +7,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::server::{ServerImpl, background_writer::BackgroundWriter};
+use crate::transport::{ServerImpl, background_writer::BackgroundWriter};
 
 pub struct UnixSocketServerImpl {
     listener: UnixListener,
@@ -64,7 +64,7 @@ impl ServerImpl for UnixSocketServerImpl {
 
 #[cfg(test)]
 mod tests {
-    use crate::server::io::{Reader, Writer};
+    use crate::transport::io::{Reader, Writer};
 
     use super::*;
     use std::path::PathBuf;

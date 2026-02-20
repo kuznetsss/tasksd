@@ -1,4 +1,4 @@
-use crate::server::{Reader, Writer};
+use crate::transport::{Reader, Writer};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -85,7 +85,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new<R, W>(c: crate::server::Connection<R, W>) -> Self
+    pub fn new<R, W>(c: crate::transport::Connection<R, W>) -> Self
     where
         R: Reader + Send + 'static,
         W: Writer + Send + 'static,
@@ -104,7 +104,7 @@ mod tests {
     use mockall::{Sequence, predicate::eq};
 
     use super::*;
-    use crate::server::{MockReader, MockWriter};
+    use crate::transport::{MockReader, MockWriter};
 
     macro_rules! message_reader_read_error_test {
         ($test_name:ident, $($method:ident: $msg:expr),+ ; $error:expr) => {

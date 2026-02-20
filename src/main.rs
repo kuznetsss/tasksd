@@ -1,7 +1,7 @@
 #[allow(dead_code)] // prevent too many warnings while developing
 mod api;
-mod server;
 mod tasks;
+mod transport;
 
 use std::path::PathBuf;
 
@@ -9,7 +9,7 @@ use clap::Parser;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::server::{Server, UnixSocketServer};
+use crate::transport::{Server, UnixSocketServer};
 
 /// tasksd - Editor companion to manage processes
 #[derive(clap::Parser, Debug)]

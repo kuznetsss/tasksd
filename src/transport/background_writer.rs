@@ -11,7 +11,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-use crate::server::io::{OutputMessage, Writer};
+use crate::transport::io::{OutputMessage, Writer};
 
 #[derive(Debug)]
 pub struct BackgroundWriter {
