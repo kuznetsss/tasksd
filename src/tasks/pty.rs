@@ -1,7 +1,7 @@
 use std::{os::fd::OwnedFd, task::Poll};
 
 use anyhow::Result;
-use tokio::io::{AsyncRead, AsyncWrite, BufReader, unix::AsyncFd};
+use tokio::io::{AsyncRead, AsyncWrite, unix::AsyncFd};
 
 #[derive(Debug)]
 pub struct Pty(AsyncFd<OwnedFd>);
