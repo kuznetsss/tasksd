@@ -5,13 +5,14 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, Command},
     sync::{broadcast, watch},
-    task::{JoinHandle, JoinSet},
+    task::JoinSet,
 };
-use tokio_util::{bytes::Buf, sync::CancellationToken};
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::tasks::pty::{PtyReadPart, PtyWritePart, create_pty_pair};
 
+#[derive(Debug)]
 pub struct Task {
     info: Arc<TaskInfo>,
     stdin: Arc<PtyWritePart>,
@@ -22,6 +23,7 @@ pub struct Task {
     related_tasks: Option<JoinSet<()>>,
 }
 
+#[derive(Debug)]
 pub struct TaskInfo {
     pub executable: String,
     pub args: Vec<String>,
@@ -187,26 +189,96 @@ impl Drop for Task {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicBool;
+    use std::{
+        str::FromStr,
+        sync::{Mutex, atomic::AtomicBool},
+    };
+
+    use rustix::process::Signal;
+    use tokio::io::AsyncWriteExt;
 
     use super::*;
 
     #[tokio::test]
-    async fn try_task() {
-        let msg = "hello from pty";
-        let mut t = Task::new("echo".to_string(), vec![msg.to_string()], None).unwrap();
-        let called = Arc::new(AtomicBool::new(false));
+    async fn task_new_non_existing_working_directory() {
+        let t = Task::new(
+            "ls".to_string(),
+            Vec::new(),
+            Some(PathBuf::from_str("./non_existing").unwrap()),
+        );
+        assert!(t.is_err());
+        let err_str = t.unwrap_err().to_string();
+        assert!(err_str.contains("No such file or directory"));
+    }
+
+    #[tokio::test]
+    async fn task_new_invalid_executable() {
+        let t = Task::new("non_existing".to_string(), Vec::new(), None);
+        assert!(t.is_err());
+        let err_str = t.unwrap_err().to_string();
+        assert!(err_str.contains("No such file or directory"));
+    }
+
+    #[tokio::test]
+    async fn task_info() {
+        let executable = "ls";
+        let args = vec!["-la".to_string()];
+        let mut t = Task::new(executable.to_string(), args.clone(), None).unwrap();
+        let info = t.info();
+        assert_eq!(&info.executable, &executable);
+        assert_eq!(&info.args, &args);
+        assert_eq!(&info.working_dir, &current_dir().unwrap());
+        assert!(info.pid.unwrap() > 0);
+        t.finish().await;
+    }
+
+    #[tokio::test]
+    async fn task_on_output() {
+        let mut t = Task::new(
+            "echo".to_string(),
+            vec!["-ne".to_string(), "some\nmulti\nline".to_string()],
+            None,
+        )
+        .unwrap();
+        let output_lines = Arc::new(Mutex::new(Vec::new()));
         t.on_output({
-            let called = called.clone();
-            move |s| {
-                assert_eq!(s.as_ref(), &format!("{msg}\r\n"));
-                called
-                    .as_ref()
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            let output_lines = Arc::clone(&output_lines);
+            move |line| {
+                output_lines.lock().unwrap().push(line);
+            }
+        });
+        t.finish().await;
+        assert_eq!(output_lines.lock().unwrap().len(), 3);
+        assert_eq!(output_lines.lock().unwrap()[0].as_str(), "some\r\n");
+        assert_eq!(output_lines.lock().unwrap()[1].as_str(), "multi\r\n");
+        assert_eq!(output_lines.lock().unwrap()[2].as_str(), "line");
+    }
+
+    #[tokio::test]
+    async fn task_stdin() {
+        let mut t = Task::new("cat".to_string(), Vec::new(), None).unwrap();
+        let output_lines = Arc::new(Mutex::new(Vec::new()));
+        t.on_output({
+            let output_lines = Arc::clone(&output_lines);
+            move |line| {
+                output_lines.lock().unwrap().push(line);
             }
         });
 
+        let stdin = t.stdin();
+        stdin.as_ref().write_all("some\n".as_bytes()).await.unwrap();
+        stdin
+            .as_ref()
+            .write_all("multi\n".as_bytes())
+            .await
+            .unwrap();
+        stdin.as_ref().write_all("line".as_bytes()).await.unwrap();
+        stdin.as_ref().write_all(&[0x04]).await.unwrap(); // EOF symbol - first flushes buffer
+        stdin.as_ref().write_all(&[0x04]).await.unwrap(); // EOF symbol - second closes cat
         t.finish().await;
-        assert!(called.as_ref().load(std::sync::atomic::Ordering::Relaxed))
+        assert_eq!(output_lines.lock().unwrap().len(), 3);
+        assert_eq!(output_lines.lock().unwrap()[0].as_str(), "some\r\n");
+        assert_eq!(output_lines.lock().unwrap()[1].as_str(), "multi\r\n");
+        assert_eq!(output_lines.lock().unwrap()[2].as_str(), "line");
     }
 }
