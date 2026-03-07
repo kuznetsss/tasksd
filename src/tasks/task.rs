@@ -4,18 +4,22 @@ use anyhow::Result;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, Command},
-    sync::{broadcast, watch},
+    sync::{Mutex, broadcast, watch},
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::tasks::pty::{PtyReadPart, PtyWritePart, create_pty_pair};
 
 #[derive(Debug)]
 pub struct Task {
     info: Arc<TaskInfo>,
-    stdin: Arc<PtyWritePart>,
+
+    // Mutex could be avoided if AsyncWrite is implemented for &PtyWritePart (reference is important).
+    // But without mutex multiple parallel inputs may be mixed together.
+    stdin: Arc<Mutex<PtyWritePart>>,
+
     on_exit_rx: watch::Receiver<Option<ExitStatus>>,
     stdout_rx: broadcast::Receiver<Arc<String>>,
     cancel: CancellationToken,
@@ -70,7 +74,7 @@ impl Task {
                 working_dir,
                 pid,
             }),
-            stdin: Arc::new(stdin),
+            stdin: Arc::new(Mutex::new(stdin)),
             on_exit_rx,
             stdout_rx,
             cancel: cancel.clone(),
@@ -88,7 +92,7 @@ impl Task {
         Arc::clone(&self.info)
     }
 
-    pub fn stdin(&self) -> Arc<PtyWritePart> {
+    pub fn stdin(&self) -> Arc<Mutex<PtyWritePart>> {
         Arc::clone(&self.stdin)
     }
 
@@ -108,11 +112,18 @@ impl Task {
             })
     }
 
-    pub fn on_exit<F>(&mut self, f: F)
+    pub fn on_exit<F>(&mut self, f: F) -> tokio::task::AbortHandle
     where
-        F: FnOnce(ExitStatus),
+        F: FnOnce(ExitStatus) + Send + 'static,
     {
-        todo!()
+        let mut on_exit_rx = self.on_exit_rx.clone();
+        self.related_tasks.as_mut().unwrap().spawn(async move {
+            if let Err(e) = on_exit_rx.changed().await {
+                error!("Error receiving on exit status: {e}");
+                return;
+            }
+            f(on_exit_rx.borrow_and_update().unwrap());
+        })
     }
 
     pub fn send_signal(&self, signal: rustix::process::Signal) -> Result<()> {
@@ -189,12 +200,8 @@ impl Drop for Task {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        str::FromStr,
-        sync::{Mutex, atomic::AtomicBool},
-    };
+    use std::{str::FromStr, sync::Mutex};
 
-    use rustix::process::Signal;
     use tokio::io::AsyncWriteExt;
 
     use super::*;
@@ -266,15 +273,26 @@ mod tests {
         });
 
         let stdin = t.stdin();
-        stdin.as_ref().write_all("some\n".as_bytes()).await.unwrap();
         stdin
-            .as_ref()
+            .lock()
+            .await
+            .write_all("some\n".as_bytes())
+            .await
+            .unwrap();
+        stdin
+            .lock()
+            .await
             .write_all("multi\n".as_bytes())
             .await
             .unwrap();
-        stdin.as_ref().write_all("line".as_bytes()).await.unwrap();
-        stdin.as_ref().write_all(&[0x04]).await.unwrap(); // EOF symbol - first flushes buffer
-        stdin.as_ref().write_all(&[0x04]).await.unwrap(); // EOF symbol - second closes cat
+        stdin
+            .lock()
+            .await
+            .write_all("line".as_bytes())
+            .await
+            .unwrap();
+        stdin.lock().await.write_all(&[0x04]).await.unwrap(); // EOF symbol - first flushes buffer
+        stdin.lock().await.write_all(&[0x04]).await.unwrap(); // EOF symbol - second closes cat
         t.finish().await;
         assert_eq!(output_lines.lock().unwrap().len(), 3);
         assert_eq!(output_lines.lock().unwrap()[0].as_str(), "some\r\n");

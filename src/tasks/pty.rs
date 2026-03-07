@@ -81,7 +81,7 @@ impl AsyncRead for PtyReadPart {
     }
 }
 
-impl AsyncWrite for &PtyWritePart {
+impl AsyncWrite for PtyWritePart {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(read_buf.filled()), expected);
     }
 
-    async fn write(pty: &mut Pin<&mut &PtyWritePart>, cx: &mut Context<'_>, buf: &str) -> usize {
+    async fn write(pty: &mut Pin<&mut PtyWritePart>, cx: &mut Context<'_>, buf: &str) -> usize {
         const MAX_ATTEMPTS: i32 = 10;
         for _ in 0..MAX_ATTEMPTS {
             match pty.as_mut().poll_write(cx, buf.as_bytes()) {
@@ -369,7 +369,7 @@ mod tests {
         let (_, pty) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
-        let mut pty = pin!(&pty);
+        let mut pty = pin!(pty);
         let msg = "test\n";
         assert_eq!(write(&mut pty, &mut cx, msg).await, msg.len());
         let mut buf = [0; 64];
@@ -384,7 +384,7 @@ mod tests {
         let (pty_read, pty_write) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
-        let mut pty_write = pin!(&pty_write);
+        let mut pty_write = pin!(pty_write);
         let msg = "test\n";
 
         write(&mut pty_write, &mut cx, msg).await;
@@ -431,7 +431,7 @@ mod tests {
         set_non_blocking(&child);
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
-        let mut pty = pin!(&pty);
+        let mut pty = pin!(pty);
 
         let msg = "test\n";
         let mut written_bytes = 0;
@@ -473,7 +473,7 @@ mod tests {
         let (_, pty) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
-        let mut pty = pin!(&pty);
+        let mut pty = pin!(pty);
         drop(child);
         let mut i = 0;
         const MAX_ATTEMPTS: u32 = 1024 * 1024;
@@ -497,7 +497,7 @@ mod tests {
         set_non_blocking(&child);
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
-        let mut pty = pin!(&pty);
+        let mut pty = pin!(pty);
         assert_eq!(write(&mut pty, &mut cx, "").await, 0);
         let mut buf = [0; 64];
         assert_eq!(
@@ -512,7 +512,7 @@ mod tests {
         let (_, pty) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
-        let mut pty = pin!(&pty);
+        let mut pty = pin!(pty);
         let mut attempt = 0;
         const MAX_ATTEMPTS: i32 = 10;
         loop {
@@ -532,7 +532,7 @@ mod tests {
         let (_, pty) = pty.into_split().unwrap();
         let waker = std::task::Waker::noop();
         let mut cx = std::task::Context::from_waker(waker);
-        let mut pty = pin!(&pty);
+        let mut pty = pin!(pty);
         match pty.as_mut().poll_shutdown(&mut cx) {
             Poll::Ready(Ok(())) => (),
             Poll::Ready(Err(e)) => panic!("Unexpected error: {e}"),
