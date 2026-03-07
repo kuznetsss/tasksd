@@ -35,9 +35,9 @@ pub fn create_pty_pair() -> Result<(Pty, PtyChild)> {
     let child = open(&child_name, OFlags::RDWR | OFlags::NOCTTY, Mode::empty())?;
 
     // Disable echo so writes to the master aren't reflected back as output
-    // let mut termios = rustix::termios::tcgetattr(&pty)?;
-    // termios.local_modes &= !rustix::termios::LocalModes::ECHO;
-    // rustix::termios::tcsetattr(&pty, rustix::termios::OptionalActions::Now, &termios)?;
+    let mut termios = rustix::termios::tcgetattr(&pty)?;
+    termios.local_modes &= !rustix::termios::LocalModes::ECHO;
+    rustix::termios::tcsetattr(&pty, rustix::termios::OptionalActions::Now, &termios)?;
 
     let pty = Pty(AsyncFd::new(pty)?);
     Ok((pty, child))
@@ -135,7 +135,10 @@ mod tests {
     };
 
     use super::*;
-    use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+    use rustix::{
+        fs::{OFlags, fcntl_getfl, fcntl_setfl},
+        path::Arg,
+    };
     use tokio::io::{AsyncRead, ReadBuf};
 
     #[tokio::test]
@@ -348,18 +351,16 @@ mod tests {
     }
 
     async fn write(pty: &mut Pin<&mut &PtyWritePart>, cx: &mut Context<'_>, buf: &str) -> usize {
-        let mut attempt = 0;
         const MAX_ATTEMPTS: i32 = 10;
-        loop {
+        for _ in 0..MAX_ATTEMPTS {
             match pty.as_mut().poll_write(cx, buf.as_bytes()) {
                 Poll::Pending => tokio::time::sleep(Duration::from_millis(5)).await,
                 Poll::Ready(r) => {
                     return r.unwrap();
                 }
             }
-            attempt += 1;
-            assert!(attempt <= MAX_ATTEMPTS);
         }
+        panic!("Write didn't happen after {MAX_ATTEMPTS} attempts");
     }
 
     #[tokio::test]
@@ -388,19 +389,33 @@ mod tests {
 
         write(&mut pty_write, &mut cx, msg).await;
 
-        // when echo is enabled read side will also get written data
-        let mut pty_read = pin!(pty_read);
-        let mut buf = [MaybeUninit::uninit(); 8];
-        let mut read_buf = ReadBuf::uninit(&mut buf);
-        match pty_read.as_mut().poll_read(&mut cx, &mut read_buf) {
-            Poll::Pending => (),
-            Poll::Ready(_) => panic!("Expected no echo on master read side"),
-        }
-
         let mut buf = [0u8; 64];
         let read_size = rustix::io::read(&child, &mut buf).unwrap();
         assert_eq!(read_size, msg.len());
         assert_eq!(String::from_utf8_lossy(&buf[..read_size]), msg);
+
+        let response = "ack\n";
+        assert_eq!(
+            rustix::io::write(&child, response.as_bytes()).unwrap(),
+            response.len()
+        );
+
+        // when echo is enabled read side will also get written data
+        let mut pty_read = pin!(pty_read);
+        let mut buf = [MaybeUninit::uninit(); 64];
+        let mut read_buf = ReadBuf::uninit(&mut buf);
+
+        for _ in 0..10 {
+            match pty_read.as_mut().poll_read(&mut cx, &mut read_buf) {
+                Poll::Pending => tokio::time::sleep(Duration::from_millis(5)).await,
+                Poll::Ready(r) => {
+                    r.unwrap();
+                    break;
+                }
+            }
+        }
+        assert_eq!(read_buf.filled().len(), response.len() + 1);
+        assert_eq!(read_buf.filled().as_str().unwrap(), "ack\r\n");
     }
 
     fn set_non_blocking(fd: &OwnedFd) {
