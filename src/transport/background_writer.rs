@@ -7,6 +7,7 @@ use tokio::{
         Notify,
         mpsc::{Sender, channel},
     },
+    task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::error;
@@ -17,7 +18,7 @@ use crate::transport::io::{OutputMessage, Writer};
 pub struct BackgroundWriter {
     tx: Sender<OutputMessage>,
     cancellation_token: CancellationToken,
-    completion_notification: Arc<Notify>,
+    handle: JoinHandle<()>,
 }
 
 impl BackgroundWriter {
@@ -29,10 +30,8 @@ impl BackgroundWriter {
     {
         let (sender, mut receiver) = channel::<OutputMessage>(Self::CHANNEL_BUFFER_SIZE);
 
-        let completion_notification = Arc::new(Notify::new());
-        tokio::spawn({
+        let handle = tokio::spawn({
             let cancellation_token = cancellation_token.clone();
-            let completion_notification = completion_notification.clone();
             async move {
                 while let Some(Some(msg)) = cancellation_token
                     .run_until_cancelled(receiver.recv())
@@ -44,27 +43,26 @@ impl BackgroundWriter {
                         break;
                     }
                 }
-                completion_notification.notify_one();
             }
         });
         Self {
             tx: sender,
             cancellation_token,
-            completion_notification,
+            handle,
         }
     }
 
     /// Stops the writer as soon as possible
     pub async fn stop(self) {
         self.cancellation_token.cancel();
-        self.completion_notification.notified().await;
+        self.handle.await.unwrap();
     }
 
     /// Writes everything queued and then stops
     /// NOTE: this method may hung if there are other senders
     async fn finish(self) {
         drop(self.tx);
-        self.completion_notification.notified().await;
+        self.handle.await.unwrap();
     }
 }
 
@@ -106,7 +104,7 @@ mod tests {
     #[tokio::test]
     async fn background_line_writer_write_test() {
         let msg = "test";
-        let mut ctx = BackgroundWriterTestCtx::new(&[format!("{msg}\n").as_str()]);
+        let mut ctx = BackgroundWriterTestCtx::new(&[msg]);
         ctx.writer.write(msg.to_string()).await.unwrap();
         ctx.writer.finish().await;
     }

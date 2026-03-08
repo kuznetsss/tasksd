@@ -1,6 +1,6 @@
 ## Task
 - [x] test send_signal
-- [ ] ai code review
+- [x] ai code review
 
 ## Test fixes
 - there are some tests which have panic in a spawned task but it doesn't fail test itself

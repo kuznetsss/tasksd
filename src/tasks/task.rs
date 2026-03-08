@@ -96,6 +96,7 @@ impl Task {
         Arc::clone(&self.stdin)
     }
 
+    // TODO: maybe wrap related_tasks into Mutex and switch to &self everywhere
     pub fn on_output<F>(&mut self, f: F) -> tokio::task::AbortHandle
     where
         F: Fn(Arc<String>) + Send + 'static,
