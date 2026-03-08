@@ -206,11 +206,9 @@ impl Drop for Task {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        str::FromStr,
-        sync::{Mutex, atomic::AtomicBool},
-    };
+    use std::{str::FromStr, sync::Mutex};
 
+    use rustix::process::Signal;
     use tokio::io::AsyncWriteExt;
 
     use super::*;
@@ -323,5 +321,19 @@ mod tests {
         let status = status.lock().unwrap();
         assert_eq!(status.len(), 1);
         assert_eq!(status[0].code().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn task_send_signal() {
+        let start_time = std::time::Instant::now();
+        let mut t = Task::new("sleep".to_string(), vec!["5".to_string()], None).unwrap();
+        t.send_signal(Signal::TERM).unwrap();
+        t.finish().await;
+        assert!(
+            std::time::Instant::now()
+                .duration_since(start_time)
+                .as_millis()
+                < 5000
+        );
     }
 }
