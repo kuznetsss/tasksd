@@ -1,5 +1,5 @@
 ## Task
-- [ ] test send_signal
+- [x] test send_signal
 - [ ] ai code review
 
 ## Test fixes

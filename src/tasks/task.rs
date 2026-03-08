@@ -2,13 +2,13 @@ use std::{env::current_dir, path::PathBuf, process::ExitStatus, sync::Arc};
 
 use anyhow::Result;
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
     sync::{Mutex, broadcast, watch},
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::tasks::pty::{PtyReadPart, PtyWritePart, create_pty_pair};
 
@@ -106,6 +106,7 @@ impl Task {
             .as_mut()
             .expect("on_output() called after finish()")
             .spawn(async move {
+                // stdout_rx.recv() my return Lagged error, but it is silenced here
                 while let Some(Ok(l)) = cancel.run_until_cancelled(stdout_rx.recv()).await {
                     f(l);
                 }
@@ -127,6 +128,7 @@ impl Task {
         let mut on_exit_rx = self.on_exit_rx.clone();
         let handle = self.related_tasks.as_mut().unwrap().spawn(async move {
             on_exit_rx.changed().await.expect("Changed shouldn't fail");
+            // There will always be an exit code
             f(on_exit_rx.borrow_and_update().unwrap());
         });
         Some(handle)
@@ -141,7 +143,13 @@ impl Task {
         }
         let pid =
             rustix::process::Pid::from_raw(pid.try_into()?).expect("Pid should be valid here");
-        rustix::process::kill_process(pid, signal).map_err(Into::into)
+        rustix::process::kill_process(pid, signal).map_err(|e| {
+            if e == rustix::io::Errno::SRCH {
+                anyhow::anyhow!("The task has already exited")
+            } else {
+                e.into()
+            }
+        })
     }
 
     pub async fn finish(&mut self) {
@@ -159,21 +167,34 @@ impl Task {
         self.related_tasks
             .as_mut()
             .expect("spawn_stdout_reading() called after finish()")
-            .spawn(async move {
-                let mut stdout = BufReader::new(stdout);
-                let mut buf = String::new();
-                while let Some(Ok(read_bytes)) =
-                    cancel.run_until_cancelled(stdout.read_line(&mut buf)).await
-                {
-                    if read_bytes == 0 {
-                        // EOF
-                        return;
+            .spawn({
+                let task_info = Arc::clone(&self.info);
+                async move {
+                    let mut stdout = BufReader::new(stdout);
+                    let mut buf = String::new();
+                    while let Some(read_bytes) =
+                        cancel.run_until_cancelled(stdout.read_line(&mut buf)).await
+                    {
+                        let read_bytes = match read_bytes {
+                            Ok(r) => r,
+                            Err(e) => {
+                                warn!(
+                                    "Error reading from stdout for the task {:?}: {e}",
+                                    task_info
+                                );
+                                return;
+                            }
+                        };
+                        if read_bytes == 0 {
+                            // EOF
+                            return;
+                        }
+                        let line = Arc::new(buf);
+                        if stdout_tx.send(line).is_err() {
+                            return;
+                        }
+                        buf = String::new();
                     }
-                    let line = Arc::new(buf);
-                    if stdout_tx.send(line).is_err() {
-                        return;
-                    }
-                    buf = String::new();
                 }
             });
     }
