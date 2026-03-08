@@ -78,7 +78,7 @@ impl Task {
             on_exit_rx,
             stdout_rx,
             cancel: cancel.clone(),
-            related_tasks: Some(JoinSet::new()),
+            related_tasks: Some(related_tasks),
         };
         s.spawn_stdout_reading(stdout, stdout_tx, cancel);
         // Spawning a task to throw away input
@@ -112,18 +112,24 @@ impl Task {
             })
     }
 
-    pub fn on_exit<F>(&mut self, f: F) -> tokio::task::AbortHandle
+    pub fn on_exit<F>(&mut self, f: F) -> Option<tokio::task::AbortHandle>
     where
         F: FnOnce(ExitStatus) + Send + 'static,
     {
+        if self
+            .on_exit_rx
+            .has_changed()
+            .expect("On exit channel is alive")
+        {
+            f(self.on_exit_rx.borrow().unwrap());
+            return None;
+        }
         let mut on_exit_rx = self.on_exit_rx.clone();
-        self.related_tasks.as_mut().unwrap().spawn(async move {
-            if let Err(e) = on_exit_rx.changed().await {
-                error!("Error receiving on exit status: {e}");
-                return;
-            }
+        let handle = self.related_tasks.as_mut().unwrap().spawn(async move {
+            on_exit_rx.changed().await.expect("Changed shouldn't fail");
             f(on_exit_rx.borrow_and_update().unwrap());
-        })
+        });
+        Some(handle)
     }
 
     pub fn send_signal(&self, signal: rustix::process::Signal) -> Result<()> {
@@ -178,12 +184,12 @@ impl Task {
     ) -> watch::Receiver<Option<ExitStatus>> {
         let (tx, rx) = watch::channel(None);
         related_tasks.spawn(async move {
-            match child.wait().await {
-                Ok(exit_code) => tx
-                    .send(Some(exit_code))
-                    .expect("At least one receiver should be alive"),
-                Err(e) => warn!("Error waiting for child process {e}"),
-            }
+            let exit_code = child
+                .wait()
+                .await
+                .expect("Child process should finish normally");
+            tx.send(Some(exit_code))
+                .expect("At least one receiver should be alive");
         });
         rx
     }
@@ -200,7 +206,10 @@ impl Drop for Task {
 
 #[cfg(test)]
 mod tests {
-    use std::{str::FromStr, sync::Mutex};
+    use std::{
+        str::FromStr,
+        sync::{Mutex, atomic::AtomicBool},
+    };
 
     use tokio::io::AsyncWriteExt;
 
@@ -298,5 +307,21 @@ mod tests {
         assert_eq!(output_lines.lock().unwrap()[0].as_str(), "some\r\n");
         assert_eq!(output_lines.lock().unwrap()[1].as_str(), "multi\r\n");
         assert_eq!(output_lines.lock().unwrap()[2].as_str(), "line");
+    }
+
+    #[tokio::test]
+    async fn task_on_exit() {
+        let mut t = Task::new("echo".to_string(), Vec::new(), None).unwrap();
+        let status = Arc::new(Mutex::new(Vec::new()));
+        t.on_exit({
+            let status = Arc::clone(&status);
+            move |s| {
+                status.lock().unwrap().push(s);
+            }
+        });
+        t.finish().await;
+        let status = status.lock().unwrap();
+        assert_eq!(status.len(), 1);
+        assert_eq!(status[0].code().unwrap(), 0);
     }
 }
