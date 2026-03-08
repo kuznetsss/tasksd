@@ -14,6 +14,29 @@ pub struct PtyWritePart(AsyncFd<OwnedFd>);
 pub type PtyChild = OwnedFd;
 
 pub fn create_pty_pair() -> Result<(Pty, PtyChild)> {
+    // Opening multiple ptys in parallel may fail with unknown error (-6) on macos.
+    // Retrying in such case
+    static MAX_ATTEMPTS: usize = 5;
+    for _ in 0..MAX_ATTEMPTS {
+        match create_pty_pair_impl() {
+            Ok(r) => {
+                return Ok(r);
+            }
+            Err(e)
+                if e.root_cause()
+                    .downcast_ref::<rustix::io::Errno>()
+                    .is_some_and(|e| e.raw_os_error() == -6) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    anyhow::bail!("Couldn't create pty pair after {} attempts", MAX_ATTEMPTS)
+}
+
+fn create_pty_pair_impl() -> Result<(Pty, PtyChild)> {
     use rustix::{
         fs::{Mode, OFlags, fcntl_getfl, fcntl_setfl, open},
         io::{FdFlags, fcntl_getfd, fcntl_setfd},
