@@ -2,29 +2,77 @@ use std::{env::current_dir, path::PathBuf, process::ExitStatus, sync::Arc};
 
 use anyhow::Result;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, BufReader},
     process::{Child, Command},
-    sync::{Mutex, broadcast, watch},
+    sync::{broadcast, watch},
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::tasks::pty::{PtyReadPart, PtyWritePart, create_pty_pair};
+use crate::tasks::{
+    pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair},
+    task_error::TaskError,
+};
+
+#[derive(Debug)]
+enum State {
+    New {
+        cancel: CancellationToken,
+        stdout_tx: broadcast::Sender<Arc<String>>,
+        on_exit_tx: watch::Sender<Option<ExitStatus>>,
+        input: Option<String>,
+        related_tasks: JoinSet<()>,
+    },
+    Running {
+        pid: u32,
+        // Mutex could be avoided if AsyncWrite is implemented for &PtyWritePart (reference is important).
+        // But without mutex multiple parallel inputs may be mixed together.
+        stdin: Arc<tokio::sync::Mutex<PtyWritePart>>,
+        on_exit_rx: watch::Receiver<Option<ExitStatus>>,
+        stdout_rx: broadcast::Receiver<Arc<String>>,
+        cancel: CancellationToken,
+        related_tasks: JoinSet<()>,
+        // TODO: output buffer: VecDeque<Arc<String>>
+    },
+    Finished {
+        exit_status: Result<ExitStatus>,
+        // TODO: output buffer: VecDeque<Arc<String>>
+    },
+}
+
+const CHANNEL_CAPACITY: usize = 16;
+
+impl State {
+    fn new() -> Self {
+        let (stdout_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let (on_exit_tx, _) = watch::channel(None);
+        Self::New {
+            cancel: CancellationToken::new(),
+            stdout_tx,
+            on_exit_tx,
+            input: None,
+            related_tasks: JoinSet::new(),
+        }
+    }
+
+    fn into_running(self) -> Self {
+        assert!(matches!(self, State::New { .. }));
+        let State::New {
+            cancel,
+            stdout_tx,
+            on_exit_tx,
+            input,
+            related_tasks,
+        } = self;
+    }
+}
 
 #[derive(Debug)]
 pub struct Task {
+    // Option is only to be able to take and replace the state. There is always something there.
+    state: std::sync::Mutex<Option<State>>,
     info: Arc<TaskInfo>,
-
-    // Mutex could be avoided if AsyncWrite is implemented for &PtyWritePart (reference is important).
-    // But without mutex multiple parallel inputs may be mixed together.
-    stdin: Arc<Mutex<PtyWritePart>>,
-
-    on_exit_rx: watch::Receiver<Option<ExitStatus>>,
-    stdout_rx: broadcast::Receiver<Arc<String>>,
-    cancel: CancellationToken,
-    // TODO: add output buffer
-    related_tasks: Option<JoinSet<()>>,
 }
 
 #[derive(Debug)]
@@ -32,55 +80,43 @@ pub struct TaskInfo {
     pub executable: String,
     pub args: Vec<String>,
     pub working_dir: PathBuf,
-    pub pid: Option<u32>,
 }
 
 impl Task {
-    const CHANNEL_CAPACITY: usize = 16;
     pub fn new(
         executable: String,
         args: Vec<String>,
         working_dir: Option<PathBuf>,
-    ) -> Result<Self> {
-        let working_dir = working_dir.unwrap_or(current_dir()?);
-        let (pty, child_pty) = create_pty_pair()?;
-        // Using unsafe because pre_exec() is not safe since it is running in a process after fork
-        let child = unsafe {
-            Command::new(&executable)
-                .args(&args)
-                .stdin(child_pty.try_clone()?)
-                .stdout(child_pty.try_clone()?)
-                .stderr(child_pty.try_clone()?)
-                .current_dir(&working_dir)
-                .pre_exec(move || {
-                    rustix::process::setsid()?;
-                    rustix::process::ioctl_tiocsctty(&child_pty)?;
-                    Ok(())
-                })
-                .spawn()?
-        };
-        let pid = child.id();
-        let cancel = CancellationToken::new();
-        let (stdout, stdin) = pty.into_split()?;
-        let (stdout_tx, stdout_rx) = broadcast::channel(Self::CHANNEL_CAPACITY);
-
-        let mut related_tasks = JoinSet::new();
-        let on_exit_rx = Self::spawn_waiting_for_finish(&mut related_tasks, child);
-
-        let mut s = Self {
+    ) -> Result<Self, TaskError> {
+        let working_dir =
+            working_dir.unwrap_or(current_dir().map_err(|_| TaskError::InvalidDirectory)?);
+        Ok(Task {
+            state: std::sync::Mutex::new(Some(State::new())),
             info: Arc::new(TaskInfo {
                 executable,
                 args,
                 working_dir,
-                pid,
             }),
-            stdin: Arc::new(Mutex::new(stdin)),
-            on_exit_rx,
-            stdout_rx,
-            cancel: cancel.clone(),
-            related_tasks: Some(related_tasks),
-        };
-        s.spawn_stdout_reading(stdout, stdout_tx, cancel);
+        })
+    }
+
+    pub fn start(&self) -> Result<Self, TaskError> {
+        let (pty, child_pty) = create_pty_pair().map_err(TaskError::pty_creation_error)?;
+        let child = Self::spawn_child_process(&self.info, child_pty)?;
+        let pid = child.id();
+        let (stdout, stdin) = pty.into_split().map_err(TaskError::pty_creation_error)?;
+        let State::New {
+            cancel,
+            stdout_tx,
+            on_exit_tx,
+            input,
+            related_tasks,
+        } = self.state.lock().unwrap().take().unwrap();
+        // send input into stdin
+        // start reading output
+        // start waiting for exit
+
+        self.spawn_stdout_reading(stdout, stdout_tx, cancel);
         // Spawning a task to throw away input
         // to not block the process while there is no output subscribers.
         // This should write to the output buffer after it is added.
@@ -157,6 +193,38 @@ impl Task {
         if self.related_tasks.is_some() {
             self.related_tasks.take().unwrap().join_all().await;
         }
+    }
+
+    fn spawn_child_process(info: &TaskInfo, child_pty: PtyChild) -> Result<Child, TaskError> {
+        // Using unsafe because pre_exec() is not safe since it is running in a process after fork
+        let child = unsafe {
+            Command::new(&info.executable)
+                .args(&info.args)
+                .stdin(
+                    child_pty
+                        .try_clone()
+                        .map_err(TaskError::pty_creation_error)?,
+                )
+                .stdout(
+                    child_pty
+                        .try_clone()
+                        .map_err(TaskError::pty_creation_error)?,
+                )
+                .stderr(
+                    child_pty
+                        .try_clone()
+                        .map_err(TaskError::pty_creation_error)?,
+                )
+                .current_dir(&info.working_dir)
+                .pre_exec(move || {
+                    rustix::process::setsid()?;
+                    rustix::process::ioctl_tiocsctty(&child_pty)?;
+                    Ok(())
+                })
+                .spawn()
+                .map_err(TaskError::starting_child_process_error)?
+        };
+        Ok(child)
     }
 
     fn spawn_stdout_reading(
