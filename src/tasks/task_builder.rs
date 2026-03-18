@@ -22,11 +22,11 @@ pub struct TaskBuilder {
 }
 
 impl TaskBuilder {
-    pub fn new(executable: String) -> Self {
+    pub fn new(executable: impl Into<String>) -> Self {
         let (stdout_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
         let (on_exit_tx, _) = watch::channel(None);
         Self {
-            executable,
+            executable: executable.into(),
             args: None,
             working_dir: None,
             cancel: CancellationToken::new(),
@@ -42,7 +42,7 @@ impl TaskBuilder {
         self
     }
 
-    pub fn args(&mut self, args: Vec<impl Into<String>>) -> &mut Self {
+    pub fn args(&mut self, args: impl IntoIterator<Item = impl Into<String>>) -> &mut Self {
         match &mut self.args {
             Some(v) => v.extend(args.into_iter().map(Into::into)),
             None => self.args = Some(args.into_iter().map(Into::into).collect()),
@@ -85,5 +85,147 @@ impl TaskBuilder {
             f(on_exit_rx.borrow_and_update().unwrap());
         });
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use tokio::sync::Notify;
+
+    use super::*;
+
+    #[test]
+    fn arg_adds_arg() {
+        let mut builder = TaskBuilder::new("some_executable");
+        assert!(builder.args.is_none());
+        let arg = "some_arg";
+        builder.arg(arg);
+        assert_eq!(builder.args.as_ref().unwrap().len(), 1);
+        assert_eq!(builder.args.as_ref().unwrap()[0], arg);
+
+        let another_arg = "some_arg";
+        builder.arg(another_arg);
+        assert_eq!(builder.args.as_ref().unwrap().len(), 2);
+        assert_eq!(builder.args.as_ref().unwrap()[0], arg);
+        assert_eq!(builder.args.as_ref().unwrap()[0], another_arg);
+    }
+
+    #[test]
+    fn args_adds_args() {
+        let mut builder = TaskBuilder::new("some_executable");
+        assert!(builder.args.is_none());
+        let args = ["some", "args"];
+        builder.args(args);
+        assert_eq!(builder.args.as_ref().unwrap().len(), args.len());
+        assert_eq!(builder.args.as_ref().unwrap(), &args);
+
+        let another_args = ["another", "args"];
+        builder.args(another_args);
+        assert_eq!(
+            builder.args.as_ref().unwrap().len(),
+            args.len() + another_args.len()
+        );
+        assert_eq!(builder.args.as_ref().unwrap()[..args.len()], args);
+        assert_eq!(builder.args.as_ref().unwrap()[args.len()..], another_args);
+    }
+
+    #[test]
+    fn working_dir_sets_working_dir() {
+        let mut builder = TaskBuilder::new("some_executable");
+        assert!(builder.working_dir.is_none());
+        let wd = "/tmp";
+        builder.working_dir(wd);
+        assert_eq!(
+            builder.working_dir.as_ref().unwrap(),
+            &Into::<PathBuf>::into(wd)
+        );
+    }
+
+    fn make_on_output_test_data() -> (TaskBuilder, Arc<Mutex<Vec<Arc<String>>>>) {
+        let mut builder = TaskBuilder::new("some_executable");
+        let captured_output = Arc::new(Mutex::new(Vec::new()));
+        builder.on_output({
+            let captured_output = captured_output.clone();
+            move |line| {
+                captured_output.lock().unwrap().push(line);
+            }
+        });
+        (builder, captured_output)
+    }
+
+    #[tokio::test]
+    async fn on_output_subscribes_to_stdout() {
+        let (builder, captured_output) = make_on_output_test_data();
+        let lines = ["some", "output", "lines"];
+        for l in lines {
+            assert_eq!(builder.stdout_tx.send(Arc::new(l.to_string())).unwrap(), 1);
+        }
+        drop(builder.stdout_tx);
+        builder.related_tasks.join_all().await;
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), lines.len());
+        for (i, line) in lines.iter().enumerate() {
+            assert_eq!(*line, *captured_output[i]);
+        }
+    }
+
+    #[tokio::test]
+    async fn on_output_sender_dropped() {
+        let (builder, captured_output) = make_on_output_test_data();
+        drop(builder.stdout_tx);
+        builder.related_tasks.join_all().await;
+        assert!(captured_output.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn on_output_cancellation() {
+        let mut builder = TaskBuilder::new("some_executable");
+        let got_message = Arc::new(Notify::new());
+        let captured_output = Arc::new(Mutex::new(Vec::new()));
+        builder.on_output({
+            let captured_output = captured_output.clone();
+            let got_message = got_message.clone();
+            move |line| {
+                captured_output.lock().unwrap().push(line);
+                got_message.notify_one();
+            }
+        });
+        let lines = ["some", "output", "lines"];
+        assert_eq!(
+            builder
+                .stdout_tx
+                .send(Arc::new(lines[0].to_string()))
+                .unwrap(),
+            1
+        );
+        got_message.notified().await;
+        builder.cancel.cancel();
+        builder.related_tasks.join_all().await;
+
+        for l in lines.iter().skip(1) {
+            builder.stdout_tx.send(Arc::new(l.to_string())).unwrap_err();
+        }
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), 1);
+        assert_eq!(lines[0], *captured_output[0]);
+    }
+
+    #[tokio::test]
+    async fn on_output_slow_subscriber() {
+        // tokio::test is single threaded by default so this test is deterministic
+        let (builder, captured_output) = make_on_output_test_data();
+        let range = 0..(CHANNEL_CAPACITY + 2);
+        for i in range.clone() {
+            assert_eq!(builder.stdout_tx.send(Arc::new(i.to_string())).unwrap(), 1);
+        }
+        drop(builder.stdout_tx);
+        builder.related_tasks.join_all().await;
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), CHANNEL_CAPACITY);
+        for (i, message) in range.skip(2).enumerate() {
+            assert_eq!(message.to_string(), *captured_output[i]);
+        }
     }
 }

@@ -8,13 +8,3 @@ pub struct TaskInfo {
     pub args: Vec<String>,
     pub working_dir: PathBuf,
 }
-
-impl TaskInfo {
-    pub fn new(executable: String) -> Self {
-        Self {
-            executable,
-            args,
-            working_dir,
-        }
-    }
-}
