@@ -90,7 +90,7 @@ impl TaskBuilder {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{os::unix::process::ExitStatusExt, sync::Mutex};
 
     use tokio::sync::Notify;
 
@@ -227,5 +227,41 @@ mod tests {
         for (i, message) in range.skip(2).enumerate() {
             assert_eq!(message.to_string(), *captured_output[i]);
         }
+    }
+
+    #[tokio::test]
+    async fn on_exit_subscribes_to_exit_tx() {
+        let mut builder = TaskBuilder::new("some_executable");
+        let captured_exit_code = Arc::new(Mutex::new(Option::<ExitStatus>::None));
+        builder.on_exit({
+            let captured_exit_code = captured_exit_code.clone();
+            move |e| {
+                *captured_exit_code.lock().unwrap() = Some(e);
+            }
+        });
+        let exit_code = 123;
+        builder
+            .on_exit_tx
+            .send(Some(ExitStatus::from_raw(exit_code)))
+            .unwrap();
+        builder.related_tasks.join_all().await;
+        assert_eq!(
+            captured_exit_code.lock().unwrap().unwrap().into_raw(),
+            exit_code
+        );
+    }
+
+    #[tokio::test]
+    async fn on_exit_tx_never_called() {
+        let mut builder = TaskBuilder::new("some_executable");
+        let captured_exit_code = Arc::new(Mutex::new(Option::<ExitStatus>::None));
+        builder.on_exit({
+            let captured_exit_code = captured_exit_code.clone();
+            move |e| {
+                *captured_exit_code.lock().unwrap() = Some(e);
+            }
+        });
+        drop(builder);
+        assert!(captured_exit_code.lock().unwrap().is_none());
     }
 }
