@@ -1,23 +1,32 @@
-use std::{path::PathBuf, process::ExitStatus, sync::Arc};
+use std::{env::current_dir, path::PathBuf, process::ExitStatus, sync::Arc};
 
 use tokio::{
+    process::{Child, Command},
     sync::{broadcast, watch},
     task::JoinSet,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::tasks::common::CHANNEL_CAPACITY;
+use crate::tasks::{
+    common::{CHANNEL_CAPACITY, TaskInfo},
+    pty::{PtyChild, create_pty_pair},
+    task::Task,
+    task_error::TaskError,
+};
+
+pub(in crate::tasks) struct TaskData {}
 
 pub struct TaskBuilder {
     executable: String,
     args: Option<Vec<String>>,
     working_dir: Option<PathBuf>,
 
+    data: TaskData,
+    // TODO: put these field into TaskData struct
     cancel: CancellationToken,
     stdout_tx: broadcast::Sender<Arc<String>>,
     on_exit_tx: watch::Sender<Option<ExitStatus>>,
-    input: Option<String>,
     related_tasks: JoinSet<()>,
 }
 
@@ -29,10 +38,10 @@ impl TaskBuilder {
             executable: executable.into(),
             args: None,
             working_dir: None,
+            data: TaskData {},
             cancel: CancellationToken::new(),
             stdout_tx,
             on_exit_tx,
-            input: None,
             related_tasks: JoinSet::new(),
         }
     }
@@ -85,6 +94,19 @@ impl TaskBuilder {
             f(on_exit_rx.borrow_and_update().unwrap());
         });
         self
+    }
+
+    pub fn start_task(self) -> Result<Task, TaskError> {
+        let working_dir = self
+            .working_dir
+            .unwrap_or(current_dir().map_err(|_| TaskError::InvalidDirectory)?);
+        let info = TaskInfo {
+            executable: self.executable,
+            args: self.args.unwrap_or_default(),
+            working_dir,
+        };
+
+        Task::start(info, self.data)
     }
 }
 

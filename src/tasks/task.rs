@@ -11,111 +11,31 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::tasks::{
+    common::TaskInfo,
     pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair},
+    task_builder::TaskData,
     task_error::TaskError,
 };
 
 #[derive(Debug)]
-enum State {
-    New {
-        cancel: CancellationToken,
-        stdout_tx: broadcast::Sender<Arc<String>>,
-        on_exit_tx: watch::Sender<Option<ExitStatus>>,
-        input: Option<String>,
-        related_tasks: JoinSet<()>,
-    },
-    Running {
-        pid: u32,
-        // Mutex could be avoided if AsyncWrite is implemented for &PtyWritePart (reference is important).
-        // But without mutex multiple parallel inputs may be mixed together.
-        stdin: Arc<tokio::sync::Mutex<PtyWritePart>>,
-        on_exit_rx: watch::Receiver<Option<ExitStatus>>,
-        stdout_rx: broadcast::Receiver<Arc<String>>,
-        cancel: CancellationToken,
-        related_tasks: JoinSet<()>,
-        // TODO: output buffer: VecDeque<Arc<String>>
-    },
-    Finished {
-        exit_status: Result<ExitStatus>,
-        // TODO: output buffer: VecDeque<Arc<String>>
-    },
-}
-
-const CHANNEL_CAPACITY: usize = 16;
-
-impl State {
-    fn new() -> Self {
-        let (stdout_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
-        let (on_exit_tx, _) = watch::channel(None);
-        Self::New {
-            cancel: CancellationToken::new(),
-            stdout_tx,
-            on_exit_tx,
-            input: None,
-            related_tasks: JoinSet::new(),
-        }
-    }
-
-    fn into_running(self) -> Self {
-        assert!(matches!(self, State::New { .. }));
-        let State::New {
-            cancel,
-            stdout_tx,
-            on_exit_tx,
-            input,
-            related_tasks,
-        } = self;
-    }
-}
-
-#[derive(Debug)]
 pub struct Task {
-    // Option is only to be able to take and replace the state. There is always something there.
-    state: std::sync::Mutex<Option<State>>,
     info: Arc<TaskInfo>,
-}
-
-#[derive(Debug)]
-pub struct TaskInfo {
-    pub executable: String,
-    pub args: Vec<String>,
-    pub working_dir: PathBuf,
+    stdin: Arc<tokio::sync::Mutex<PtyWritePart>>,
+    pid: u32,
+    on_exit_rx: watch::Receiver<Option<ExitStatus>>,
+    stdout_rx: broadcast::Receiver<Arc<String>>,
+    cancel: CancellationToken,
+    related_tasks: JoinSet<()>,
 }
 
 impl Task {
-    pub fn new(
-        executable: String,
-        args: Vec<String>,
-        working_dir: Option<PathBuf>,
-    ) -> Result<Self, TaskError> {
-        let working_dir =
-            working_dir.unwrap_or(current_dir().map_err(|_| TaskError::InvalidDirectory)?);
-        Ok(Task {
-            state: std::sync::Mutex::new(Some(State::new())),
-            info: Arc::new(TaskInfo {
-                executable,
-                args,
-                working_dir,
-            }),
-        })
-    }
-
-    pub fn start(&self) -> Result<Self, TaskError> {
+    pub(in crate::tasks) fn start(info: TaskInfo, data: TaskData) -> Result<Self, TaskError> {
         let (pty, child_pty) = create_pty_pair().map_err(TaskError::pty_creation_error)?;
-        let child = Self::spawn_child_process(&self.info, child_pty)?;
+        let child = Self::spawn_child_process(&info, child_pty)?;
         let pid = child.id();
         let (stdout, stdin) = pty.into_split().map_err(TaskError::pty_creation_error)?;
-        let State::New {
-            cancel,
-            stdout_tx,
-            on_exit_tx,
-            input,
-            related_tasks,
-        } = self.state.lock().unwrap().take().unwrap();
-        // send input into stdin
         // start reading output
         // start waiting for exit
-
         self.spawn_stdout_reading(stdout, stdout_tx, cancel);
         // Spawning a task to throw away input
         // to not block the process while there is no output subscribers.
