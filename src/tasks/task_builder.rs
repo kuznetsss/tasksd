@@ -1,48 +1,30 @@
-use std::{env::current_dir, path::PathBuf, process::ExitStatus, sync::Arc};
-
-use tokio::{
-    process::{Child, Command},
-    sync::{broadcast, watch},
-    task::JoinSet,
-};
-use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use std::{env::current_dir, path::PathBuf};
 
 use crate::tasks::{
-    common::{CHANNEL_CAPACITY, TaskInfo},
-    pty::{PtyChild, create_pty_pair},
+    common::{TaskCallbacks, TaskExitCallback, TaskInfo, TaskOutputCallback, TaskSenders},
     task::Task,
     task_error::TaskError,
 };
-
-pub(in crate::tasks) struct TaskData {}
 
 pub struct TaskBuilder {
     executable: String,
     args: Option<Vec<String>>,
     working_dir: Option<PathBuf>,
 
-    data: TaskData,
-    // TODO: put these field into TaskData struct
-    cancel: CancellationToken,
-    stdout_tx: broadcast::Sender<Arc<String>>,
-    on_exit_tx: watch::Sender<Option<ExitStatus>>,
-    related_tasks: JoinSet<()>,
+    senders: TaskSenders,
+    callbacks: TaskCallbacks,
 }
 
 impl TaskBuilder {
     pub fn new(executable: impl Into<String>) -> Self {
-        let (stdout_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
-        let (on_exit_tx, _) = watch::channel(None);
+        let senders = TaskSenders::new();
+        let callbacks = TaskCallbacks::new(&senders);
         Self {
             executable: executable.into(),
             args: None,
             working_dir: None,
-            data: TaskData {},
-            cancel: CancellationToken::new(),
-            stdout_tx,
-            on_exit_tx,
-            related_tasks: JoinSet::new(),
+            callbacks,
+            senders,
         }
     }
 
@@ -64,35 +46,19 @@ impl TaskBuilder {
         self
     }
 
-    pub fn on_output<F>(&mut self, mut f: F) -> &mut Self
+    pub fn on_output<F>(&mut self, f: F) -> &mut Self
     where
-        F: FnMut(Arc<String>) + 'static + Send,
+        F: TaskOutputCallback,
     {
-        let mut stdout_rx = self.stdout_tx.subscribe();
-        let cancel = self.cancel.child_token();
-        self.related_tasks.spawn(async move {
-            while let Some(input_line) = cancel.run_until_cancelled(stdout_rx.recv()).await {
-                match input_line {
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("Stdout receiver is too slow. Have to skip {n} lines");
-                    }
-                    Err(_) => break,
-                    Ok(line) => f(line),
-                };
-            }
-        });
+        self.callbacks.on_output(f);
         self
     }
 
     pub fn on_exit<F>(&mut self, f: F) -> &mut Self
     where
-        F: FnOnce(ExitStatus) + 'static + Send,
+        F: TaskExitCallback,
     {
-        let mut on_exit_rx = self.on_exit_tx.subscribe();
-        self.related_tasks.spawn(async move {
-            on_exit_rx.changed().await.expect("on_exit_rx.await");
-            f(on_exit_rx.borrow_and_update().unwrap());
-        });
+        self.callbacks.on_exit(f);
         self
     }
 
@@ -106,7 +72,7 @@ impl TaskBuilder {
             working_dir,
         };
 
-        Task::start(info, self.data)
+        Task::new(info, self.senders, self.callbacks)
     }
 }
 
@@ -182,10 +148,17 @@ mod tests {
         let (builder, captured_output) = make_on_output_test_data();
         let lines = ["some", "output", "lines"];
         for l in lines {
-            assert_eq!(builder.stdout_tx.send(Arc::new(l.to_string())).unwrap(), 1);
+            assert_eq!(
+                builder
+                    .data
+                    .stdout_tx
+                    .send(Arc::new(l.to_string()))
+                    .unwrap(),
+                1
+            );
         }
-        drop(builder.stdout_tx);
-        builder.related_tasks.join_all().await;
+        drop(builder.data.stdout_tx);
+        builder.data.related_tasks.join_all().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), lines.len());
         for (i, line) in lines.iter().enumerate() {
@@ -196,8 +169,8 @@ mod tests {
     #[tokio::test]
     async fn on_output_sender_dropped() {
         let (builder, captured_output) = make_on_output_test_data();
-        drop(builder.stdout_tx);
-        builder.related_tasks.join_all().await;
+        drop(builder.data.stdout_tx);
+        builder.data.related_tasks.join_all().await;
         assert!(captured_output.lock().unwrap().is_empty());
     }
 
@@ -217,17 +190,22 @@ mod tests {
         let lines = ["some", "output", "lines"];
         assert_eq!(
             builder
+                .data
                 .stdout_tx
                 .send(Arc::new(lines[0].to_string()))
                 .unwrap(),
             1
         );
         got_message.notified().await;
-        builder.cancel.cancel();
-        builder.related_tasks.join_all().await;
+        builder.data.cancel.cancel();
+        builder.data.related_tasks.join_all().await;
 
         for l in lines.iter().skip(1) {
-            builder.stdout_tx.send(Arc::new(l.to_string())).unwrap_err();
+            builder
+                .data
+                .stdout_tx
+                .send(Arc::new(l.to_string()))
+                .unwrap_err();
         }
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 1);
@@ -240,10 +218,17 @@ mod tests {
         let (builder, captured_output) = make_on_output_test_data();
         let range = 0..(CHANNEL_CAPACITY + 2);
         for i in range.clone() {
-            assert_eq!(builder.stdout_tx.send(Arc::new(i.to_string())).unwrap(), 1);
+            assert_eq!(
+                builder
+                    .data
+                    .stdout_tx
+                    .send(Arc::new(i.to_string()))
+                    .unwrap(),
+                1
+            );
         }
-        drop(builder.stdout_tx);
-        builder.related_tasks.join_all().await;
+        drop(builder.data.stdout_tx);
+        builder.data.related_tasks.join_all().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), CHANNEL_CAPACITY);
         for (i, message) in range.skip(2).enumerate() {
@@ -263,10 +248,11 @@ mod tests {
         });
         let exit_code = 123;
         builder
+            .data
             .on_exit_tx
             .send(Some(ExitStatus::from_raw(exit_code)))
             .unwrap();
-        builder.related_tasks.join_all().await;
+        builder.data.related_tasks.join_all().await;
         assert_eq!(
             captured_exit_code.lock().unwrap().unwrap().into_raw(),
             exit_code

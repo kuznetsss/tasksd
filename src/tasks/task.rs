@@ -2,116 +2,117 @@ use std::{env::current_dir, path::PathBuf, process::ExitStatus, sync::Arc};
 
 use anyhow::Result;
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
     sync::{broadcast, watch},
-    task::JoinSet,
+    task::{AbortHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::tasks::{
-    common::TaskInfo,
-    pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair},
-    task_builder::TaskData,
-    task_error::TaskError,
+    common::{TaskCallbacks, TaskExitCallback, TaskInfo, TaskOutputCallback, TaskSenders}, finished_task::FinishedTask, pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair}, task_error::TaskError
 };
 
 #[derive(Debug)]
 pub struct Task {
     info: Arc<TaskInfo>,
-    stdin: Arc<tokio::sync::Mutex<PtyWritePart>>,
+    stdin: tokio::sync::Mutex<PtyWritePart>,
     pid: u32,
-    on_exit_rx: watch::Receiver<Option<ExitStatus>>,
-    stdout_rx: broadcast::Receiver<Arc<String>>,
-    cancel: CancellationToken,
-    related_tasks: JoinSet<()>,
+    callbacks: TaskCallbacks,
+    internal_tasks: JoinSet<()>,
 }
 
 impl Task {
-    pub(in crate::tasks) fn start(info: TaskInfo, data: TaskData) -> Result<Self, TaskError> {
+    pub(in crate::tasks) fn new(
+        info: TaskInfo,
+        senders: TaskSenders,
+        callbacks: TaskCallbacks,
+    ) -> Result<Self, TaskError> {
         let (pty, child_pty) = create_pty_pair().map_err(TaskError::pty_creation_error)?;
         let child = Self::spawn_child_process(&info, child_pty)?;
-        let pid = child.id();
+
+        let pid = child.id().expect("pid");
+        let info = Arc::new(info);
+
         let (stdout, stdin) = pty.into_split().map_err(TaskError::pty_creation_error)?;
-        // start reading output
-        // start waiting for exit
-        self.spawn_stdout_reading(stdout, stdout_tx, cancel);
+
+        let mut internal_tasks = JoinSet::new();
+        Self::spawn_stdout_reading(
+            &mut internal_tasks,
+            info.clone(),
+            stdout,
+            senders.stdout_tx,
+            callbacks.cancel.clone(),
+        );
+
+        Self::spawn_waiting_for_finish(&mut internal_tasks, senders.on_exit_tx, child);
+
+        let mut task = Self {
+            info,
+            stdin: tokio::sync::Mutex::new(stdin),
+            pid,
+            callbacks,
+            internal_tasks,
+        };
+
         // Spawning a task to throw away input
         // to not block the process while there is no output subscribers.
         // This should write to the output buffer after it is added.
-        s.on_output(|_| {});
-        Ok(s)
+        task.on_output(|_| {});
+        Ok(task)
     }
 
     pub fn info(&self) -> Arc<TaskInfo> {
         Arc::clone(&self.info)
     }
 
-    pub fn stdin(&self) -> Arc<Mutex<PtyWritePart>> {
-        Arc::clone(&self.stdin)
+    pub async fn write_to_stdin(&self, msg: &[u8]) -> Result<(), TaskError> {
+        self.stdin
+            .lock()
+            .await
+            .write_all(msg)
+            .await
+            .map_err(TaskError::write_error)
     }
 
-    // TODO: maybe wrap related_tasks into Mutex and switch to &self everywhere
-    pub fn on_output<F>(&mut self, f: F) -> tokio::task::AbortHandle
+    pub fn on_output<F>(&mut self, f: F) -> AbortHandle
     where
-        F: Fn(Arc<String>) + Send + 'static,
+        F: TaskOutputCallback,
     {
-        let mut stdout_rx = self.stdout_rx.resubscribe();
-        let cancel = self.cancel.child_token();
-        self.related_tasks
-            .as_mut()
-            .expect("on_output() called after finish()")
-            .spawn(async move {
-                // stdout_rx.recv() my return Lagged error, but it is silenced here
-                while let Some(Ok(l)) = cancel.run_until_cancelled(stdout_rx.recv()).await {
-                    f(l);
-                }
-            })
+        self.callbacks.on_output(f)
     }
 
-    pub fn on_exit<F>(&mut self, f: F) -> Option<tokio::task::AbortHandle>
+    pub fn on_exit<F>(&mut self, f: F) -> AbortHandle
     where
-        F: FnOnce(ExitStatus) + Send + 'static,
+        F: TaskExitCallback,
     {
-        if self
-            .on_exit_rx
-            .has_changed()
-            .expect("On exit channel is alive")
-        {
-            f(self.on_exit_rx.borrow().unwrap());
-            return None;
-        }
-        let mut on_exit_rx = self.on_exit_rx.clone();
-        let handle = self.related_tasks.as_mut().unwrap().spawn(async move {
-            on_exit_rx.changed().await.expect("Changed shouldn't fail");
-            // There will always be an exit code
-            f(on_exit_rx.borrow_and_update().unwrap());
-        });
-        Some(handle)
+        self.callbacks.on_exit(f)
     }
 
-    pub fn send_signal(&self, signal: rustix::process::Signal) -> Result<()> {
-        let Some(pid) = self.info.pid else {
-            anyhow::bail!("No pid for the task. Maybe it failed to start");
-        };
-        if self.on_exit_rx.has_changed()? {
-            anyhow::bail!("The task has already exited");
-        }
-        let pid =
-            rustix::process::Pid::from_raw(pid.try_into()?).expect("Pid should be valid here");
+    pub fn send_signal(&self, signal: rustix::process::Signal) -> Result<(), TaskError> {
+        let pid: rustix::process::RawPid =
+            self.pid.try_into().map_err(TaskError::send_signal_error)?;
+        let pid = rustix::process::Pid::from_raw(pid).expect("Pid should be valid here");
         rustix::process::kill_process(pid, signal).map_err(|e| {
             if e == rustix::io::Errno::SRCH {
-                anyhow::anyhow!("The task has already exited")
+                TaskError::AlreadyFinished
             } else {
-                e.into()
+                TaskError::send_signal_error(e)
             }
         })
     }
 
-    pub async fn finish(&mut self) {
-        if self.related_tasks.is_some() {
-            self.related_tasks.take().unwrap().join_all().await;
+    pub async fn wait(&self) {
+        // Probably wait for internal_tasks to finish or explicitly subscribe to exit
+        todo!()
+    }
+
+    pub async fn finish(self) -> FinishedTask {
+        self.internal_tasks.join_all().await;
+        self.callbacks.join_all().await;
+        FinishedTask {
+            info: self.info,
         }
     }
 
@@ -148,51 +149,48 @@ impl Task {
     }
 
     fn spawn_stdout_reading(
-        &mut self,
+        related_tasks: &mut JoinSet<()>,
+        task_info: Arc<TaskInfo>,
         stdout: PtyReadPart,
         stdout_tx: broadcast::Sender<Arc<String>>,
         cancel: CancellationToken,
     ) {
-        self.related_tasks
-            .as_mut()
-            .expect("spawn_stdout_reading() called after finish()")
-            .spawn({
-                let task_info = Arc::clone(&self.info);
-                async move {
-                    let mut stdout = BufReader::new(stdout);
-                    let mut buf = String::new();
-                    while let Some(read_bytes) =
-                        cancel.run_until_cancelled(stdout.read_line(&mut buf)).await
-                    {
-                        let read_bytes = match read_bytes {
-                            Ok(r) => r,
-                            Err(e) => {
-                                warn!(
-                                    "Error reading from stdout for the task {:?}: {e}",
-                                    task_info
-                                );
-                                return;
-                            }
-                        };
-                        if read_bytes == 0 {
-                            // EOF
+        related_tasks.spawn({
+            async move {
+                let mut stdout = BufReader::new(stdout);
+                let mut buf = String::new();
+                while let Some(read_bytes) =
+                    cancel.run_until_cancelled(stdout.read_line(&mut buf)).await
+                {
+                    let read_bytes = match read_bytes {
+                        Ok(r) => r,
+                        Err(e) => {
+                            warn!(
+                                "Error reading from stdout for the task {:?}: {e}",
+                                task_info
+                            );
                             return;
                         }
-                        let line = Arc::new(buf);
-                        if stdout_tx.send(line).is_err() {
-                            return;
-                        }
-                        buf = String::new();
+                    };
+                    if read_bytes == 0 {
+                        // EOF
+                        return;
                     }
+                    let line = Arc::new(buf);
+                    if stdout_tx.send(line).is_err() {
+                        return;
+                    }
+                    buf = String::new();
                 }
-            });
+            }
+        });
     }
 
     fn spawn_waiting_for_finish(
         related_tasks: &mut JoinSet<()>,
+        tx: watch::Sender<Option<ExitStatus>>,
         mut child: Child,
-    ) -> watch::Receiver<Option<ExitStatus>> {
-        let (tx, rx) = watch::channel(None);
+    ) {
         related_tasks.spawn(async move {
             let exit_code = child
                 .wait()
@@ -201,7 +199,6 @@ impl Task {
             tx.send(Some(exit_code))
                 .expect("At least one receiver should be alive");
         });
-        rx
     }
 }
 

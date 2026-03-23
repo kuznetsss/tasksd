@@ -9,11 +9,11 @@
 ## Task manager
 - [x] first version is implemented
 - [ ] refactor Task into typestate pattern:
-    - [ ] TaskBuilder (replaces New state):
+    - [x] TaskBuilder (replaces New state):
         - new(executable) creates builder
         - builder pattern for args, working_dir, on_output, on_exit handlers
         - start() consumes builder, spawns process, returns Task
-    - [ ] Task (Running state):
+    - [.] Task (Running state):
         - holds Arc<TaskInfo>, pid, stdin, cancel, related_tasks etc.
         - consumable parts in Mutex<Option<TaskInner>> so finish() can take &self (needed because Task lives inside Arc)
         - methods: send_signal, write_to_stdin, wait (awaits process exit), finish (joins related tasks, returns FinishedTask)
@@ -29,6 +29,14 @@
         3. removes task from active hashmap
         4. calls finish() to join related tasks
         5. moves FinishedTask into an archive
+
+----
+Current TODOs:
+- implement Task::wait()
+- implement Task::finish()
+- move some tests from TaskBuilder into common
+- fix tests in TaskBuilder
+- fix tests in Task
 
 ## Api and handlers
 
