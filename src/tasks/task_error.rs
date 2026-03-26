@@ -6,7 +6,7 @@ pub enum TaskError {
     PtyCreationError(String),
     StartingChildProcessError(String),
     WriteError(String),
-    AlreadyFinished,
+    AlreadyExited,
     SendSignalError(String),
 }
 
@@ -40,7 +40,7 @@ impl Display for TaskError {
                 write!(f, "Error starting child process: {details}")
             }
             TaskError::WriteError(details) => write!(f, "Error writing message: {details}"),
-            TaskError::AlreadyFinished => write!(f, "Error: the task has already finished"),
+            TaskError::AlreadyExited => write!(f, "Error: the task has already finished"),
             TaskError::SendSignalError(details) => write!(f, "Error sending signal: {details}"),
         }
     }

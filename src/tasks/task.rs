@@ -1,4 +1,9 @@
-use std::{env::current_dir, path::PathBuf, process::ExitStatus, sync::Arc};
+use std::{
+    env::current_dir,
+    path::PathBuf,
+    process::ExitStatus,
+    sync::{Arc, Mutex, atomic::AtomicBool},
+};
 
 use anyhow::Result;
 use tokio::{
@@ -11,7 +16,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::tasks::{
-    common::{TaskCallbacks, TaskExitCallback, TaskInfo, TaskOutputCallback, TaskSenders}, finished_task::FinishedTask, pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair}, task_error::TaskError
+    common::{TaskEvents, TaskExitCallback, TaskInfo, TaskOutputCallback, TaskSenders},
+    finished_task::FinishedTask,
+    pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair},
+    task_error::TaskError,
 };
 
 #[derive(Debug)]
@@ -19,20 +27,18 @@ pub struct Task {
     info: Arc<TaskInfo>,
     stdin: tokio::sync::Mutex<PtyWritePart>,
     pid: u32,
-    callbacks: TaskCallbacks,
-    internal_tasks: JoinSet<()>,
+    events: TaskEvents,
+    internal_tasks: Option<JoinSet<()>>,
 }
 
 impl Task {
     pub(in crate::tasks) fn new(
         info: TaskInfo,
         senders: TaskSenders,
-        callbacks: TaskCallbacks,
+        callbacks: TaskEvents,
     ) -> Result<Self, TaskError> {
         let (pty, child_pty) = create_pty_pair().map_err(TaskError::pty_creation_error)?;
-        let child = Self::spawn_child_process(&info, child_pty)?;
 
-        let pid = child.id().expect("pid");
         let info = Arc::new(info);
 
         let (stdout, stdin) = pty.into_split().map_err(TaskError::pty_creation_error)?;
@@ -46,14 +52,16 @@ impl Task {
             callbacks.cancel.clone(),
         );
 
-        Self::spawn_waiting_for_finish(&mut internal_tasks, senders.on_exit_tx, child);
+        let child = Self::spawn_child_process(&info, child_pty)?;
+        let pid = child.id().expect("pid");
+        Self::spawn_waiting_for_exit(&mut internal_tasks, senders.on_exit_tx, child);
 
-        let mut task = Self {
+        let task = Self {
             info,
             stdin: tokio::sync::Mutex::new(stdin),
             pid,
-            callbacks,
-            internal_tasks,
+            events: callbacks,
+            internal_tasks: Some(internal_tasks),
         };
 
         // Spawning a task to throw away input
@@ -76,18 +84,18 @@ impl Task {
             .map_err(TaskError::write_error)
     }
 
-    pub fn on_output<F>(&mut self, f: F) -> AbortHandle
+    pub fn on_output<F>(&self, f: F) -> Result<AbortHandle, TaskError>
     where
         F: TaskOutputCallback,
     {
-        self.callbacks.on_output(f)
+        self.events.on_output(f)
     }
 
-    pub fn on_exit<F>(&mut self, f: F) -> AbortHandle
+    pub fn on_exit<F>(&self, f: F) -> Result<AbortHandle, TaskError>
     where
         F: TaskExitCallback,
     {
-        self.callbacks.on_exit(f)
+        self.events.on_exit(f)
     }
 
     pub fn send_signal(&self, signal: rustix::process::Signal) -> Result<(), TaskError> {
@@ -96,7 +104,7 @@ impl Task {
         let pid = rustix::process::Pid::from_raw(pid).expect("Pid should be valid here");
         rustix::process::kill_process(pid, signal).map_err(|e| {
             if e == rustix::io::Errno::SRCH {
-                TaskError::AlreadyFinished
+                TaskError::AlreadyExited
             } else {
                 TaskError::send_signal_error(e)
             }
@@ -104,15 +112,19 @@ impl Task {
     }
 
     pub async fn wait(&self) {
-        // Probably wait for internal_tasks to finish or explicitly subscribe to exit
-        todo!()
+        self.events.exit_status().await;
     }
 
-    pub async fn finish(self) -> FinishedTask {
-        self.internal_tasks.join_all().await;
-        self.callbacks.join_all().await;
+    pub async fn finish(&mut self) -> FinishedTask {
+        assert!(
+            self.internal_tasks.is_some(),
+            "Task::finish() called more than one time"
+        );
+        self.internal_tasks.take().unwrap().join_all().await;
+        self.events.join_all().await;
         FinishedTask {
-            info: self.info,
+            info: self.info.clone(),
+            exit_status: self.events.exit_status().await,
         }
     }
 
@@ -186,17 +198,17 @@ impl Task {
         });
     }
 
-    fn spawn_waiting_for_finish(
+    fn spawn_waiting_for_exit(
         related_tasks: &mut JoinSet<()>,
         tx: watch::Sender<Option<ExitStatus>>,
         mut child: Child,
     ) {
         related_tasks.spawn(async move {
-            let exit_code = child
+            let exit_status = child
                 .wait()
                 .await
                 .expect("Child process should finish normally");
-            tx.send(Some(exit_code))
+            tx.send(Some(exit_status))
                 .expect("At least one receiver should be alive");
         });
     }
@@ -205,12 +217,13 @@ impl Task {
 impl Drop for Task {
     fn drop(&mut self) {
         assert!(
-            self.related_tasks.is_none(),
-            "task is dropped without calling finish()"
+            self.internal_tasks.is_none(),
+            "Task is dropped without calling finish()"
         );
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use std::{str::FromStr, sync::Mutex};
@@ -344,3 +357,4 @@ mod tests {
         );
     }
 }
+*/

@@ -8,27 +8,32 @@
 
 ## Task manager
 - [x] first version is implemented
-- [ ] refactor Task into typestate pattern:
+- [x] refactor Task into typestate pattern:
     - [x] TaskBuilder (replaces New state):
         - new(executable) creates builder
         - builder pattern for args, working_dir, on_output, on_exit handlers
         - start() consumes builder, spawns process, returns Task
-    - [.] Task (Running state):
+    - [x] Task (Running state):
         - holds Arc<TaskInfo>, pid, stdin, cancel, related_tasks etc.
         - consumable parts in Mutex<Option<TaskInner>> so finish() can take &self (needed because Task lives inside Arc)
         - methods: send_signal, write_to_stdin, wait (awaits process exit), finish (joins related tasks, returns FinishedTask)
-    - [ ] FinishedTask:
+    - [x] FinishedTask:
         - holds TaskInfo and exit status (and output buffer later)
     - [x] create TaskError instead of using anyhow
+    - [ ] split common.rs into info, senders, events
+    - [ ] remove prefix Task in class names where possible
+    - [ ] test for TaskEvents
+    - [ ] tests for Task
 - [ ] make task manager clonable (Arc<TaskManagerInner> pattern)
 - [ ] task manager lifecycle for tasks:
-    - active tasks stored in HashMap<TaskId, Arc<Task>>
+    - active tasks are stored in HashMap<TaskId, Arc<Task>>
     - on task creation, manager spawns a coroutine that:
         1. holds Arc<Task> + clone of TaskManager
-        2. awaits process exit (on_exit_rx)
-        3. removes task from active hashmap
-        4. calls finish() to join related tasks
-        5. moves FinishedTask into an archive
+        2. calls task.wait().await to await process exit
+        3. takes the task out from active hashmap
+        4. problem: finish() requires exclusive ownership
+        5. calls finish() to join related tasks
+        6. moves FinishedTask into an archive
 
 ----
 Current TODOs:

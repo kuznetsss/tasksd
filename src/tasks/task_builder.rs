@@ -1,7 +1,7 @@
 use std::{env::current_dir, path::PathBuf};
 
 use crate::tasks::{
-    common::{TaskCallbacks, TaskExitCallback, TaskInfo, TaskOutputCallback, TaskSenders},
+    common::{TaskEvents, TaskExitCallback, TaskInfo, TaskOutputCallback, TaskSenders},
     task::Task,
     task_error::TaskError,
 };
@@ -12,13 +12,13 @@ pub struct TaskBuilder {
     working_dir: Option<PathBuf>,
 
     senders: TaskSenders,
-    callbacks: TaskCallbacks,
+    callbacks: TaskEvents,
 }
 
 impl TaskBuilder {
     pub fn new(executable: impl Into<String>) -> Self {
         let senders = TaskSenders::new();
-        let callbacks = TaskCallbacks::new(&senders);
+        let callbacks = TaskEvents::new(&senders);
         Self {
             executable: executable.into(),
             args: None,
