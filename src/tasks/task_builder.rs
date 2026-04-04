@@ -1,7 +1,9 @@
 use std::{env::current_dir, path::PathBuf};
 
 use crate::tasks::{
-    common::{TaskEvents, TaskExitCallback, TaskInfo, TaskOutputCallback, TaskSenders},
+    events::{TaskEvents, TaskExitCallback, TaskOutputCallback},
+    info::TaskInfo,
+    senders::TaskSenders,
     task::Task,
     task_error::TaskError,
 };
@@ -78,9 +80,15 @@ impl TaskBuilder {
 
 #[cfg(test)]
 mod tests {
-    use std::{os::unix::process::ExitStatusExt, sync::Mutex};
+    use std::{
+        os::unix::process::ExitStatusExt,
+        process::ExitStatus,
+        sync::{Arc, Mutex},
+    };
 
     use tokio::sync::Notify;
+
+    use crate::tasks::senders::CHANNEL_CAPACITY;
 
     use super::*;
 
@@ -150,15 +158,15 @@ mod tests {
         for l in lines {
             assert_eq!(
                 builder
-                    .data
+                    .senders
                     .stdout_tx
                     .send(Arc::new(l.to_string()))
                     .unwrap(),
                 1
             );
         }
-        drop(builder.data.stdout_tx);
-        builder.data.related_tasks.join_all().await;
+        drop(builder.senders.stdout_tx);
+        builder.callbacks.join_all().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), lines.len());
         for (i, line) in lines.iter().enumerate() {
@@ -169,8 +177,8 @@ mod tests {
     #[tokio::test]
     async fn on_output_sender_dropped() {
         let (builder, captured_output) = make_on_output_test_data();
-        drop(builder.data.stdout_tx);
-        builder.data.related_tasks.join_all().await;
+        drop(builder.senders.stdout_tx);
+        builder.callbacks.join_all().await;
         assert!(captured_output.lock().unwrap().is_empty());
     }
 
@@ -190,19 +198,19 @@ mod tests {
         let lines = ["some", "output", "lines"];
         assert_eq!(
             builder
-                .data
+                .senders
                 .stdout_tx
                 .send(Arc::new(lines[0].to_string()))
                 .unwrap(),
             1
         );
         got_message.notified().await;
-        builder.data.cancel.cancel();
-        builder.data.related_tasks.join_all().await;
+        builder.callbacks.cancel();
+        builder.callbacks.join_all().await;
 
         for l in lines.iter().skip(1) {
             builder
-                .data
+                .senders
                 .stdout_tx
                 .send(Arc::new(l.to_string()))
                 .unwrap_err();
@@ -220,15 +228,15 @@ mod tests {
         for i in range.clone() {
             assert_eq!(
                 builder
-                    .data
+                    .senders
                     .stdout_tx
                     .send(Arc::new(i.to_string()))
                     .unwrap(),
                 1
             );
         }
-        drop(builder.data.stdout_tx);
-        builder.data.related_tasks.join_all().await;
+        drop(builder.senders.stdout_tx);
+        builder.callbacks.join_all().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), CHANNEL_CAPACITY);
         for (i, message) in range.skip(2).enumerate() {
@@ -248,11 +256,11 @@ mod tests {
         });
         let exit_code = 123;
         builder
-            .data
+            .senders
             .on_exit_tx
             .send(Some(ExitStatus::from_raw(exit_code)))
             .unwrap();
-        builder.data.related_tasks.join_all().await;
+        builder.callbacks.join_all().await;
         assert_eq!(
             captured_exit_code.lock().unwrap().unwrap().into_raw(),
             exit_code

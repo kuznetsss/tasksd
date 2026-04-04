@@ -1,6 +1,6 @@
 use std::{process::ExitStatus, sync::Arc};
 
-use crate::tasks::common::TaskInfo;
+use crate::tasks::info::TaskInfo;
 
 #[derive(Debug)]
 pub struct FinishedTask {

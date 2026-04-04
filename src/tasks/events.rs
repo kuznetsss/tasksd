@@ -1,7 +1,6 @@
 use std::{
-    path::PathBuf,
     process::ExitStatus,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{Arc, Mutex},
 };
 
 use tokio::{
@@ -11,8 +10,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::tasks::{task::Task, task_error::TaskError};
-
+use crate::tasks::{senders::TaskSenders, task_error::TaskError};
 
 pub trait TaskOutputCallback: FnMut(Arc<String>) + 'static + Send {}
 impl<F> TaskOutputCallback for F where F: FnMut(Arc<String>) + 'static + Send {}
@@ -87,7 +85,7 @@ impl TaskEvents {
     }
 
     pub(in crate::tasks) async fn exit_status(&self) -> ExitStatus {
-        if (self.has_exited()) {
+        if self.has_exited() {
             return self.on_exit_rx.borrow().unwrap();
         }
         let mut on_exit_rx = self.on_exit_rx.clone();

@@ -1,9 +1,4 @@
-use std::{
-    env::current_dir,
-    path::PathBuf,
-    process::ExitStatus,
-    sync::{Arc, Mutex, atomic::AtomicBool},
-};
+use std::{process::ExitStatus, sync::Arc};
 
 use anyhow::Result;
 use tokio::{
@@ -16,9 +11,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::tasks::{
-    common::{TaskEvents, TaskExitCallback, TaskInfo, TaskOutputCallback, TaskSenders},
+    events::{TaskEvents, TaskExitCallback, TaskOutputCallback},
     finished_task::FinishedTask,
+    info::TaskInfo,
     pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair},
+    senders::TaskSenders,
     task_error::TaskError,
 };
 

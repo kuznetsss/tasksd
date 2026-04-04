@@ -20,10 +20,11 @@
     - [x] FinishedTask:
         - holds TaskInfo and exit status (and output buffer later)
     - [x] create TaskError instead of using anyhow
-    - [ ] split common.rs into info, senders, events
-    - [ ] remove prefix Task in class names where possible
+    - [x] split common.rs into info, senders, events
+    - [ ] fix failing tests
     - [ ] test for TaskEvents
     - [ ] tests for Task
+    - [ ] Maybe? remove prefix Task in class names where possible
 - [ ] make task manager clonable (Arc<TaskManagerInner> pattern)
 - [ ] task manager lifecycle for tasks:
     - active tasks are stored in HashMap<TaskId, Arc<Task>>
@@ -36,12 +37,6 @@
         6. moves FinishedTask into an archive
 
 ----
-Current TODOs:
-- implement Task::wait()
-- implement Task::finish()
-- move some tests from TaskBuilder into common
-- fix tests in TaskBuilder
-- fix tests in Task
 
 ## Api and handlers
 
