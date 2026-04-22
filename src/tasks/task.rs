@@ -64,6 +64,7 @@ impl Task {
         // Spawning a task to throw away input
         // to not block the process while there is no output subscribers.
         // This should write to the output buffer after it is added.
+        // TODO: fix warning
         task.on_output(|_| {});
         Ok(task)
     }

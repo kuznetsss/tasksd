@@ -14,18 +14,18 @@ pub struct TaskBuilder {
     working_dir: Option<PathBuf>,
 
     senders: TaskSenders,
-    callbacks: TaskEvents,
+    events: TaskEvents,
 }
 
 impl TaskBuilder {
     pub fn new(executable: impl Into<String>) -> Self {
         let senders = TaskSenders::new();
-        let callbacks = TaskEvents::new(&senders);
+        let events = TaskEvents::new(&senders);
         Self {
             executable: executable.into(),
             args: None,
             working_dir: None,
-            callbacks,
+            events,
             senders,
         }
     }
@@ -52,7 +52,9 @@ impl TaskBuilder {
     where
         F: TaskOutputCallback,
     {
-        self.callbacks.on_output(f);
+        self.events
+            .on_output(f)
+            .expect("Task can't exit in builder");
         self
     }
 
@@ -60,7 +62,7 @@ impl TaskBuilder {
     where
         F: TaskExitCallback,
     {
-        self.callbacks.on_exit(f);
+        self.events.on_exit(f).expect("Task can't exit in builder");
         self
     }
 
@@ -74,7 +76,7 @@ impl TaskBuilder {
             working_dir,
         };
 
-        Task::new(info, self.senders, self.callbacks)
+        Task::new(info, self.senders, self.events)
     }
 }
 
@@ -101,11 +103,11 @@ mod tests {
         assert_eq!(builder.args.as_ref().unwrap().len(), 1);
         assert_eq!(builder.args.as_ref().unwrap()[0], arg);
 
-        let another_arg = "some_arg";
+        let another_arg = "another_arg";
         builder.arg(another_arg);
         assert_eq!(builder.args.as_ref().unwrap().len(), 2);
         assert_eq!(builder.args.as_ref().unwrap()[0], arg);
-        assert_eq!(builder.args.as_ref().unwrap()[0], another_arg);
+        assert_eq!(builder.args.as_ref().unwrap()[1], another_arg);
     }
 
     #[test]
@@ -162,11 +164,11 @@ mod tests {
                     .stdout_tx
                     .send(Arc::new(l.to_string()))
                     .unwrap(),
-                1
+                2
             );
         }
         drop(builder.senders.stdout_tx);
-        builder.callbacks.join_all().await;
+        builder.events.join_all().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), lines.len());
         for (i, line) in lines.iter().enumerate() {
@@ -178,7 +180,7 @@ mod tests {
     async fn on_output_sender_dropped() {
         let (builder, captured_output) = make_on_output_test_data();
         drop(builder.senders.stdout_tx);
-        builder.callbacks.join_all().await;
+        builder.events.join_all().await;
         assert!(captured_output.lock().unwrap().is_empty());
     }
 
@@ -202,18 +204,21 @@ mod tests {
                 .stdout_tx
                 .send(Arc::new(lines[0].to_string()))
                 .unwrap(),
-            1
+            2
         );
         got_message.notified().await;
-        builder.callbacks.cancel();
-        builder.callbacks.join_all().await;
+        builder.events.cancel();
+        builder.events.join_all().await;
 
         for l in lines.iter().skip(1) {
-            builder
-                .senders
-                .stdout_tx
-                .send(Arc::new(l.to_string()))
-                .unwrap_err();
+            assert_eq!(
+                builder
+                    .senders
+                    .stdout_tx
+                    .send(Arc::new(l.to_string()))
+                    .unwrap(),
+                1
+            );
         }
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 1);
@@ -232,11 +237,11 @@ mod tests {
                     .stdout_tx
                     .send(Arc::new(i.to_string()))
                     .unwrap(),
-                1
+                2
             );
         }
         drop(builder.senders.stdout_tx);
-        builder.callbacks.join_all().await;
+        builder.events.join_all().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), CHANNEL_CAPACITY);
         for (i, message) in range.skip(2).enumerate() {
@@ -260,7 +265,7 @@ mod tests {
             .on_exit_tx
             .send(Some(ExitStatus::from_raw(exit_code)))
             .unwrap();
-        builder.callbacks.join_all().await;
+        builder.events.join_all().await;
         assert_eq!(
             captured_exit_code.lock().unwrap().unwrap().into_raw(),
             exit_code

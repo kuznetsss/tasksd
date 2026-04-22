@@ -21,7 +21,7 @@
         - holds TaskInfo and exit status (and output buffer later)
     - [x] create TaskError instead of using anyhow
     - [x] split common.rs into info, senders, events
-    - [ ] fix failing tests
+    - [x] fix failing tests
     - [ ] test for TaskEvents
     - [ ] tests for Task
     - [ ] Maybe? remove prefix Task in class names where possible
