@@ -104,3 +104,156 @@ impl TaskEvents {
         rt.join_all().await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Tests moved from task_builder
+    /*
+    fn make_on_output_test_data() -> (TaskBuilder, Arc<Mutex<Vec<Arc<String>>>>) {
+        let mut builder = TaskBuilder::new("some_executable");
+        let captured_output = Arc::new(Mutex::new(Vec::new()));
+        builder.on_output({
+            let captured_output = captured_output.clone();
+            move |line| {
+                captured_output.lock().unwrap().push(line);
+            }
+        });
+        (builder, captured_output)
+    }
+
+    #[tokio::test]
+    async fn on_output_subscribes_to_stdout() {
+        let (builder, captured_output) = make_on_output_test_data();
+        let lines = ["some", "output", "lines"];
+        for l in lines {
+            assert_eq!(
+                builder
+                    .senders
+                    .stdout_tx
+                    .send(Arc::new(l.to_string()))
+                    .unwrap(),
+                2
+            );
+        }
+        drop(builder.senders.stdout_tx);
+        builder.events.join_all().await;
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), lines.len());
+        for (i, line) in lines.iter().enumerate() {
+            assert_eq!(*line, *captured_output[i]);
+        }
+    }
+
+    #[tokio::test]
+    async fn on_output_sender_dropped() {
+        let (builder, captured_output) = make_on_output_test_data();
+        drop(builder.senders.stdout_tx);
+        builder.events.join_all().await;
+        assert!(captured_output.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn on_output_cancellation() {
+        let mut builder = TaskBuilder::new("some_executable");
+        let got_message = Arc::new(Notify::new());
+        let captured_output = Arc::new(Mutex::new(Vec::new()));
+        builder.on_output({
+            let captured_output = captured_output.clone();
+            let got_message = got_message.clone();
+            move |line| {
+                captured_output.lock().unwrap().push(line);
+                got_message.notify_one();
+            }
+        });
+        let lines = ["some", "output", "lines"];
+        assert_eq!(
+            builder
+                .senders
+                .stdout_tx
+                .send(Arc::new(lines[0].to_string()))
+                .unwrap(),
+            2
+        );
+        got_message.notified().await;
+        builder.events.cancel();
+        builder.events.join_all().await;
+
+        for l in lines.iter().skip(1) {
+            assert_eq!(
+                builder
+                    .senders
+                    .stdout_tx
+                    .send(Arc::new(l.to_string()))
+                    .unwrap(),
+                1
+            );
+        }
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), 1);
+        assert_eq!(lines[0], *captured_output[0]);
+    }
+
+    #[tokio::test]
+    async fn on_output_slow_subscriber() {
+        // tokio::test is single threaded by default so this test is deterministic
+        let (builder, captured_output) = make_on_output_test_data();
+        let range = 0..(CHANNEL_CAPACITY + 2);
+        for i in range.clone() {
+            assert_eq!(
+                builder
+                    .senders
+                    .stdout_tx
+                    .send(Arc::new(i.to_string()))
+                    .unwrap(),
+                2
+            );
+        }
+        drop(builder.senders.stdout_tx);
+        builder.events.join_all().await;
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), CHANNEL_CAPACITY);
+        for (i, message) in range.skip(2).enumerate() {
+            assert_eq!(message.to_string(), *captured_output[i]);
+        }
+    }
+
+    #[tokio::test]
+    async fn on_exit_subscribes_to_exit_tx() {
+        let mut builder = TaskBuilder::new("some_executable");
+        let captured_exit_code = Arc::new(Mutex::new(Option::<ExitStatus>::None));
+        builder.on_exit({
+            let captured_exit_code = captured_exit_code.clone();
+            move |e| {
+                *captured_exit_code.lock().unwrap() = Some(e);
+            }
+        });
+        let exit_code = 123;
+        builder
+            .senders
+            .on_exit_tx
+            .send(Some(ExitStatus::from_raw(exit_code)))
+            .unwrap();
+        builder.events.join_all().await;
+        assert_eq!(
+            captured_exit_code.lock().unwrap().unwrap().into_raw(),
+            exit_code
+        );
+    }
+
+    #[tokio::test]
+    async fn on_exit_tx_never_called() {
+        let mut builder = TaskBuilder::new("some_executable");
+        let captured_exit_code = Arc::new(Mutex::new(Option::<ExitStatus>::None));
+        builder.on_exit({
+            let captured_exit_code = captured_exit_code.clone();
+            move |e| {
+                *captured_exit_code.lock().unwrap() = Some(e);
+            }
+        });
+        drop(builder);
+        assert!(captured_exit_code.lock().unwrap().is_none());
+    }
+    */
+}
