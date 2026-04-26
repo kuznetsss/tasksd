@@ -24,6 +24,7 @@
     - [x] fix failing tests
     - [ ] test for TaskEvents
     - [ ] tests for Task
+    - [ ] check test coverage in tasks submodule
     - [ ] Maybe? remove prefix Task in class names where possible
 - [ ] make task manager clonable (Arc<TaskManagerInner> pattern)
 - [ ] task manager lifecycle for tasks:
