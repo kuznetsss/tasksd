@@ -41,13 +41,7 @@ impl Task {
         let (stdout, stdin) = pty.into_split().map_err(TaskError::pty_creation_error)?;
 
         let mut internal_tasks = JoinSet::new();
-        Self::spawn_stdout_reading(
-            &mut internal_tasks,
-            info.clone(),
-            stdout,
-            senders.stdout_tx,
-            callbacks.cancel.clone(),
-        );
+        Self::spawn_stdout_reading(&mut internal_tasks, info.clone(), stdout, senders.stdout_tx);
 
         let child = Self::spawn_child_process(&info, child_pty)?;
         let pid = child.id().expect("pid");
@@ -163,15 +157,13 @@ impl Task {
         task_info: Arc<TaskInfo>,
         stdout: PtyReadPart,
         stdout_tx: broadcast::Sender<Arc<String>>,
-        cancel: CancellationToken,
     ) {
         related_tasks.spawn({
             async move {
                 let mut stdout = BufReader::new(stdout);
                 let mut buf = String::new();
-                while let Some(read_bytes) =
-                    cancel.run_until_cancelled(stdout.read_line(&mut buf)).await
-                {
+                loop {
+                    let read_bytes = stdout.read_line(&mut buf).await;
                     let read_bytes = match read_bytes {
                         Ok(r) => r,
                         Err(e) => {
