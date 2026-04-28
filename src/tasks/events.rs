@@ -268,8 +268,56 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn on_output_multiple_recievers() {
+        let test_data = OnOutputTestsData::new();
+        let captured_output2 = Arc::new(Mutex::new(Vec::new()));
+        let got_output2 = Arc::new(Notify::new());
+        let abort_handle2 = test_data
+            .events
+            .on_output({
+                let captured_output2 = captured_output2.clone();
+                let got_output2 = got_output2.clone();
+                move |o| {
+                    captured_output2.lock().unwrap().push(o);
+                    got_output2.notify_waiters();
+                }
+            })
+            .unwrap();
+        let output = ["first output", "second output"];
+        for o in &output {
+            assert_eq!(
+                test_data
+                    .senders
+                    .stdout_tx
+                    .send(Arc::new(o.to_string()))
+                    .unwrap(),
+                3
+            );
+        }
+        got_output2.notified().await;
+        assert!(!abort_handle2.is_finished());
+        abort_handle2.abort();
+        let third_output = "third output";
+        test_data
+            .senders
+            .stdout_tx
+            .send(Arc::new(third_output.to_string()))
+            .unwrap();
+        drop(test_data.senders);
+        test_data.events.join_all().await;
+        let captured_output = test_data.captured_output.lock().unwrap();
+        let captured_output2 = captured_output2.lock().unwrap();
+        assert_eq!(captured_output.len(), 3);
+        assert_eq!(captured_output2.len(), 2);
+        for (i, &o) in output.iter().enumerate() {
+            assert_eq!(*captured_output[i], o);
+            assert_eq!(*captured_output2[i], o);
+        }
+        assert_eq!(*captured_output[2], third_output);
+    }
+
     // TODO:
-    // - multiple concurrent subscribers each receive every message (fan-out)
     // - late subscriber misses messages sent before on_output() was called (resubscribe semantics)
     // - panic in the callback propagates through join_all()
     // - abort_handle.is_finished() becomes true after the task exits naturally (senders dropped)
