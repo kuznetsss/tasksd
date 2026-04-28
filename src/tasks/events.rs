@@ -260,6 +260,7 @@ mod tests {
         }
         drop(test_data.senders);
         test_data.events.join_all().await;
+        assert!(test_data.abort_handle.is_finished());
 
         let captured_output = test_data.captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), output.len());
@@ -317,8 +318,51 @@ mod tests {
         assert_eq!(*captured_output[2], third_output);
     }
 
-    // TODO:
-    // - late subscriber misses messages sent before on_output() was called (resubscribe semantics)
-    // - panic in the callback propagates through join_all()
-    // - abort_handle.is_finished() becomes true after the task exits naturally (senders dropped)
+    #[tokio::test]
+    async fn on_output_subscriber_doesnt_receive_old_messages() {
+        let senders = TaskSenders::new();
+        let events = TaskEvents::new(&senders);
+        let output = ["first", "second"];
+        assert_eq!(
+            senders
+                .stdout_tx
+                .send(Arc::new(output[0].to_string()))
+                .unwrap(),
+            1
+        );
+        let captured_output = Arc::new(Mutex::new(Vec::new()));
+        events
+            .on_output({
+                let captured_output = captured_output.clone();
+                move |o| {
+                    captured_output.lock().unwrap().push(o);
+                }
+            })
+            .unwrap();
+        assert_eq!(
+            senders
+                .stdout_tx
+                .send(Arc::new(output[1].to_string()))
+                .unwrap(),
+            2
+        );
+        drop(senders);
+        events.join_all().await;
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), 1);
+        assert_eq!(*captured_output[0], output[1]);
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn on_output_propagates_panic() {
+        let senders = TaskSenders::new();
+        let events = TaskEvents::new(&senders);
+        events.on_output(|_| panic!("some panic")).unwrap();
+        senders
+            .stdout_tx
+            .send("some line".to_string().into())
+            .unwrap();
+        events.join_all().await;
+    }
 }
