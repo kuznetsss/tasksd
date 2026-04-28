@@ -165,7 +165,10 @@ mod tests {
             .on_exit_tx
             .send(Some(ExitStatus::from_raw(123)))
             .unwrap();
-        test_data.events.on_output(|_| {}).unwrap_err();
+        test_data
+            .events
+            .on_output(|_| panic!("The callback should never be called"))
+            .unwrap_err();
     }
 
     #[tokio::test]
@@ -270,7 +273,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_output_multiple_recievers() {
+    async fn on_output_multiple_receivers() {
         let test_data = OnOutputTestsData::new();
         let captured_output2 = Arc::new(Mutex::new(Vec::new()));
         let got_output2 = Arc::new(Notify::new());
@@ -365,4 +368,145 @@ mod tests {
             .unwrap();
         events.join_all().await;
     }
+
+    struct OnExitTestData {
+        senders: TaskSenders,
+        events: TaskEvents,
+        abort_handle: AbortHandle,
+        captured_exit_codes: Arc<Mutex<Vec<ExitStatus>>>,
+        exit_code: i32,
+    }
+
+    impl OnExitTestData {
+        fn new() -> Self {
+            let senders = TaskSenders::new();
+            let events = TaskEvents::new(&senders);
+            let captured_exit_codes = Arc::new(Mutex::new(Vec::new()));
+            let abort_handle = events
+                .on_exit({
+                    let captured_exit_codes = captured_exit_codes.clone();
+                    move |e| {
+                        captured_exit_codes.lock().unwrap().push(e);
+                    }
+                })
+                .unwrap();
+            Self {
+                senders,
+                events,
+                abort_handle,
+                captured_exit_codes,
+                exit_code: 123,
+            }
+        }
+
+        fn send_code(&self) {
+            self.senders
+                .on_exit_tx
+                .send(Some(ExitStatus::from_raw(self.exit_code)))
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn on_exit_returns_error_after_exit() {
+        let senders = TaskSenders::new();
+        let events = TaskEvents::new(&senders);
+        senders
+            .on_exit_tx
+            .send(Some(ExitStatus::from_raw(123)))
+            .unwrap();
+        events
+            .on_exit(|_| panic!("The callback should never be called"))
+            .unwrap_err();
+        drop(senders);
+        events.join_all().await;
+    }
+
+    #[tokio::test]
+    async fn on_exit_abort_cancels_subscription() {
+        let test_data = OnExitTestData::new();
+        assert!(!test_data.abort_handle.is_finished());
+        test_data.events.abort();
+        test_data.send_code();
+        drop(test_data.senders);
+        test_data.events.join_all().await;
+        assert!(test_data.captured_exit_codes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn on_exit_abort_handle_cancels_subscription() {
+        let test_data = OnExitTestData::new();
+        assert!(!test_data.abort_handle.is_finished());
+        test_data.abort_handle.abort();
+        test_data.send_code();
+        drop(test_data.senders);
+        test_data.events.join_all().await;
+        assert!(test_data.captured_exit_codes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn on_exit_subscribes_to_exit_code() {
+        let test_data = OnExitTestData::new();
+        test_data.send_code();
+        drop(test_data.senders);
+        test_data.events.join_all().await;
+        assert!(test_data.abort_handle.is_finished());
+        let captured_exit_codes = test_data.captured_exit_codes.lock().unwrap();
+        assert_eq!(captured_exit_codes.len(), 1);
+        assert_eq!(captured_exit_codes[0].into_raw(), test_data.exit_code);
+    }
+
+    #[tokio::test]
+    async fn on_exit_multiple_subscribers() {
+        let test_data = OnExitTestData::new();
+        let captured_exit_codes2 = Arc::new(Mutex::new(Vec::new()));
+        test_data
+            .events
+            .on_exit({
+                let captured_exit_codes2 = captured_exit_codes2.clone();
+                move |e| {
+                    captured_exit_codes2.lock().unwrap().push(e);
+                }
+            })
+            .unwrap();
+        test_data.send_code();
+        drop(test_data.senders);
+        test_data.events.join_all().await;
+        for c in [&test_data.captured_exit_codes, &captured_exit_codes2] {
+            let c = c.lock().unwrap();
+            assert_eq!(c.len(), 1);
+            assert_eq!(c[0].into_raw(), test_data.exit_code);
+        }
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn on_exit_propagates_panic() {
+        let test_data = OnExitTestData::new();
+        test_data.events.on_exit(|_| panic!("Some panic")).unwrap();
+        test_data.send_code();
+        drop(test_data.senders);
+        test_data.events.join_all().await;
+    }
+
+    #[tokio::test]
+    async fn join_all_can_be_called_multiple_times() {
+        let test_data = OnOutputTestsData::new();
+        drop(test_data.senders);
+        test_data.events.join_all().await;
+        test_data.events.join_all().await;
+        test_data.events.join_all().await;
+    }
+
+    #[tokio::test]
+    async fn join_all_after_abort() {
+        let test_data = OnOutputTestsData::new();
+        test_data.events.abort();
+        test_data.events.join_all().await;
+    }
+
+    // TODO: cover exit_status()
+    //   - fast path: send exit first, then exit_status().await resolves immediately with the status
+    //   - wait path: spawn exit_status().await, then send exit, expect it to unblock with the status
+    //   - multiple concurrent awaiters all resolve to the same status (exercises the clone())
 }
