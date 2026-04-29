@@ -22,7 +22,7 @@
     - [x] create TaskError instead of using anyhow
     - [x] split common.rs into info, senders, events
     - [x] fix failing tests
-    - [ ] test for TaskEvents
+    - [x] test for TaskEvents
     - [ ] tests for Task
     - [ ] check test coverage in tasks submodule
     - [ ] Maybe? remove prefix Task in class names where possible

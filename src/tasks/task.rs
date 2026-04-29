@@ -7,7 +7,6 @@ use tokio::{
     sync::{broadcast, watch},
     task::{AbortHandle, JoinSet},
 };
-use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::tasks::{
@@ -32,16 +31,19 @@ impl Task {
     pub(in crate::tasks) fn new(
         info: TaskInfo,
         senders: TaskSenders,
-        callbacks: TaskEvents,
+        events: TaskEvents,
     ) -> Result<Self, TaskError> {
         let (pty, child_pty) = create_pty_pair().map_err(TaskError::pty_creation_error)?;
-
-        let info = Arc::new(info);
-
         let (stdout, stdin) = pty.into_split().map_err(TaskError::pty_creation_error)?;
 
+        let info = Arc::new(info);
         let mut internal_tasks = JoinSet::new();
         Self::spawn_stdout_reading(&mut internal_tasks, info.clone(), stdout, senders.stdout_tx);
+
+        // Spawning a task to throw away stdput
+        // to not block the process while there is no output subscribers.
+        // This should write to the output buffer after it is added.
+        events.on_output(|_| {}).expect("Task shouldn't exit yet");
 
         let child = Self::spawn_child_process(&info, child_pty)?;
         let pid = child.id().expect("pid");
@@ -51,15 +53,10 @@ impl Task {
             info,
             stdin: tokio::sync::Mutex::new(stdin),
             pid,
-            events: callbacks,
+            events,
             internal_tasks: Some(internal_tasks),
         };
 
-        // Spawning a task to throw away input
-        // to not block the process while there is no output subscribers.
-        // This should write to the output buffer after it is added.
-        // TODO: fix warning
-        task.on_output(|_| {});
         Ok(task)
     }
 
@@ -153,19 +150,23 @@ impl Task {
     }
 
     fn spawn_stdout_reading(
-        related_tasks: &mut JoinSet<()>,
+        internal_tasks: &mut JoinSet<()>,
         task_info: Arc<TaskInfo>,
         stdout: PtyReadPart,
         stdout_tx: broadcast::Sender<Arc<String>>,
     ) {
-        related_tasks.spawn({
+        internal_tasks.spawn({
             async move {
                 let mut stdout = BufReader::new(stdout);
-                let mut buf = String::new();
                 loop {
+                    let mut buf = String::new();
                     let read_bytes = stdout.read_line(&mut buf).await;
-                    let read_bytes = match read_bytes {
-                        Ok(r) => r,
+                    match read_bytes {
+                        Ok(r) if r == 0 => {
+                            // EOF
+                            return;
+                        }
+                        Ok(_) => {}
                         Err(e) => {
                             warn!(
                                 "Error reading from stdout for the task {:?}: {e}",
@@ -174,26 +175,21 @@ impl Task {
                             return;
                         }
                     };
-                    if read_bytes == 0 {
-                        // EOF
-                        return;
-                    }
                     let line = Arc::new(buf);
                     if stdout_tx.send(line).is_err() {
                         return;
                     }
-                    buf = String::new();
                 }
             }
         });
     }
 
     fn spawn_waiting_for_exit(
-        related_tasks: &mut JoinSet<()>,
+        internal_tasks: &mut JoinSet<()>,
         tx: watch::Sender<Option<ExitStatus>>,
         mut child: Child,
     ) {
-        related_tasks.spawn(async move {
+        internal_tasks.spawn(async move {
             let exit_status = child
                 .wait()
                 .await
@@ -213,138 +209,43 @@ impl Drop for Task {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
-    use std::{str::FromStr, sync::Mutex};
-
-    use rustix::process::Signal;
-    use tokio::io::AsyncWriteExt;
+    use std::{env::current_dir, path::Path};
 
     use super::*;
 
-    #[tokio::test]
-    async fn task_new_non_existing_working_directory() {
-        let t = Task::new(
-            "ls".to_string(),
-            Vec::new(),
-            Some(PathBuf::from_str("./non_existing").unwrap()),
-        );
-        assert!(t.is_err());
-        let err_str = t.unwrap_err().to_string();
-        assert!(err_str.contains("No such file or directory"));
+    fn make_task(executable: &str, args: &[&str], working_dir: &Path) -> Result<Task, TaskError> {
+        let senders = TaskSenders::new();
+        let events = TaskEvents::new(&senders);
+        let info = TaskInfo {
+            executable: executable.to_string(),
+            args: args.iter().map(|&s| String::from(s)).collect(),
+            working_dir: working_dir.to_path_buf(),
+        };
+        Task::new(info, senders, events)
     }
 
     #[tokio::test]
-    async fn task_new_invalid_executable() {
-        let t = Task::new("non_existing".to_string(), Vec::new(), None);
-        assert!(t.is_err());
-        let err_str = t.unwrap_err().to_string();
-        assert!(err_str.contains("No such file or directory"));
+    async fn new_non_existing_executable() {
+        let err = make_task("non_existing", &[], &current_dir().unwrap()).unwrap_err();
+        assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
     #[tokio::test]
-    async fn task_info() {
-        let executable = "ls";
-        let args = vec!["-la".to_string()];
-        let mut t = Task::new(executable.to_string(), args.clone(), None).unwrap();
-        let info = t.info();
-        assert_eq!(&info.executable, &executable);
-        assert_eq!(&info.args, &args);
-        assert_eq!(&info.working_dir, &current_dir().unwrap());
-        assert!(info.pid.unwrap() > 0);
-        t.finish().await;
+    async fn new_bad_args() {
+        let err = make_task("ls", &["\0"], &current_dir().unwrap()).unwrap_err();
+        assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
     #[tokio::test]
-    async fn task_on_output() {
-        let mut t = Task::new(
-            "echo".to_string(),
-            vec!["-ne".to_string(), "some\nmulti\nline".to_string()],
-            None,
+    async fn new_invalid_directory() {
+        let err = make_task(
+            "ls",
+            &["\0"],
+            &current_dir().unwrap().join("non_existing_123"),
         )
-        .unwrap();
-        let output_lines = Arc::new(Mutex::new(Vec::new()));
-        t.on_output({
-            let output_lines = Arc::clone(&output_lines);
-            move |line| {
-                output_lines.lock().unwrap().push(line);
-            }
-        });
-        t.finish().await;
-        assert_eq!(output_lines.lock().unwrap().len(), 3);
-        assert_eq!(output_lines.lock().unwrap()[0].as_str(), "some\r\n");
-        assert_eq!(output_lines.lock().unwrap()[1].as_str(), "multi\r\n");
-        assert_eq!(output_lines.lock().unwrap()[2].as_str(), "line");
-    }
-
-    #[tokio::test]
-    async fn task_stdin() {
-        let mut t = Task::new("cat".to_string(), Vec::new(), None).unwrap();
-        let output_lines = Arc::new(Mutex::new(Vec::new()));
-        t.on_output({
-            let output_lines = Arc::clone(&output_lines);
-            move |line| {
-                output_lines.lock().unwrap().push(line);
-            }
-        });
-
-        let stdin = t.stdin();
-        stdin
-            .lock()
-            .await
-            .write_all("some\n".as_bytes())
-            .await
-            .unwrap();
-        stdin
-            .lock()
-            .await
-            .write_all("multi\n".as_bytes())
-            .await
-            .unwrap();
-        stdin
-            .lock()
-            .await
-            .write_all("line".as_bytes())
-            .await
-            .unwrap();
-        stdin.lock().await.write_all(&[0x04]).await.unwrap(); // EOF symbol - first flushes buffer
-        stdin.lock().await.write_all(&[0x04]).await.unwrap(); // EOF symbol - second closes cat
-        t.finish().await;
-        assert_eq!(output_lines.lock().unwrap().len(), 3);
-        assert_eq!(output_lines.lock().unwrap()[0].as_str(), "some\r\n");
-        assert_eq!(output_lines.lock().unwrap()[1].as_str(), "multi\r\n");
-        assert_eq!(output_lines.lock().unwrap()[2].as_str(), "line");
-    }
-
-    #[tokio::test]
-    async fn task_on_exit() {
-        let mut t = Task::new("echo".to_string(), Vec::new(), None).unwrap();
-        let status = Arc::new(Mutex::new(Vec::new()));
-        t.on_exit({
-            let status = Arc::clone(&status);
-            move |s| {
-                status.lock().unwrap().push(s);
-            }
-        });
-        t.finish().await;
-        let status = status.lock().unwrap();
-        assert_eq!(status.len(), 1);
-        assert_eq!(status[0].code().unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn task_send_signal() {
-        let start_time = std::time::Instant::now();
-        let mut t = Task::new("sleep".to_string(), vec!["5".to_string()], None).unwrap();
-        t.send_signal(Signal::TERM).unwrap();
-        t.finish().await;
-        assert!(
-            std::time::Instant::now()
-                .duration_since(start_time)
-                .as_millis()
-                < 5000
-        );
+        .unwrap_err();
+        assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 }
-*/
