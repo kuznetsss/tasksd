@@ -115,7 +115,12 @@ impl TaskEvents {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::process::ExitStatusExt;
+    use std::{
+        os::unix::process::ExitStatusExt,
+        pin::pin,
+        task::{Context, Poll, Waker},
+        time::Duration,
+    };
 
     use tokio::sync::Notify;
 
@@ -505,8 +510,46 @@ mod tests {
         test_data.events.join_all().await;
     }
 
-    // TODO: cover exit_status()
-    //   - fast path: send exit first, then exit_status().await resolves immediately with the status
-    //   - wait path: spawn exit_status().await, then send exit, expect it to unblock with the status
-    //   - multiple concurrent awaiters all resolve to the same status (exercises the clone())
+    #[tokio::test]
+    async fn exit_status_returns_immediately_after_exit() {
+        let senders = TaskSenders::new();
+        let events = TaskEvents::new(&senders);
+        let exit_code = 123;
+        senders
+            .on_exit_tx
+            .send(Some(ExitStatus::from_raw(exit_code)))
+            .unwrap();
+        tokio::task::yield_now().await;
+        let future = events.exit_status();
+        let mut context = Context::from_waker(Waker::noop());
+        let poll_result = pin!(future).poll(&mut context);
+        let Poll::Ready(exit_status) = poll_result else {
+            panic!("poll_result is expected Ready");
+        };
+        assert_eq!(exit_status.into_raw(), exit_code);
+    }
+
+    #[tokio::test]
+    async fn exit_status_waits_for_exit_code() {
+        let senders = TaskSenders::new();
+        let events = Arc::new(TaskEvents::new(&senders));
+        let exit_code = 123;
+        let handle = tokio::spawn({
+            let events = events.clone();
+            async move {
+                let exit_status = events.exit_status().await;
+                assert_eq!(exit_status.into_raw(), exit_code);
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!handle.is_finished());
+        senders
+            .on_exit_tx
+            .send(Some(ExitStatus::from_raw(exit_code)))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("handle didn't complete")
+            .unwrap();
+    }
 }
