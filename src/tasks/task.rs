@@ -211,13 +211,23 @@ impl Drop for Task {
 
 #[cfg(test)]
 mod tests {
-    use std::{env::current_dir, path::Path};
-
     use super::*;
+    use std::{
+        env::current_dir,
+        path::{Path, PathBuf},
+        str::FromStr,
+        sync::Mutex,
+    };
 
-    fn make_task(executable: &str, args: &[&str], working_dir: &Path) -> Result<Task, TaskError> {
+    fn make_task(
+        executable: &str,
+        args: &[&str],
+        working_dir: &Path,
+        on_output: impl TaskOutputCallback,
+    ) -> Result<Task, TaskError> {
         let senders = TaskSenders::new();
         let events = TaskEvents::new(&senders);
+        events.on_output(on_output).unwrap();
         let info = TaskInfo {
             executable: executable.to_string(),
             args: args.iter().map(|&s| String::from(s)).collect(),
@@ -228,13 +238,13 @@ mod tests {
 
     #[tokio::test]
     async fn new_non_existing_executable() {
-        let err = make_task("non_existing", &[], &current_dir().unwrap()).unwrap_err();
+        let err = make_task("non_existing", &[], &current_dir().unwrap(), |_| {}).unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
     #[tokio::test]
     async fn new_bad_args() {
-        let err = make_task("ls", &["\0"], &current_dir().unwrap()).unwrap_err();
+        let err = make_task("ls", &["\0"], &current_dir().unwrap(), |_| {}).unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
@@ -244,8 +254,65 @@ mod tests {
             "ls",
             &["\0"],
             &current_dir().unwrap().join("non_existing_123"),
+            |_| {},
         )
         .unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
+    }
+
+    #[tokio::test]
+    async fn new_success() {
+        let captured_output = Arc::new(Mutex::new(Vec::new()));
+        let on_output = {
+            let captured_output = captured_output.clone();
+            move |o| {
+                captured_output.lock().unwrap().push(o);
+            }
+        };
+        let msg = "test";
+        let mut task = make_task("echo", &[msg], &current_dir().unwrap(), on_output).unwrap();
+        task.finish().await;
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), 1);
+        assert_eq!(*captured_output[0], format!("{msg}\r\n"));
+    }
+
+    #[tokio::test]
+    async fn info() {
+        let executable = "ls";
+        let args = ["-la"];
+        let directory = PathBuf::from_str("/tmp").unwrap();
+        let mut task = make_task(executable, &args, &directory, |_| {}).unwrap();
+        let info = task.info();
+        assert_eq!(&info.executable, executable);
+        assert_eq!(info.args, args);
+        assert_eq!(info.working_dir, directory);
+        task.finish().await;
+    }
+
+    #[tokio::test]
+    async fn write_to_stdin_success() {
+        let captured_output = Arc::new(Mutex::new(Vec::new()));
+        let on_output = {
+            let captured_output = captured_output.clone();
+            move |o| {
+                captured_output.lock().unwrap().push(o);
+            }
+        };
+        let mut task = make_task("cat", &[], &current_dir().unwrap(), on_output).unwrap();
+        for m in ["one", "two\n", "three"] {
+            task.write_to_stdin(m.as_bytes()).await.unwrap();
+        }
+        task.write_to_stdin(b"\x04\x04").await.unwrap(); // flush "three" then EOF
+        task.finish().await;
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), 2);
+        assert_eq!(*captured_output[0], "onetwo\r\n");
+        assert_eq!(*captured_output[1], "three");
+    }
+
+    #[tokio::test]
+    async fn write_to_stdin_error() {
+        todo!();
     }
 }
