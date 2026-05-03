@@ -1,12 +1,7 @@
-use std::sync::Arc;
-
 use anyhow::Result;
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt},
-    sync::{
-        Notify,
-        mpsc::{Sender, channel},
-    },
+    sync::mpsc::{Sender, channel},
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;

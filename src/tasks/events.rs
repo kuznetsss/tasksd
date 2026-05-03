@@ -95,14 +95,13 @@ impl TaskEvents {
         on_exit_rx.borrow().unwrap()
     }
 
-    #[allow(clippy::await_holding_lock)] // lock is dropped before the await point
     pub(in crate::tasks) async fn join_all(&self) {
-        let mut rt_lock = self.related_tasks.lock().unwrap();
-        if rt_lock.is_none() {
-            return;
-        }
-        let mut rt = rt_lock.take().unwrap();
-        drop(rt_lock);
+        let mut rt = {
+            match self.related_tasks.lock().unwrap().take() {
+                None => return,
+                Some(rt) => rt,
+            }
+        };
         while let Some(join_result) = rt.join_next().await {
             if let Err(e) = join_result
                 && e.is_panic()

@@ -23,11 +23,18 @@
     - [x] split common.rs into info, senders, events
     - [x] fix failing tests
     - [x] test for TaskEvents
-    - [ ] tests for Task
-    - [ ] check test coverage in tasks submodule
-    - [ ] Maybe? remove prefix Task in class names where possible
-- [ ] make task manager clonable (Arc<TaskManagerInner> pattern)
+    - [x] tests for Task
+    - [x] check test coverage in tasks submodule
+    - [x] Maybe? remove prefix Task in class names where possible
 - [ ] task manager lifecycle for tasks:
+    - [ ] add mutex for internal tasks in Task, then finish() doesn't need &mut
+    - [ ] implement TaskManager
+    - [ ] get task should return either task of finished task or not found error
+    - [ ] add finish() to TaskManager
+    - [ ] collect completed completion_coroutines in TaskManager
+- [ ] Task output buffer
+- [ ] API and RPC handlers
+
     - active tasks are stored in HashMap<TaskId, Arc<Task>>
     - on task creation, manager spawns a coroutine that:
         1. holds Arc<Task> + clone of TaskManager

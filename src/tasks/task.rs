@@ -109,7 +109,8 @@ impl Task {
             self.internal_tasks.is_some(),
             "Task::finish() called more than one time"
         );
-        self.internal_tasks.take().unwrap().join_all().await;
+        let internal_tasks = self.internal_tasks.take().unwrap();
+        internal_tasks.join_all().await;
         self.events.join_all().await;
         FinishedTask {
             info: self.info.clone(),
