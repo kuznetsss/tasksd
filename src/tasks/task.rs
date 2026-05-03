@@ -214,6 +214,7 @@ mod tests {
     use super::*;
     use std::{
         env::current_dir,
+        os::unix::process::ExitStatusExt,
         path::{Path, PathBuf},
         str::FromStr,
         sync::Mutex,
@@ -313,6 +314,71 @@ mod tests {
 
     #[tokio::test]
     async fn write_to_stdin_error() {
-        todo!();
+        let mut task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        task.wait().await;
+        let err = task
+            .write_to_stdin("some input".as_bytes())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TaskError::WriteError(_)));
+        task.finish().await;
+    }
+
+    #[tokio::test]
+    async fn on_output_after_exit_returns_error() {
+        let mut task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        task.wait().await;
+        let err = task.on_output(|_| {}).unwrap_err();
+        assert!(matches!(err, TaskError::AlreadyExited));
+        task.finish().await;
+    }
+
+    #[tokio::test]
+    async fn send_signal_success() {
+        let mut task = make_task("cat", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        tokio::task::yield_now().await;
+        task.send_signal(rustix::process::Signal::TERM).unwrap();
+        let finished_task = task.finish().await;
+        assert_eq!(
+            finished_task.exit_status.signal().unwrap(),
+            rustix::process::Signal::TERM.as_raw()
+        );
+    }
+
+    #[tokio::test]
+    async fn send_signal_error() {
+        let mut task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        task.wait().await;
+        let err = task.send_signal(rustix::process::Signal::TERM).unwrap_err();
+        assert!(matches!(err, TaskError::AlreadyExited));
+        task.finish().await;
+    }
+
+    #[tokio::test]
+    async fn finish_result() {
+        let executable = "ls";
+        let args = ["-la"];
+        let dir = current_dir().unwrap().join("../");
+        let mut task = make_task(executable, &args, &dir, |_| {}).unwrap();
+        let finished_task = task.finish().await;
+        assert_eq!(finished_task.info.executable, executable);
+        assert_eq!(finished_task.info.args, &args);
+        assert_eq!(finished_task.info.working_dir, dir);
+        assert_eq!(finished_task.exit_status.code().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn panic_if_dropped_without_finish() {
+        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        task.wait().await;
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn calling_finish_twice_panics() {
+        let mut task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        task.finish().await;
+        task.finish().await;
     }
 }
