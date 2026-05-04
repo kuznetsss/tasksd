@@ -27,11 +27,14 @@
     - [x] check test coverage in tasks submodule
     - [x] Maybe? remove prefix Task in class names where possible
 - [ ] task manager lifecycle for tasks:
-    - [ ] add mutex for internal tasks in Task, then finish() doesn't need &mut
+    - [x] add mutex for internal tasks in Task, then finish() doesn't need &mut
+    - [x] get task should return either task of finished task or not found error
+    - [ ] wrap JoinSet to drain on spawn, propagate panic and drain all with panic propagation and ignoring aborted tasks
+    - [ ] use the wrapped JoinSet in events, maybe task, task_manager
     - [ ] implement TaskManager
-    - [ ] get task should return either task of finished task or not found error
     - [ ] add finish() to TaskManager
     - [ ] collect completed completion_coroutines in TaskManager
+    - [ ] LRU cache for finished_task to limit it's memory
 - [ ] Task output buffer
 - [ ] API and RPC handlers
 

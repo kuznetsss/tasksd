@@ -8,7 +8,9 @@ use std::{
 use tokio::task::JoinSet;
 
 use crate::tasks::{
-    events::TaskOutputCallback, finished_task::FinishedTask, task_builder::TaskBuilder,
+    events::{TaskExitCallback, TaskOutputCallback},
+    finished_task::FinishedTask,
+    task_builder::TaskBuilder,
     task_error::TaskError,
 };
 
@@ -41,6 +43,7 @@ impl TaskManager {
         args: Vec<String>,
         working_dir: Option<PathBuf>,
         on_output: Option<impl TaskOutputCallback>,
+        on_exit: Option<impl TaskExitCallback>,
     ) -> Result<TaskId, TaskError> {
         let mut task_builder = TaskBuilder::new(executable);
         task_builder.args(args).working_dir(
@@ -49,6 +52,9 @@ impl TaskManager {
         );
         if let Some(o) = on_output {
             task_builder.on_output(o);
+        }
+        if let Some(e) = on_exit {
+            task_builder.on_exit(e);
         }
         let task = task_builder.start_task()?;
         let task = Arc::new(task);
@@ -64,10 +70,38 @@ impl TaskManager {
         Ok(task_id)
     }
 
-    pub fn get_task(&self, id: TaskId) -> Result<Arc<Task>> {
-        match self.tasks.read().expect("RwLock is poisoned").get(&id) {
-            Some(t) => Ok(t.clone()),
-            None => Err(anyhow::anyhow!("Not found")),
-        }
+    pub fn get_task(&self, id: TaskId) -> Option<Arc<Task>> {
+        self.tasks
+            .read()
+            .expect("RwLock is poisoned")
+            .get(&id)
+            .map(|t| t.clone())
+    }
+
+    pub fn get_finished_task(&self, id: TaskId) -> Option<Arc<FinishedTask>> {
+        self.finished_tasks
+            .read()
+            .unwrap()
+            .get(&id)
+            .map(|f| f.clone())
+    }
+
+    fn spawn_task_completion(self: &Arc<Self>, task: Arc<Task>, task_id: TaskId) {
+        self.completion_coroutines.lock().unwrap().spawn({
+            let task = task.clone();
+            let this = self.clone();
+            async move {
+                let finished_task = task.finish().await;
+                this.finished_tasks
+                    .write()
+                    .unwrap()
+                    .insert(task_id, Arc::new(finished_task));
+                this.tasks
+                    .write()
+                    .unwrap()
+                    .remove(&task_id)
+                    .expect("Task should still be in the hmap");
+            }
+        });
     }
 }

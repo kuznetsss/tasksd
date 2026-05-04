@@ -1,4 +1,7 @@
-use std::{process::ExitStatus, sync::Arc};
+use std::{
+    process::ExitStatus,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Result;
 use tokio::{
@@ -24,7 +27,7 @@ pub struct Task {
     stdin: tokio::sync::Mutex<PtyWritePart>,
     pid: u32,
     events: TaskEvents,
-    internal_tasks: Option<JoinSet<()>>,
+    internal_tasks: Mutex<Option<JoinSet<()>>>,
 }
 
 impl Task {
@@ -54,7 +57,7 @@ impl Task {
             stdin: tokio::sync::Mutex::new(stdin),
             pid,
             events,
-            internal_tasks: Some(internal_tasks),
+            internal_tasks: Mutex::new(Some(internal_tasks)),
         };
 
         Ok(task)
@@ -104,13 +107,15 @@ impl Task {
         self.events.exit_status().await;
     }
 
-    pub async fn finish(&mut self) -> FinishedTask {
-        assert!(
-            self.internal_tasks.is_some(),
-            "Task::finish() called more than one time"
-        );
-        let internal_tasks = self.internal_tasks.take().unwrap();
-        internal_tasks.join_all().await;
+    pub async fn finish(&self) -> FinishedTask {
+        let internal_tasks = {
+            let mut internal_tasks = self.internal_tasks.lock().unwrap();
+            internal_tasks.take()
+        };
+        internal_tasks
+            .expect("Task::finish() called more than one time")
+            .join_all()
+            .await;
         self.events.join_all().await;
         FinishedTask {
             info: self.info.clone(),
@@ -204,7 +209,7 @@ impl Task {
 impl Drop for Task {
     fn drop(&mut self) {
         assert!(
-            self.internal_tasks.is_none(),
+            self.internal_tasks.lock().unwrap().is_none(),
             "Task is dropped without calling finish()"
         );
     }
@@ -272,7 +277,7 @@ mod tests {
             }
         };
         let msg = "test";
-        let mut task = make_task("echo", &[msg], &current_dir().unwrap(), on_output).unwrap();
+        let task = make_task("echo", &[msg], &current_dir().unwrap(), on_output).unwrap();
         task.finish().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 1);
@@ -284,7 +289,7 @@ mod tests {
         let executable = "ls";
         let args = ["-la"];
         let directory = PathBuf::from_str("/tmp").unwrap();
-        let mut task = make_task(executable, &args, &directory, |_| {}).unwrap();
+        let task = make_task(executable, &args, &directory, |_| {}).unwrap();
         let info = task.info();
         assert_eq!(&info.executable, executable);
         assert_eq!(info.args, args);
@@ -301,7 +306,7 @@ mod tests {
                 captured_output.lock().unwrap().push(o);
             }
         };
-        let mut task = make_task("cat", &[], &current_dir().unwrap(), on_output).unwrap();
+        let task = make_task("cat", &[], &current_dir().unwrap(), on_output).unwrap();
         for m in ["one", "two\n", "three"] {
             task.write_to_stdin(m.as_bytes()).await.unwrap();
         }
@@ -315,7 +320,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_to_stdin_error() {
-        let mut task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
         task.wait().await;
         let err = task
             .write_to_stdin("some input".as_bytes())
@@ -327,7 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_output_after_exit_returns_error() {
-        let mut task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
         task.wait().await;
         let err = task.on_output(|_| {}).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
@@ -336,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_signal_success() {
-        let mut task = make_task("cat", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("cat", &[], &current_dir().unwrap(), |_| {}).unwrap();
         tokio::task::yield_now().await;
         task.send_signal(rustix::process::Signal::TERM).unwrap();
         let finished_task = task.finish().await;
@@ -348,7 +353,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_signal_error() {
-        let mut task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
         task.wait().await;
         let err = task.send_signal(rustix::process::Signal::TERM).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
@@ -360,7 +365,7 @@ mod tests {
         let executable = "ls";
         let args = ["-la"];
         let dir = current_dir().unwrap().join("../");
-        let mut task = make_task(executable, &args, &dir, |_| {}).unwrap();
+        let task = make_task(executable, &args, &dir, |_| {}).unwrap();
         let finished_task = task.finish().await;
         assert_eq!(finished_task.info.executable, executable);
         assert_eq!(finished_task.info.args, &args);
@@ -378,7 +383,7 @@ mod tests {
     #[tokio::test]
     #[should_panic]
     async fn calling_finish_twice_panics() {
-        let mut task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
         task.finish().await;
         task.finish().await;
     }
