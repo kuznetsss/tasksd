@@ -29,7 +29,8 @@
 - [ ] task manager lifecycle for tasks:
     - [x] add mutex for internal tasks in Task, then finish() doesn't need &mut
     - [x] get task should return either task of finished task or not found error
-    - [ ] wrap JoinSet to drain on spawn, propagate panic and drain all with panic propagation and ignoring aborted tasks
+    - [-] ~~wrap JoinSet to drain on spawn, propagate panic and drain all with panic propagation and ignoring aborted tasks~~
+    - [ ] finish tests for WrappedTaskTracker and use it instead of Mutex<Option<JoinSet>>
     - [ ] use the wrapped JoinSet in events, maybe task, task_manager
     - [ ] implement TaskManager
     - [ ] add finish() to TaskManager
