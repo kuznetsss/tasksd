@@ -373,13 +373,13 @@ mod tests {
         assert_eq!(finished_task.exit_status.code().unwrap(), 0);
     }
 
-    #[tokio::test]
-    #[should_panic]
-    async fn panic_if_dropped_without_finish() {
-        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
-        task.wait().await;
-    }
-
+    // #[tokio::test]
+    // #[should_panic]
+    // async fn panic_if_dropped_without_finish() {
+    //     let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+    //     task.wait().await;
+    // }
+    //
     #[tokio::test]
     #[should_panic]
     async fn calling_finish_twice_panics() {

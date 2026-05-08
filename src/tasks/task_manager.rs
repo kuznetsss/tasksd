@@ -12,6 +12,7 @@ use crate::tasks::{
     finished_task::FinishedTask,
     task_builder::TaskBuilder,
     task_error::TaskError,
+    tracker::{PanicHandler, WrappedTaskTracker},
 };
 
 use super::task::Task;
@@ -24,7 +25,7 @@ pub struct TaskManager {
     tasks: RwLock<HashMap<TaskId, Arc<Task>>>,
     next_id: AtomicUsize,
     finished_tasks: RwLock<HashMap<TaskId, Arc<FinishedTask>>>,
-    completion_coroutines: Mutex<JoinSet<()>>,
+    completion_coroutines: WrappedTaskTracker,
 }
 
 impl TaskManager {
@@ -33,7 +34,7 @@ impl TaskManager {
             tasks: Default::default(),
             next_id: AtomicUsize::new(0),
             finished_tasks: Default::default(),
-            completion_coroutines: Mutex::new(JoinSet::new()),
+            completion_coroutines: WrappedTaskTracker::new(PanicHandler::new_aborting()),
         })
     }
 
@@ -87,21 +88,23 @@ impl TaskManager {
     }
 
     fn spawn_task_completion(self: &Arc<Self>, task: Arc<Task>, task_id: TaskId) {
-        self.completion_coroutines.lock().unwrap().spawn({
-            let task = task.clone();
-            let this = self.clone();
-            async move {
-                let finished_task = task.finish().await;
-                this.finished_tasks
-                    .write()
-                    .unwrap()
-                    .insert(task_id, Arc::new(finished_task));
-                this.tasks
-                    .write()
-                    .unwrap()
-                    .remove(&task_id)
-                    .expect("Task should still be in the hmap");
-            }
-        });
+        self.completion_coroutines
+            .spawn({
+                let task = task.clone();
+                let this = self.clone();
+                async move {
+                    let finished_task = task.finish().await;
+                    this.finished_tasks
+                        .write()
+                        .unwrap()
+                        .insert(task_id, Arc::new(finished_task));
+                    this.tasks
+                        .write()
+                        .unwrap()
+                        .remove(&task_id)
+                        .expect("Task should still be in the hmap");
+                }
+            })
+            .expect("spawn_task_completion() called after join()");
     }
 }

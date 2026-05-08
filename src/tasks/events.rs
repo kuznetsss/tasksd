@@ -9,7 +9,11 @@ use tokio::{
 };
 use tracing::warn;
 
-use crate::tasks::{senders::TaskSenders, task_error::TaskError};
+use crate::tasks::{
+    senders::TaskSenders,
+    task_error::TaskError,
+    tracker::{PanicHandler, WrappedTaskTracker},
+};
 
 pub trait TaskOutputCallback: FnMut(Arc<String>) + 'static + Send {}
 impl<F> TaskOutputCallback for F where F: FnMut(Arc<String>) + 'static + Send {}
@@ -21,7 +25,7 @@ impl<F> TaskExitCallback for F where F: FnOnce(ExitStatus) + 'static + Send {}
 pub(in crate::tasks) struct TaskEvents {
     stdout_rx: broadcast::Receiver<Arc<String>>,
     on_exit_rx: watch::Receiver<Option<ExitStatus>>,
-    related_tasks: Mutex<Option<JoinSet<()>>>,
+    related_tasks: WrappedTaskTracker,
 }
 
 impl TaskEvents {
@@ -29,7 +33,7 @@ impl TaskEvents {
         Self {
             stdout_rx: senders.stdout_tx.subscribe(),
             on_exit_rx: senders.on_exit_tx.subscribe(),
-            related_tasks: Mutex::new(Some(JoinSet::new())),
+            related_tasks: WrappedTaskTracker::new(PanicHandler::new_aborting()),
         }
     }
 
@@ -37,12 +41,11 @@ impl TaskEvents {
     where
         F: TaskOutputCallback,
     {
-        let mut stdout_rx = self.stdout_rx.resubscribe();
-        let mut related_tasks = self.related_tasks.lock().unwrap();
         if self.has_exited() {
             return Err(TaskError::AlreadyExited);
         }
-        let abort_handle = related_tasks.as_mut().unwrap().spawn(async move {
+        let mut stdout_rx = self.stdout_rx.resubscribe();
+        self.related_tasks.spawn(async move {
             loop {
                 match stdout_rx.recv().await {
                     Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -52,34 +55,21 @@ impl TaskEvents {
                     Ok(line) => f(line),
                 };
             }
-        });
-        Ok(abort_handle)
+        })
     }
 
     pub(in crate::tasks) fn on_exit<F>(&self, f: F) -> Result<AbortHandle, TaskError>
     where
         F: TaskExitCallback,
     {
-        let mut on_exit_rx = self.on_exit_rx.clone();
-        let mut related_tasks = self.related_tasks.lock().unwrap();
         if self.has_exited() {
             return Err(TaskError::AlreadyExited);
         }
-        let abort_handle = related_tasks.as_mut().unwrap().spawn(async move {
+        let mut on_exit_rx = self.on_exit_rx.clone();
+        self.related_tasks.spawn(async move {
             on_exit_rx.changed().await.expect("on_exit_rx.await");
             f(on_exit_rx.borrow_and_update().unwrap());
-        });
-        Ok(abort_handle)
-    }
-
-    pub(in crate::tasks) fn abort(&self) {
-        // CancellationToken doesn't immediately abort tasks but waits for pending future, so using JoinSet's abort here
-        self.related_tasks
-            .lock()
-            .unwrap()
-            .as_mut()
-            .unwrap()
-            .abort_all();
+        })
     }
 
     fn has_exited(&self) -> bool {
@@ -96,19 +86,7 @@ impl TaskEvents {
     }
 
     pub(in crate::tasks) async fn join_all(&self) {
-        let mut rt = {
-            match self.related_tasks.lock().unwrap().take() {
-                None => return,
-                Some(rt) => rt,
-            }
-        };
-        while let Some(join_result) = rt.join_next().await {
-            if let Err(e) = join_result
-                && e.is_panic()
-            {
-                std::panic::resume_unwind(e.into_panic());
-            }
-        }
+        self.related_tasks.join_all().await;
     }
 }
 
@@ -173,6 +151,8 @@ mod tests {
             .events
             .on_output(|_| panic!("The callback should never be called"))
             .unwrap_err();
+        drop(test_data.senders);
+        test_data.events.join_all().await;
     }
 
     #[tokio::test]
@@ -190,32 +170,6 @@ mod tests {
         test_data.got_output.notified().await;
         assert!(!test_data.abort_handle.is_finished());
         test_data.abort_handle.abort();
-        test_data
-            .senders
-            .stdout_tx
-            .send(Arc::new(output[1].to_string()))
-            .unwrap();
-        test_data.events.join_all().await;
-        let captured_output = test_data.captured_output.lock().unwrap();
-        assert_eq!(captured_output.len(), 1);
-        assert_eq!(*captured_output[0], output[0]);
-    }
-
-    #[tokio::test]
-    async fn on_output_abort_cancels_task() {
-        let test_data = OnOutputTestsData::new();
-        let output = ["some output", "another output"];
-        assert_eq!(
-            test_data
-                .senders
-                .stdout_tx
-                .send(Arc::new(output[0].to_string()))
-                .unwrap(),
-            2
-        );
-        test_data.got_output.notified().await;
-        test_data.events.abort();
-        tokio::task::yield_now().await;
         test_data
             .senders
             .stdout_tx
@@ -360,19 +314,6 @@ mod tests {
         assert_eq!(*captured_output[0], output[1]);
     }
 
-    #[tokio::test]
-    #[should_panic]
-    async fn on_output_propagates_panic() {
-        let senders = TaskSenders::new();
-        let events = TaskEvents::new(&senders);
-        events.on_output(|_| panic!("some panic")).unwrap();
-        senders
-            .stdout_tx
-            .send("some line".to_string().into())
-            .unwrap();
-        events.join_all().await;
-    }
-
     struct OnExitTestData {
         senders: TaskSenders,
         events: TaskEvents,
@@ -427,17 +368,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_exit_abort_cancels_subscription() {
-        let test_data = OnExitTestData::new();
-        assert!(!test_data.abort_handle.is_finished());
-        test_data.events.abort();
-        test_data.send_code();
-        drop(test_data.senders);
-        test_data.events.join_all().await;
-        assert!(test_data.captured_exit_codes.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
     async fn on_exit_abort_handle_cancels_subscription() {
         let test_data = OnExitTestData::new();
         assert!(!test_data.abort_handle.is_finished());
@@ -484,29 +414,16 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic]
-    async fn on_exit_propagates_panic() {
-        let test_data = OnExitTestData::new();
-        test_data.events.on_exit(|_| panic!("Some panic")).unwrap();
-        test_data.send_code();
-        drop(test_data.senders);
-        test_data.events.join_all().await;
-    }
-
-    #[tokio::test]
     async fn join_all_can_be_called_multiple_times() {
         let test_data = OnOutputTestsData::new();
         drop(test_data.senders);
         test_data.events.join_all().await;
-        test_data.events.join_all().await;
-        test_data.events.join_all().await;
-    }
-
-    #[tokio::test]
-    async fn join_all_after_abort() {
-        let test_data = OnOutputTestsData::new();
-        test_data.events.abort();
-        test_data.events.join_all().await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            test_data.events.join_all(),
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -526,6 +443,7 @@ mod tests {
             panic!("poll_result is expected Ready");
         };
         assert_eq!(exit_status.into_raw(), exit_code);
+        events.join_all().await;
     }
 
     #[tokio::test]
@@ -550,5 +468,6 @@ mod tests {
             .await
             .expect("handle didn't complete")
             .unwrap();
+        events.join_all().await;
     }
 }

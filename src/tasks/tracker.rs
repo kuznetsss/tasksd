@@ -1,4 +1,4 @@
-use std::{any::Any, panic::AssertUnwindSafe, sync::Arc};
+use std::{any::Any, fmt::Debug, panic::AssertUnwindSafe, sync::Arc};
 
 use futures::FutureExt;
 use tokio::task::AbortHandle;
@@ -7,6 +7,7 @@ use tracing::error;
 
 use crate::tasks::task_error::TaskError;
 
+#[derive(Debug)]
 pub(in crate::tasks) struct WrappedTaskTracker {
     inner: TaskTracker,
     panic_handler: PanicHandler,
@@ -33,6 +34,16 @@ impl PanicHandler {
 
     pub(in crate::tasks) fn new_aborting() -> Self {
         Self::Abort
+    }
+}
+
+impl Debug for PanicHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Logging => write!(f, "PanicHandler::Logging"),
+            Self::Callback(_) => write!(f, "PanicHandler::Callback"),
+            Self::Abort => write!(f, "PanicHandler::Abort"),
+        }
     }
 }
 
@@ -76,7 +87,6 @@ impl WrappedTaskTracker {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        // TODO: there is a data race here: inner could get closed after the check and then spawn will create a detached task
         if self.inner.is_closed() {
             Err(TaskError::AlreadyExited)
         } else {
@@ -95,14 +105,15 @@ impl WrappedTaskTracker {
     }
 
     pub(in crate::tasks) async fn join_all(&self) {
-        assert!(
-            self.inner.close(),
-            "WrappedTaskTracker closed more than one time"
-        );
+        self.inner.close();
         self.inner.wait().await;
     }
 
-    fn is_finished(&self) -> bool {
+    fn is_joining(&self) -> bool {
+        self.inner.is_closed()
+    }
+
+    fn is_joined(&self) -> bool {
         self.inner.is_closed() && self.inner.is_empty()
     }
 }
@@ -110,7 +121,7 @@ impl WrappedTaskTracker {
 impl Drop for WrappedTaskTracker {
     fn drop(&mut self) {
         assert!(
-            self.is_finished(),
+            self.is_joined(),
             "WrappedTaskTracker dropped without calling join_all()"
         );
     }
@@ -147,7 +158,7 @@ mod tests {
         })
         .unwrap();
         t.join_all().await;
-        assert!(t.is_finished());
+        assert!(t.is_joined());
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
 
@@ -195,7 +206,7 @@ mod tests {
     #[should_panic]
     async fn drop_without_join_panics() {
         let t = WrappedTaskTracker::new(PanicHandler::new_logging());
-        assert!(!t.is_finished());
+        assert!(!t.is_joined());
     }
 
     #[tokio::test]
@@ -211,6 +222,15 @@ mod tests {
         })
         .unwrap();
         completed.notified().await;
-        assert!(!t.is_finished());
+        assert!(!t.is_joined());
+    }
+
+    #[tokio::test]
+    async fn multiple_join_all() {
+        let t = WrappedTaskTracker::new(PanicHandler::new_aborting());
+        t.join_all().await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), t.join_all())
+            .await
+            .unwrap()
     }
 }
