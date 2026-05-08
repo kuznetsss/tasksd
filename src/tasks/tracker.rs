@@ -101,11 +101,26 @@ impl WrappedTaskTracker {
         );
         self.inner.wait().await;
     }
+
+    fn is_finished(&self) -> bool {
+        self.inner.is_closed() && self.inner.is_empty()
+    }
+}
+
+impl Drop for WrappedTaskTracker {
+    fn drop(&mut self) {
+        assert!(
+            self.is_finished(),
+            "WrappedTaskTracker dropped without calling join_all()"
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, atomic::AtomicBool};
+    use std::sync::{atomic::AtomicI32, atomic::Ordering};
+
+    use tokio::sync::Notify;
 
     use super::*;
 
@@ -118,5 +133,84 @@ mod tests {
         let n = 123;
         let p = std::panic::catch_unwind(|| panic!("{n}")).unwrap_err();
         assert_eq!(panic_to_string(&p), format!("{n}"));
+    }
+
+    #[tokio::test]
+    async fn spawn_spawns_a_task() {
+        let t = WrappedTaskTracker::new(PanicHandler::new_aborting());
+        let call_count = Arc::new(AtomicI32::new(0));
+        t.spawn({
+            let call_count = call_count.clone();
+            async move {
+                call_count.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+        .unwrap();
+        t.join_all().await;
+        assert!(t.is_finished());
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn spawn_catches_panic() {
+        let call_count = Arc::new(AtomicI32::new(0));
+        let panic_msg = "some panic";
+        let t = WrappedTaskTracker::new(PanicHandler::new_with_callback({
+            let call_count = call_count.clone();
+            move |p| {
+                assert_eq!(panic_to_string(&p), panic_msg);
+                call_count.fetch_add(1, Ordering::Relaxed);
+            }
+        }));
+        t.spawn(async move { panic!("{panic_msg}") }).unwrap();
+        t.join_all().await;
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn spawn_abort() {
+        let t = WrappedTaskTracker::new(PanicHandler::new_aborting());
+        let call_count = Arc::new(AtomicI32::new(0));
+        t.spawn({
+            let call_count = call_count.clone();
+            async move {
+                call_count.fetch_add(1, Ordering::Relaxed);
+            }
+        })
+        .unwrap()
+        .abort();
+        t.join_all().await;
+        assert_eq!(call_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn spawn_after_join_returns_error() {
+        let t = WrappedTaskTracker::new(PanicHandler::new_aborting());
+        t.join_all().await;
+        let e = t.spawn(async {}).unwrap_err();
+        assert!(matches!(e, TaskError::AlreadyExited));
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn drop_without_join_panics() {
+        let t = WrappedTaskTracker::new(PanicHandler::new_logging());
+        assert!(!t.is_finished());
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn drop_after_task_complete_without_join_panics() {
+        let t = WrappedTaskTracker::new(PanicHandler::new_logging());
+        let completed = Arc::new(Notify::new());
+        t.spawn({
+            let completed = completed.clone();
+            async move {
+                completed.notify_one();
+            }
+        })
+        .unwrap();
+        completed.notified().await;
+        assert!(!t.is_finished());
     }
 }
