@@ -35,8 +35,11 @@
         - [x] Switch TaskManager to it
         - [x] Switch TaskEvents to it
         - [ ] Switch Task to it
+        - [ ] fix or re-acknowledge the TOCTOU race between is_closed() and inner.spawn() in WrappedTaskTracker::spawn (TODO comment was removed but race still exists)
+        - [ ] restore or properly delete `panic_if_dropped_without_finish` test in task.rs (currently commented out; double-panics on drop after Task switches to WrappedTaskTracker)
+        - [ ] remove dead code: `is_joining` in tracker.rs, unused `JoinSet` import in events.rs, unused `Mutex`/`JoinSet` imports in task_manager.rs
     - [ ] implement TaskManager
-    - [ ] add finish() to TaskManager
+    - [ ] add finish() to TaskManager (also needed so TaskManager's WrappedTaskTracker doesn't panic on drop)
     - [ ] collect completed completion_coroutines in TaskManager
     - [ ] LRU cache for finished_task to limit it's memory
 - [ ] Task output buffer

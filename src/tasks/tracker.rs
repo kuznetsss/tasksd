@@ -96,7 +96,7 @@ impl WrappedTaskTracker {
                 .inner
                 .spawn({
                     let panic_handler = self.panic_handler.clone();
-                    let cancellation_token = self.cancellation_token.child_token();
+                    let cancellation_token = self.cancellation_token.clone();
                     async move {
                         let panic_catch_future = AssertUnwindSafe(f).catch_unwind();
                         if let Some(Err(panic)) = cancellation_token

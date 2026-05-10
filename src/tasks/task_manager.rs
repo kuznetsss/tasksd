@@ -93,7 +93,7 @@ impl TaskManager {
                 let task = task.clone();
                 let this = self.clone();
                 async move {
-                    let finished_task = task.finish().await;
+                    let finished_task = task.join().await;
                     this.finished_tasks
                         .write()
                         .unwrap()

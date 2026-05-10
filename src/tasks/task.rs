@@ -19,6 +19,7 @@ use crate::tasks::{
     pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair},
     senders::TaskSenders,
     task_error::TaskError,
+    tracker::{PanicHandler, WrappedTaskTracker},
 };
 
 #[derive(Debug)]
@@ -27,7 +28,7 @@ pub struct Task {
     stdin: tokio::sync::Mutex<PtyWritePart>,
     pid: u32,
     events: TaskEvents,
-    internal_tasks: Mutex<Option<JoinSet<()>>>,
+    internal_tasks: WrappedTaskTracker,
 }
 
 impl Task {
@@ -40,8 +41,8 @@ impl Task {
         let (stdout, stdin) = pty.into_split().map_err(TaskError::pty_creation_error)?;
 
         let info = Arc::new(info);
-        let mut internal_tasks = JoinSet::new();
-        Self::spawn_stdout_reading(&mut internal_tasks, info.clone(), stdout, senders.stdout_tx);
+        let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
+        Self::spawn_stdout_reading(&internal_tasks, info.clone(), stdout, senders.stdout_tx);
 
         // Spawning a task to throw away stdput
         // to not block the process while there is no output subscribers.
@@ -50,14 +51,14 @@ impl Task {
 
         let child = Self::spawn_child_process(&info, child_pty)?;
         let pid = child.id().expect("pid");
-        Self::spawn_waiting_for_exit(&mut internal_tasks, senders.on_exit_tx, child);
+        Self::spawn_waiting_for_exit(&internal_tasks, senders.on_exit_tx, child);
 
         let task = Self {
             info,
             stdin: tokio::sync::Mutex::new(stdin),
             pid,
             events,
-            internal_tasks: Mutex::new(Some(internal_tasks)),
+            internal_tasks,
         };
 
         Ok(task)
@@ -107,15 +108,8 @@ impl Task {
         self.events.exit_status().await;
     }
 
-    pub async fn finish(&self) -> FinishedTask {
-        let internal_tasks = {
-            let mut internal_tasks = self.internal_tasks.lock().unwrap();
-            internal_tasks.take()
-        };
-        internal_tasks
-            .expect("Task::finish() called more than one time")
-            .join_all()
-            .await;
+    pub async fn join(&self) -> FinishedTask {
+        self.internal_tasks.join_all().await;
         self.events.join_all().await;
         FinishedTask {
             info: self.info.clone(),
@@ -156,61 +150,65 @@ impl Task {
     }
 
     fn spawn_stdout_reading(
-        internal_tasks: &mut JoinSet<()>,
+        internal_tasks: &WrappedTaskTracker,
         task_info: Arc<TaskInfo>,
         stdout: PtyReadPart,
         stdout_tx: broadcast::Sender<Arc<String>>,
     ) {
-        internal_tasks.spawn({
-            async move {
-                let mut stdout = BufReader::new(stdout);
-                loop {
-                    let mut buf = String::new();
-                    let read_bytes = stdout.read_line(&mut buf).await;
-                    match read_bytes {
-                        Ok(r) if r == 0 => {
-                            // EOF
+        internal_tasks
+            .spawn({
+                async move {
+                    let mut stdout = BufReader::new(stdout);
+                    loop {
+                        let mut buf = String::new();
+                        let read_bytes = stdout.read_line(&mut buf).await;
+                        match read_bytes {
+                            Ok(r) if r == 0 => {
+                                // EOF
+                                return;
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!(
+                                    "Error reading from stdout for the task {:?}: {e}",
+                                    task_info
+                                );
+                                return;
+                            }
+                        };
+                        let line = Arc::new(buf);
+                        if stdout_tx.send(line).is_err() {
                             return;
                         }
-                        Ok(_) => {}
-                        Err(e) => {
-                            warn!(
-                                "Error reading from stdout for the task {:?}: {e}",
-                                task_info
-                            );
-                            return;
-                        }
-                    };
-                    let line = Arc::new(buf);
-                    if stdout_tx.send(line).is_err() {
-                        return;
                     }
                 }
-            }
-        });
+            })
+            .expect("Internal tasks should not be joined yet");
     }
 
     fn spawn_waiting_for_exit(
-        internal_tasks: &mut JoinSet<()>,
+        internal_tasks: &WrappedTaskTracker,
         tx: watch::Sender<Option<ExitStatus>>,
         mut child: Child,
     ) {
-        internal_tasks.spawn(async move {
-            let exit_status = child
-                .wait()
-                .await
-                .expect("Child process should finish normally");
-            tx.send(Some(exit_status))
-                .expect("At least one receiver should be alive");
-        });
+        internal_tasks
+            .spawn(async move {
+                let exit_status = child
+                    .wait()
+                    .await
+                    .expect("Child process should finish normally");
+                tx.send(Some(exit_status))
+                    .expect("At least one receiver should be alive");
+            })
+            .expect("Internal tasks should not be joined yet");
     }
 }
 
 impl Drop for Task {
     fn drop(&mut self) {
         assert!(
-            self.internal_tasks.lock().unwrap().is_none(),
-            "Task is dropped without calling finish()"
+            self.internal_tasks.is_joined(),
+            "Task is dropped without calling join()"
         );
     }
 }
@@ -278,7 +276,7 @@ mod tests {
         };
         let msg = "test";
         let task = make_task("echo", &[msg], &current_dir().unwrap(), on_output).unwrap();
-        task.finish().await;
+        task.join().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 1);
         assert_eq!(*captured_output[0], format!("{msg}\r\n"));
@@ -294,7 +292,7 @@ mod tests {
         assert_eq!(&info.executable, executable);
         assert_eq!(info.args, args);
         assert_eq!(info.working_dir, directory);
-        task.finish().await;
+        task.join().await;
     }
 
     #[tokio::test]
@@ -311,7 +309,7 @@ mod tests {
             task.write_to_stdin(m.as_bytes()).await.unwrap();
         }
         task.write_to_stdin(b"\x04\x04").await.unwrap(); // flush "three" then EOF
-        task.finish().await;
+        task.join().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 2);
         assert_eq!(*captured_output[0], "onetwo\r\n");
@@ -327,7 +325,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, TaskError::WriteError(_)));
-        task.finish().await;
+        task.join().await;
     }
 
     #[tokio::test]
@@ -336,7 +334,7 @@ mod tests {
         task.wait().await;
         let err = task.on_output(|_| {}).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
-        task.finish().await;
+        task.join().await;
     }
 
     #[tokio::test]
@@ -344,7 +342,7 @@ mod tests {
         let task = make_task("cat", &[], &current_dir().unwrap(), |_| {}).unwrap();
         tokio::task::yield_now().await;
         task.send_signal(rustix::process::Signal::TERM).unwrap();
-        let finished_task = task.finish().await;
+        let finished_task = task.join().await;
         assert_eq!(
             finished_task.exit_status.signal().unwrap(),
             rustix::process::Signal::TERM.as_raw()
@@ -357,34 +355,33 @@ mod tests {
         task.wait().await;
         let err = task.send_signal(rustix::process::Signal::TERM).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
-        task.finish().await;
+        task.join().await;
     }
 
     #[tokio::test]
-    async fn finish_result() {
+    async fn join_result() {
         let executable = "ls";
         let args = ["-la"];
         let dir = current_dir().unwrap().join("../");
         let task = make_task(executable, &args, &dir, |_| {}).unwrap();
-        let finished_task = task.finish().await;
+        let finished_task = task.join().await;
         assert_eq!(finished_task.info.executable, executable);
         assert_eq!(finished_task.info.args, &args);
         assert_eq!(finished_task.info.working_dir, dir);
         assert_eq!(finished_task.exit_status.code().unwrap(), 0);
     }
 
-    // #[tokio::test]
-    // #[should_panic]
-    // async fn panic_if_dropped_without_finish() {
-    //     let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
-    //     task.wait().await;
-    // }
-    //
     #[tokio::test]
     #[should_panic]
-    async fn calling_finish_twice_panics() {
+    async fn panic_if_dropped_without_join() {
         let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
-        task.finish().await;
-        task.finish().await;
+        task.wait().await;
+    }
+
+    #[tokio::test]
+    async fn calling_join_twice() {
+        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        task.join().await;
+        task.join().await;
     }
 }
