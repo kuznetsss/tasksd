@@ -109,7 +109,7 @@ impl Task {
     }
 
     pub async fn join(&self) -> FinishedTask {
-        self.internal_tasks.join_all().await;
+        self.internal_tasks.join().await;
         self.events.join_all().await;
         FinishedTask {
             info: self.info.clone(),

@@ -111,7 +111,7 @@ impl WrappedTaskTracker {
         }
     }
 
-    pub(in crate::tasks) async fn join_all(&self) {
+    pub(in crate::tasks) async fn join(&self) {
         self.inner.close();
         self.inner.wait().await;
     }
@@ -157,7 +157,7 @@ mod tests {
             }
         })
         .unwrap();
-        t.join_all().await;
+        t.join().await;
         assert!(t.is_joined());
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
@@ -174,7 +174,7 @@ mod tests {
             }
         }));
         t.spawn(async move { panic!("{panic_msg}") }).unwrap();
-        t.join_all().await;
+        t.join().await;
         assert_eq!(call_count.load(Ordering::Relaxed), 1);
     }
 
@@ -190,14 +190,14 @@ mod tests {
         })
         .unwrap()
         .abort();
-        t.join_all().await;
+        t.join().await;
         assert_eq!(call_count.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
     async fn spawn_after_join_returns_error() {
         let t = WrappedTaskTracker::new(PanicHandler::new_aborting());
-        t.join_all().await;
+        t.join().await;
         let e = t.spawn(async {}).unwrap_err();
         assert!(matches!(e, TaskError::AlreadyExited));
     }
@@ -223,10 +223,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multiple_join_all() {
+    async fn multiple_join() {
         let t = WrappedTaskTracker::new(PanicHandler::new_aborting());
-        t.join_all().await;
-        tokio::time::timeout(std::time::Duration::from_secs(1), t.join_all())
+        t.join().await;
+        tokio::time::timeout(std::time::Duration::from_secs(1), t.join())
             .await
             .unwrap()
     }

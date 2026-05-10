@@ -86,7 +86,7 @@ impl TaskEvents {
     }
 
     pub(in crate::tasks) async fn join_all(&self) {
-        self.related_tasks.join_all().await;
+        self.related_tasks.join().await;
     }
 }
 
