@@ -89,6 +89,8 @@ impl WrappedTaskTracker {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        // NOTE: There is data race between is_closed() and spawn() here.
+        // Worst case a task will be spawned but never joined
         if self.inner.is_closed() {
             Err(TaskError::AlreadyExited)
         } else {

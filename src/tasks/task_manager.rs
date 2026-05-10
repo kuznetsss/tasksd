@@ -5,7 +5,6 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex, RwLock, atomic::AtomicUsize},
 };
-use tokio::task::JoinSet;
 
 use crate::tasks::{
     events::{TaskExitCallback, TaskOutputCallback},
@@ -17,7 +16,6 @@ use crate::tasks::{
 
 use super::task::Task;
 
-// TODO: this should probably become uuid
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct TaskId(usize);
 
@@ -25,7 +23,7 @@ pub struct TaskManager {
     tasks: RwLock<HashMap<TaskId, Arc<Task>>>,
     next_id: AtomicUsize,
     finished_tasks: RwLock<HashMap<TaskId, Arc<FinishedTask>>>,
-    completion_coroutines: WrappedTaskTracker,
+    completion_coroutines: Mutex<Option<WrappedTaskTracker>>,
 }
 
 impl TaskManager {
@@ -34,7 +32,9 @@ impl TaskManager {
             tasks: Default::default(),
             next_id: AtomicUsize::new(0),
             finished_tasks: Default::default(),
-            completion_coroutines: WrappedTaskTracker::new(PanicHandler::new_aborting()),
+            completion_coroutines: Mutex::new(Some(WrappedTaskTracker::new(
+                PanicHandler::new_aborting(),
+            ))),
         })
     }
 
@@ -46,6 +46,9 @@ impl TaskManager {
         on_output: Option<impl TaskOutputCallback>,
         on_exit: Option<impl TaskExitCallback>,
     ) -> Result<TaskId, TaskError> {
+        let lock = self.completion_coroutines.lock().unwrap();
+        let completion_coroutines = lock.as_ref().ok_or(TaskError::AlreadyExited)?;
+
         let mut task_builder = TaskBuilder::new(executable);
         task_builder.args(args).working_dir(
             working_dir
@@ -63,7 +66,7 @@ impl TaskManager {
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let task_id = TaskId(task_id);
-        self.spawn_task_completion(task.clone(), task_id);
+        self.spawn_task_completion(completion_coroutines, task.clone(), task_id);
         self.tasks
             .write()
             .expect("RwLock is poisoned")
@@ -87,8 +90,21 @@ impl TaskManager {
             .map(|f| f.clone())
     }
 
-    fn spawn_task_completion(self: &Arc<Self>, task: Arc<Task>, task_id: TaskId) {
-        self.completion_coroutines
+    pub async fn join(&self) {
+        let completion_coroutines = match self.completion_coroutines.lock().unwrap().take() {
+            Some(c) => c,
+            None => return, // Already joined
+        };
+        completion_coroutines.join().await;
+    }
+
+    fn spawn_task_completion(
+        self: &Arc<Self>,
+        completion_coroutines: &WrappedTaskTracker,
+        task: Arc<Task>,
+        task_id: TaskId,
+    ) {
+        completion_coroutines
             .spawn({
                 let task = task.clone();
                 let this = self.clone();
@@ -105,6 +121,15 @@ impl TaskManager {
                         .expect("Task should still be in the hmap");
                 }
             })
-            .expect("spawn_task_completion() called after join()");
+            .expect("Should never happen because of mutex");
+    }
+}
+
+impl Drop for TaskManager {
+    fn drop(&mut self) {
+        assert!(
+            self.completion_coroutines.get_mut().unwrap().is_none(),
+            "TaskManager is dropped without calling join()"
+        );
     }
 }
