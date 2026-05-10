@@ -2,16 +2,10 @@ use std::{any::Any, fmt::Debug, panic::AssertUnwindSafe, sync::Arc};
 
 use futures::FutureExt;
 use tokio::task::AbortHandle;
-use tokio_util::task::TaskTracker;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::error;
 
 use crate::tasks::task_error::TaskError;
-
-#[derive(Debug)]
-pub(in crate::tasks) struct WrappedTaskTracker {
-    inner: TaskTracker,
-    panic_handler: PanicHandler,
-}
 
 #[derive(Clone)]
 pub(in crate::tasks) enum PanicHandler {
@@ -75,11 +69,19 @@ impl PanicHandler {
     }
 }
 
+#[derive(Debug)]
+pub(in crate::tasks) struct WrappedTaskTracker {
+    inner: TaskTracker,
+    panic_handler: PanicHandler,
+    cancellation_token: CancellationToken,
+}
+
 impl WrappedTaskTracker {
     pub(in crate::tasks) fn new(panic_handler: PanicHandler) -> Self {
         Self {
             inner: TaskTracker::new(),
             panic_handler,
+            cancellation_token: CancellationToken::new(),
         }
     }
 
@@ -94,8 +96,13 @@ impl WrappedTaskTracker {
                 .inner
                 .spawn({
                     let panic_handler = self.panic_handler.clone();
+                    let cancellation_token = self.cancellation_token.child_token();
                     async move {
-                        if let Err(panic) = AssertUnwindSafe(f).catch_unwind().await {
+                        let panic_catch_future = AssertUnwindSafe(f).catch_unwind();
+                        if let Some(Err(panic)) = cancellation_token
+                            .run_until_cancelled(panic_catch_future)
+                            .await
+                        {
                             panic_handler.handle(panic);
                         }
                     }
@@ -109,27 +116,20 @@ impl WrappedTaskTracker {
         self.inner.wait().await;
     }
 
-    fn is_joining(&self) -> bool {
-        self.inner.is_closed()
-    }
-
-    fn is_joined(&self) -> bool {
+    pub(in crate::tasks) fn is_joined(&self) -> bool {
         self.inner.is_closed() && self.inner.is_empty()
     }
 }
 
 impl Drop for WrappedTaskTracker {
     fn drop(&mut self) {
-        assert!(
-            self.is_joined(),
-            "WrappedTaskTracker dropped without calling join_all()"
-        );
+        self.cancellation_token.cancel();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{atomic::AtomicI32, atomic::Ordering};
+    use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
     use tokio::sync::Notify;
 
@@ -203,26 +203,23 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic]
-    async fn drop_without_join_panics() {
+    async fn drop_without_join_cancels_the_task() {
         let t = WrappedTaskTracker::new(PanicHandler::new_logging());
-        assert!(!t.is_joined());
-    }
-
-    #[tokio::test]
-    #[should_panic]
-    async fn drop_after_task_complete_without_join_panics() {
-        let t = WrappedTaskTracker::new(PanicHandler::new_logging());
-        let completed = Arc::new(Notify::new());
+        let started = Arc::new(Notify::new());
+        let call_count = Arc::new(AtomicUsize::new(0));
         t.spawn({
-            let completed = completed.clone();
+            let started = started.clone();
+            let call_count = call_count.clone();
             async move {
-                completed.notify_one();
+                started.notify_one();
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                call_count.fetch_add(1, Ordering::Relaxed);
             }
         })
         .unwrap();
-        completed.notified().await;
-        assert!(!t.is_joined());
+        started.notified().await;
+        drop(t);
+        assert_eq!(call_count.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
