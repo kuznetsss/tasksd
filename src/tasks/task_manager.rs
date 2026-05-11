@@ -26,6 +26,38 @@ pub struct TaskManager {
     completion_coroutines: Mutex<Option<WrappedTaskTracker>>,
 }
 
+#[must_use = "TaskCreationHandle must be submitted with .submit() to register the task"]
+pub struct TaskCreationHandle<'a> {
+    manager: &'a Arc<TaskManager>,
+    builder: TaskBuilder,
+}
+
+impl<'a> TaskCreationHandle<'a> {
+    pub fn args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.builder.args(args);
+        self
+    }
+
+    pub fn working_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.builder.working_dir(dir);
+        self
+    }
+
+    pub fn on_output(mut self, cb: impl TaskOutputCallback) -> Self {
+        self.builder.on_output(cb);
+        self
+    }
+
+    pub fn on_exit(mut self, cb: impl TaskExitCallback) -> Self {
+        self.builder.on_exit(cb);
+        self
+    }
+
+    pub fn submit(self) -> Result<TaskId, TaskError> {
+        self.manager.submit(self.builder)
+    }
+}
+
 impl TaskManager {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -38,29 +70,18 @@ impl TaskManager {
         })
     }
 
-    pub fn create_task(
-        self: &Arc<Self>,
-        executable: String,
-        args: Vec<String>,
-        working_dir: Option<PathBuf>,
-        on_output: Option<impl TaskOutputCallback>,
-        on_exit: Option<impl TaskExitCallback>,
-    ) -> Result<TaskId, TaskError> {
+    pub fn create_task(self: &Arc<Self>, executable: impl Into<String>) -> TaskCreationHandle<'_> {
+        TaskCreationHandle {
+            manager: self,
+            builder: TaskBuilder::new(executable.into()),
+        }
+    }
+
+    fn submit(self: &Arc<Self>, builder: TaskBuilder) -> Result<TaskId, TaskError> {
         let lock = self.completion_coroutines.lock().unwrap();
         let completion_coroutines = lock.as_ref().ok_or(TaskError::AlreadyExited)?;
 
-        let mut task_builder = TaskBuilder::new(executable);
-        task_builder.args(args).working_dir(
-            working_dir
-                .unwrap_or_else(|| current_dir().expect("Unable to get the current directory")),
-        );
-        if let Some(o) = on_output {
-            task_builder.on_output(o);
-        }
-        if let Some(e) = on_exit {
-            task_builder.on_exit(e);
-        }
-        let task = task_builder.start_task()?;
+        let task = builder.start_task()?;
         let task = Arc::new(task);
         let task_id = self
             .next_id
@@ -131,5 +152,58 @@ impl Drop for TaskManager {
             self.completion_coroutines.get_mut().unwrap().is_none(),
             "TaskManager is dropped without calling join()"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn create_task_fails_if_task_couldnt_be_started() {
+        let tm = TaskManager::new();
+        let err = tm.create_task("non_existing").submit().unwrap_err();
+        assert!(matches!(err, TaskError::StartingChildProcessError(_)));
+        tm.join().await;
+    }
+
+    #[tokio::test]
+    async fn create_task_output_callback_catches_output() {
+        let tm = TaskManager::new();
+        let captured_output = Arc::new(Mutex::new(Vec::new()));
+        let _ = tm
+            .create_task("echo")
+            .args(["-n", "hello\nworld"])
+            .on_output({
+                let captured_output = captured_output.clone();
+                move |o| {
+                    captured_output.lock().unwrap().push(o);
+                }
+            })
+            .submit();
+        tm.join().await;
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), 2);
+        assert_eq!(*captured_output[0], "hello\r\n");
+        assert_eq!(*captured_output[1], "world");
+    }
+
+    #[tokio::test]
+    async fn create_task_exit_callback_catches_exit_code() {
+        let tm = TaskManager::new();
+        let captured_output = Arc::new(Mutex::new(None));
+        tm.create_task("sh")
+            .args(["-c", "exit 123"])
+            .on_exit({
+                let captured_output = captured_output.clone();
+                move |e| {
+                    *captured_output.lock().unwrap() = Some(e);
+                }
+            })
+            .submit()
+            .unwrap();
+        tm.join().await;
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.unwrap().code().unwrap(), 123);
     }
 }
