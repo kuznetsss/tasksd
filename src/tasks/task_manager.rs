@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     env::current_dir,
     path::PathBuf,
     sync::{Arc, Mutex, RwLock, atomic::AtomicUsize},
@@ -22,8 +22,46 @@ pub struct TaskId(usize);
 pub struct TaskManager {
     tasks: RwLock<HashMap<TaskId, Arc<Task>>>,
     next_id: AtomicUsize,
-    finished_tasks: RwLock<HashMap<TaskId, Arc<FinishedTask>>>,
+    finished_tasks: RwLock<LruFinishedTasks>,
     completion_coroutines: Mutex<Option<WrappedTaskTracker>>,
+}
+
+struct LruFinishedTasks {
+    id_to_task: HashMap<TaskId, Arc<FinishedTask>>,
+    recent_tasks: VecDeque<TaskId>,
+    capacity: usize,
+}
+
+impl LruFinishedTasks {
+    fn new(capacity: usize) -> Self {
+        let recent_tasks = VecDeque::with_capacity(capacity);
+        Self {
+            id_to_task: HashMap::new(),
+            recent_tasks,
+            capacity,
+        }
+    }
+
+    fn insert(&mut self, id: TaskId, task: Arc<FinishedTask>) {
+        assert!(
+            self.id_to_task.insert(id, task).is_none(),
+            "Same task with id {id:?} inserted twice"
+        );
+        self.recent_tasks.push_back(id);
+        if self.recent_tasks.len() == self.capacity {
+            let id = self
+                .recent_tasks
+                .pop_front()
+                .expect("recent_tasks couldn't be empty");
+            self.id_to_task
+                .remove(&id)
+                .expect("Task should be in id_to_task");
+        }
+    }
+
+    fn get(&self, id: TaskId) -> Option<Arc<FinishedTask>> {
+        self.id_to_task.get(&id).map(Arc::clone)
+    }
 }
 
 #[must_use = "TaskCreationHandle must be submitted with .submit() to register the task"]
@@ -63,7 +101,7 @@ impl TaskManager {
         Arc::new(Self {
             tasks: Default::default(),
             next_id: AtomicUsize::new(0),
-            finished_tasks: Default::default(),
+            finished_tasks: RwLock::new(LruFinishedTasks::new(100)),
             completion_coroutines: Mutex::new(Some(WrappedTaskTracker::new(
                 PanicHandler::new_aborting(),
             ))),
@@ -107,7 +145,7 @@ impl TaskManager {
         self.finished_tasks
             .read()
             .unwrap()
-            .get(&id)
+            .get(id)
             .map(|f| f.clone())
     }
 
