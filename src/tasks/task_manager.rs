@@ -157,6 +157,14 @@ impl Drop for TaskManager {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        collections::HashSet, os::unix::process::ExitStatusExt, pin::pin, task::Poll,
+        time::Duration,
+    };
+
+    use futures::task::noop_waker;
+    use rustix::process::Signal;
+
     use super::*;
 
     #[tokio::test]
@@ -180,7 +188,8 @@ mod tests {
                     captured_output.lock().unwrap().push(o);
                 }
             })
-            .submit();
+            .submit()
+            .unwrap();
         tm.join().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 2);
@@ -205,5 +214,76 @@ mod tests {
         tm.join().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.unwrap().code().unwrap(), 123);
+    }
+
+    #[tokio::test]
+    async fn create_task_after_join_returns_error() {
+        let tm = TaskManager::new();
+        tm.join().await;
+        let err = tm.create_task("ls").submit().unwrap_err();
+        assert!(matches!(err, TaskError::AlreadyExited));
+    }
+
+    #[tokio::test]
+    async fn create_multiple_tasks() {
+        let tm = TaskManager::new();
+        let mut task_ids = HashSet::new();
+        for _ in 0..3 {
+            let id = tm.create_task("ls").submit().unwrap();
+            assert!(task_ids.insert(id));
+        }
+        tokio::time::timeout(Duration::from_secs(1), tm.join())
+            .await
+            .unwrap();
+        for id in &task_ids {
+            assert!(tm.get_finished_task(*id).is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn get_methods_return_task() {
+        let tm = TaskManager::new();
+        let executable = "cat";
+        let task_id = tm.create_task(executable).submit().unwrap();
+
+        let task = tm.get_task(task_id).unwrap();
+        assert!(tm.get_finished_task(task_id).is_none());
+
+        let non_existing_id = TaskId(task_id.0 + 123);
+        assert!(tm.get_task(non_existing_id).is_none());
+        assert!(tm.get_finished_task(non_existing_id).is_none());
+
+        let signal = Signal::TERM;
+        task.send_signal(signal).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), tm.join())
+            .await
+            .unwrap();
+
+        assert!(tm.get_task(task_id).is_none());
+        let finished_task = tm.get_finished_task(task_id).unwrap();
+        assert_eq!(&finished_task.info.executable, executable);
+        assert_eq!(&finished_task.info.working_dir, &current_dir().unwrap());
+        assert_eq!(finished_task.exit_status.signal().unwrap(), signal.as_raw());
+
+        assert!(tm.get_task(non_existing_id).is_none());
+        assert!(tm.get_finished_task(non_existing_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn join_called_multiple_times_is_ok() {
+        let tm = TaskManager::new();
+        tm.create_task("ls").submit().unwrap();
+        tm.join().await;
+
+        let waker = noop_waker();
+        let mut ctx = std::task::Context::from_waker(&waker);
+        let future = pin!(tm.join());
+        assert!(matches!(future.poll(&mut ctx), Poll::Ready(())));
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "without calling join")]
+    async fn panics_if_join_was_not_called() {
+        let _tm = TaskManager::new();
     }
 }
