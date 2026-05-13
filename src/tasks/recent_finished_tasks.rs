@@ -23,14 +23,15 @@ impl RecentFinishedTasks {
     }
 
     pub(in crate::tasks) fn insert(&mut self, id: TaskId, task: Arc<FinishedTask>) {
+        if self.recent_tasks.len() == self.capacity {
+            self.remove_last();
+        }
+        let inserted = self.id_to_task.insert(id, task).is_none();
         assert!(
-            self.id_to_task.insert(id, task).is_none(),
+            inserted,
             "Task with id {id:?} is already in LruFinishedTasks"
         );
         self.recent_tasks.push_back(id);
-        if self.recent_tasks.len() > self.capacity {
-            self.remove_last();
-        }
     }
 
     pub(in crate::tasks) fn get(&self, id: TaskId) -> Option<Arc<FinishedTask>> {

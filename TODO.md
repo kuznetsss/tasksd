@@ -38,18 +38,6 @@
     - [x] Tests for Task manager
     - [x] LRU cache for finished_task to limit it's memory
 - [ ] Task output buffer
-- [ ] API and RPC handlers
-
-    - active tasks are stored in HashMap<TaskId, Arc<Task>>
-    - on task creation, manager spawns a coroutine that:
-        1. holds Arc<Task> + clone of TaskManager
-        2. calls task.wait().await to await process exit
-        3. takes the task out from active hashmap
-        4. problem: finish() requires exclusive ownership
-        5. calls finish() to join related tasks
-        6. moves FinishedTask into an archive
-
-----
 
 ## Api and handlers
 
