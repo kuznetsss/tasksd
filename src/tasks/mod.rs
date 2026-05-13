@@ -8,4 +8,4 @@ pub mod task_builder;
 pub mod task_error;
 pub mod task_manager;
 mod tracker;
-mod lru_finished_tasks;
+mod recent_finished_tasks;

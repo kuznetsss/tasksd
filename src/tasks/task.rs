@@ -1,14 +1,11 @@
-use std::{
-    process::ExitStatus,
-    sync::{Arc, Mutex},
-};
+use std::{process::ExitStatus, sync::Arc};
 
 use anyhow::Result;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
     sync::{broadcast, watch},
-    task::{AbortHandle, JoinSet},
+    task::AbortHandle,
 };
 use tracing::warn;
 

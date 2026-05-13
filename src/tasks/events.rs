@@ -1,11 +1,8 @@
-use std::{
-    process::ExitStatus,
-    sync::{Arc, Mutex},
-};
+use std::{process::ExitStatus, sync::Arc};
 
 use tokio::{
     sync::{broadcast, watch},
-    task::{AbortHandle, JoinSet},
+    task::AbortHandle,
 };
 use tracing::warn;
 
@@ -95,6 +92,7 @@ mod tests {
     use std::{
         os::unix::process::ExitStatusExt,
         pin::pin,
+        sync::Mutex,
         task::{Context, Poll, Waker},
         time::Duration,
     };

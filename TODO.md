@@ -36,7 +36,7 @@
     - [x] add join() to TaskManager (also needed so TaskManager's WrappedTaskTracker doesn't panic on drop)
     - [x] collect completed completion_coroutines in TaskManager
     - [x] Tests for Task manager
-    - [ ] LRU cache for finished_task to limit it's memory
+    - [x] LRU cache for finished_task to limit it's memory
 - [ ] Task output buffer
 - [ ] API and RPC handlers
 

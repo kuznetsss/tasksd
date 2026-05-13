@@ -8,7 +8,7 @@ use std::{
 use crate::tasks::{
     events::{TaskExitCallback, TaskOutputCallback},
     finished_task::FinishedTask,
-    lru_finished_tasks::RecentFinishedTasks,
+    recent_finished_tasks::RecentFinishedTasks,
     task_builder::TaskBuilder,
     task_error::TaskError,
     tracker::{PanicHandler, WrappedTaskTracker},
