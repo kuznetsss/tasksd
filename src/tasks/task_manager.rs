@@ -20,6 +20,7 @@ use super::task::Task;
 pub struct TaskId(pub usize);
 
 pub struct TaskManager {
+    task_output_buffer_capacity: usize,
     tasks: RwLock<HashMap<TaskId, Arc<Task>>>,
     next_id: AtomicUsize,
     finished_tasks: RwLock<RecentFinishedTasks>,
@@ -59,8 +60,9 @@ impl<'a> TaskCreationHandle<'a> {
 }
 
 impl TaskManager {
-    pub fn new() -> Arc<Self> {
+    pub fn new(task_output_buffer_capacity: usize) -> Arc<Self> {
         Arc::new(Self {
+            task_output_buffer_capacity,
             tasks: Default::default(),
             next_id: AtomicUsize::new(0),
             finished_tasks: RwLock::new(RecentFinishedTasks::new(100)),
@@ -73,7 +75,7 @@ impl TaskManager {
     pub fn create_task(self: &Arc<Self>, executable: impl Into<String>) -> TaskCreationHandle<'_> {
         TaskCreationHandle {
             manager: self,
-            builder: TaskBuilder::new(executable.into()),
+            builder: TaskBuilder::new(executable.into(), self.task_output_buffer_capacity),
         }
     }
 
@@ -167,9 +169,11 @@ mod tests {
 
     use super::*;
 
+    const TASK_OUTPUT_BUFFER_CAPACITY: usize = 10;
+
     #[tokio::test]
     async fn create_task_fails_if_task_couldnt_be_started() {
-        let tm = TaskManager::new();
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let err = tm.create_task("non_existing").submit().unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
         tm.join().await;
@@ -177,7 +181,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_task_output_callback_catches_output() {
-        let tm = TaskManager::new();
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let captured_output = Arc::new(Mutex::new(Vec::new()));
         let _ = tm
             .create_task("echo")
@@ -199,7 +203,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_task_exit_callback_catches_exit_code() {
-        let tm = TaskManager::new();
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let captured_output = Arc::new(Mutex::new(None));
         tm.create_task("sh")
             .args(["-c", "exit 123"])
@@ -218,7 +222,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_task_after_join_returns_error() {
-        let tm = TaskManager::new();
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         tm.join().await;
         let err = tm.create_task("ls").submit().unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
@@ -226,7 +230,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_multiple_tasks() {
-        let tm = TaskManager::new();
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let mut task_ids = HashSet::new();
         for _ in 0..3 {
             let id = tm.create_task("ls").submit().unwrap();
@@ -242,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_methods_return_task() {
-        let tm = TaskManager::new();
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let executable = "cat";
         let task_id = tm.create_task(executable).submit().unwrap();
 
@@ -271,7 +275,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_called_multiple_times_is_ok() {
-        let tm = TaskManager::new();
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         tm.create_task("ls").submit().unwrap();
         tm.join().await;
 
@@ -284,6 +288,16 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "without calling join")]
     async fn panics_if_join_was_not_called() {
-        let _tm = TaskManager::new();
+        let _tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
+    }
+
+    #[tokio::test]
+    async fn output_buffer_capacity_passed_to_task() {
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
+        let task_id = tm.create_task("cat").submit().unwrap();
+        let task = tm.get_task(task_id).unwrap();
+        assert_eq!(task.output_buffer().capacity(), TASK_OUTPUT_BUFFER_CAPACITY);
+        task.send_signal(Signal::TERM).unwrap();
+        tm.join().await;
     }
 }

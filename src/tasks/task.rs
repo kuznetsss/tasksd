@@ -13,6 +13,7 @@ use crate::tasks::{
     events::{TaskEvents, TaskExitCallback, TaskOutputCallback},
     finished_task::FinishedTask,
     info::TaskInfo,
+    output_buffer::OutputBuffer,
     pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair},
     senders::TaskSenders,
     task_error::TaskError,
@@ -26,6 +27,7 @@ pub struct Task {
     pid: u32,
     events: TaskEvents,
     internal_tasks: WrappedTaskTracker,
+    output_buffer: Arc<OutputBuffer>,
 }
 
 impl Task {
@@ -33,6 +35,7 @@ impl Task {
         info: TaskInfo,
         senders: TaskSenders,
         events: TaskEvents,
+        output_buffer_capacity: usize,
     ) -> Result<Self, TaskError> {
         let (pty, child_pty) = create_pty_pair().map_err(TaskError::pty_creation_error)?;
         let (stdout, stdin) = pty.into_split().map_err(TaskError::pty_creation_error)?;
@@ -41,10 +44,15 @@ impl Task {
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
         Self::spawn_stdout_reading(&internal_tasks, info.clone(), stdout, senders.stdout_tx);
 
-        // Spawning a task to throw away stdput
-        // to not block the process while there is no output subscribers.
-        // This should write to the output buffer after it is added.
-        events.on_output(|_| {}).expect("Task shouldn't exit yet");
+        let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
+        events
+            .on_output({
+                let output_buffer = output_buffer.clone();
+                move |line| {
+                    output_buffer.insert_line(line);
+                }
+            })
+            .expect("Task shouldn't exit yet");
 
         let child = Self::spawn_child_process(&info, child_pty)?;
         let pid = child.id().expect("pid");
@@ -56,6 +64,7 @@ impl Task {
             pid,
             events,
             internal_tasks,
+            output_buffer,
         };
 
         Ok(task)
@@ -99,6 +108,10 @@ impl Task {
                 TaskError::send_signal_error(e)
             }
         })
+    }
+
+    pub fn output_buffer(&self) -> &Arc<OutputBuffer> {
+        &self.output_buffer
     }
 
     pub async fn wait(&self) {
@@ -214,39 +227,38 @@ impl Drop for Task {
 mod tests {
     use super::*;
     use std::{
-        env::current_dir,
-        os::unix::process::ExitStatusExt,
-        path::{Path, PathBuf},
-        str::FromStr,
+        env::current_dir, os::unix::process::ExitStatusExt, path::PathBuf, str::FromStr,
         sync::Mutex,
     };
 
+    const OUTPUT_BUFFER_CAPACITY: usize = 10;
+
     fn make_task(
-        executable: &str,
+        executable: impl Into<String>,
         args: &[&str],
-        working_dir: &Path,
+        working_dir: impl Into<PathBuf>,
         on_output: impl TaskOutputCallback,
     ) -> Result<Task, TaskError> {
         let senders = TaskSenders::new();
         let events = TaskEvents::new(&senders);
         events.on_output(on_output).unwrap();
         let info = TaskInfo {
-            executable: executable.to_string(),
+            executable: executable.into(),
             args: args.iter().map(|&s| String::from(s)).collect(),
-            working_dir: working_dir.to_path_buf(),
+            working_dir: working_dir.into(),
         };
-        Task::new(info, senders, events)
+        Task::new(info, senders, events, OUTPUT_BUFFER_CAPACITY)
     }
 
     #[tokio::test]
     async fn new_non_existing_executable() {
-        let err = make_task("non_existing", &[], &current_dir().unwrap(), |_| {}).unwrap_err();
+        let err = make_task("non_existing", &[], current_dir().unwrap(), |_| {}).unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
     #[tokio::test]
     async fn new_bad_args() {
-        let err = make_task("ls", &["\0"], &current_dir().unwrap(), |_| {}).unwrap_err();
+        let err = make_task("ls", &["\0"], current_dir().unwrap(), |_| {}).unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
@@ -255,7 +267,7 @@ mod tests {
         let err = make_task(
             "ls",
             &["\0"],
-            &current_dir().unwrap().join("non_existing_123"),
+            current_dir().unwrap().join("non_existing_123"),
             |_| {},
         )
         .unwrap_err();
@@ -272,7 +284,7 @@ mod tests {
             }
         };
         let msg = "test";
-        let task = make_task("echo", &[msg], &current_dir().unwrap(), on_output).unwrap();
+        let task = make_task("echo", &[msg], current_dir().unwrap(), on_output).unwrap();
         task.join().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 1);
@@ -301,7 +313,7 @@ mod tests {
                 captured_output.lock().unwrap().push(o);
             }
         };
-        let task = make_task("cat", &[], &current_dir().unwrap(), on_output).unwrap();
+        let task = make_task("cat", &[], current_dir().unwrap(), on_output).unwrap();
         for m in ["one", "two\n", "three"] {
             task.write_to_stdin(m.as_bytes()).await.unwrap();
         }
@@ -315,7 +327,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_to_stdin_error() {
-        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
         task.wait().await;
         let err = task
             .write_to_stdin("some input".as_bytes())
@@ -327,7 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_output_after_exit_returns_error() {
-        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
         task.wait().await;
         let err = task.on_output(|_| {}).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
@@ -335,8 +347,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn output_buffer_captures_output() {
+        let task = make_task(
+            "echo",
+            &["-n", "line1\nline2"],
+            current_dir().unwrap(),
+            |_| {},
+        )
+        .unwrap();
+        task.join().await;
+        let range = task.output_buffer().line_range();
+        assert_eq!(range, 0..2);
+        assert_eq!(
+            task.output_buffer()
+                .get_line_range(range)
+                .into_iter()
+                .map(|s| String::clone(s.as_ref()))
+                .collect::<Vec<_>>(),
+            ["line1\r\n", "line2"]
+        );
+    }
+
+    #[tokio::test]
+    async fn output_buffer_capacity() {
+        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
+        assert_eq!(task.output_buffer().capacity(), OUTPUT_BUFFER_CAPACITY);
+        task.join().await;
+    }
+
+    #[tokio::test]
     async fn send_signal_success() {
-        let task = make_task("cat", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("cat", &[], current_dir().unwrap(), |_| {}).unwrap();
         tokio::task::yield_now().await;
         task.send_signal(rustix::process::Signal::TERM).unwrap();
         let finished_task = task.join().await;
@@ -348,7 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_signal_error() {
-        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
         task.wait().await;
         let err = task.send_signal(rustix::process::Signal::TERM).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
@@ -371,13 +412,13 @@ mod tests {
     #[tokio::test]
     #[should_panic]
     async fn panic_if_dropped_without_join() {
-        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
         task.wait().await;
     }
 
     #[tokio::test]
     async fn calling_join_twice() {
-        let task = make_task("ls", &[], &current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
         task.join().await;
         task.join().await;
     }

@@ -4,13 +4,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[derive(Debug)]
 pub struct OutputBuffer {
     inner: Mutex<Inner>,
+    capacity: usize,
 }
 
+#[derive(Debug)]
 struct Inner {
     data: VecDeque<Arc<String>>,
-    capacity: usize,
     first_line_number: usize,
 }
 
@@ -19,17 +21,17 @@ impl OutputBuffer {
         assert!(capacity > 0, "Capacity should be positive");
         let inner = Inner {
             data: VecDeque::with_capacity(capacity),
-            capacity,
             first_line_number: 0,
         };
         Self {
             inner: Mutex::new(inner),
+            capacity,
         }
     }
 
     pub(in crate::tasks) fn insert_line(&self, line: Arc<String>) {
         let mut inner = self.inner.lock().unwrap();
-        if inner.data.len() >= inner.capacity {
+        if inner.data.len() >= self.capacity {
             inner.data.pop_front().expect("data shouldn't be empty");
             inner.first_line_number += 1;
         }
@@ -64,6 +66,10 @@ impl OutputBuffer {
             return Vec::new();
         }
         inner.data.range(range).map(Arc::clone).collect()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 }
 
@@ -164,5 +170,12 @@ mod tests {
         assert!(ob.get_line(1).is_none());
         assert!(ob.get_line_range(0..5).is_empty());
         assert_eq!(ob.line_range(), 0..0);
+    }
+
+    #[test]
+    fn capacity_returns_capacity() {
+        let capacity = 123;
+        let ob = OutputBuffer::new(capacity);
+        assert_eq!(ob.capacity(), capacity);
     }
 }
