@@ -37,7 +37,20 @@
     - [x] collect completed completion_coroutines in TaskManager
     - [x] Tests for Task manager
     - [x] LRU cache for finished_task to limit it's memory
-- [ ] Task output buffer
+- [x] Task output buffer
 
-## Api and handlers
+## Minimal API
+- [x] start task, send signal request and response
+- [ ] task output notification
+- [ ] task exit notification
+- [ ] error codes
+
+## Handler
+- [ ]
+
+## Session
+
+
+## More API
+
 
