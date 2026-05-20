@@ -3,29 +3,29 @@ use serde::Serialize;
 use crate::api::common::RequestId;
 
 #[derive(Serialize)]
-struct Response {
-    id: RequestId,
+pub struct Response {
+    pub id: RequestId,
 
     #[serde(flatten)]
-    body: ResponseBody,
+    pub body: ResponseBody,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ResponseBody {
+pub enum ResponseBody {
     Result(ResponseResult),
     Error(ResponseError),
 }
 
 #[derive(Serialize)]
 #[serde(untagged)]
-enum ResponseResult {
+pub enum ResponseResult {
     StartTaskResult { task_id: usize },
     SendSignalResult,
 }
 
 #[derive(Serialize)]
-struct ResponseError {
+pub struct ResponseError {
     code: usize,
     message: &'static str,
 }

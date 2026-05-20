@@ -3,41 +3,43 @@ use serde::Deserialize;
 use crate::api::common::JsonRpcVersion;
 
 #[derive(Deserialize)]
-struct Request {
-    jsonrpc: JsonRpcVersion,
-    id: i64,
+pub struct Request {
+    pub jsonrpc: JsonRpcVersion,
+    pub id: i64,
 
     #[serde(flatten)]
-    body: RequestBody,
+    pub body: RequestBody,
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "method", content = "params", rename_all = "snake_case")]
-enum RequestBody {
-    StartTask(StartTaskParams),
-    SendSignal(SendSignalParams),
+#[serde(tag = "method", content = "params")]
+pub enum RequestBody {
+    #[serde(rename = "task.start")]
+    TaskStart(TaskStartParams),
+    #[serde(rename = "task.send_signal")]
+    TaskSendSignal(TaskSendSignalParams),
 }
 
 #[derive(Deserialize)]
-struct StartTaskParams {
-    executable: String,
-    args: Option<Vec<String>>,
-    working_dir: Option<String>,
+pub struct TaskStartParams {
+    pub executable: String,
+    pub args: Option<Vec<String>>,
+    pub working_dir: Option<String>,
 
-    #[serde(default = "StartTaskParams::default_subscribe_to_output")]
-    subscribe_to_output: bool,
+    #[serde(default = "TaskStartParams ::default_subscribe_to_output")]
+    pub subscribe_to_output: bool,
 }
 
-impl StartTaskParams {
+impl TaskStartParams {
     fn default_subscribe_to_output() -> bool {
         true
     }
 }
 
 #[derive(Deserialize)]
-struct SendSignalParams {
-    task_id: usize,
-    signal: u8,
+pub struct TaskSendSignalParams {
+    pub task_id: usize,
+    pub signal: u8,
 }
 
 #[cfg(test)]
@@ -49,7 +51,7 @@ mod tests {
         let json_str = r#"{
             "jsonrpc":"2.0",
             "id": 123,
-            "method": "start_task",
+            "method": "task.start",
             "params":{
                 "executable": "ls",
                 "working_dir":"/tmp"
@@ -57,7 +59,7 @@ mod tests {
         }"#;
         let parsed: Request = serde_json::from_str(json_str).unwrap();
         assert_eq!(parsed.id, 123);
-        let RequestBody::StartTask(body) = parsed.body else {
+        let RequestBody::TaskStart(body) = parsed.body else {
             panic!("Invalid body variant")
         };
         assert_eq!(body.executable, "ls");
@@ -70,7 +72,7 @@ mod tests {
         let json_str = r#"{
             "jsonrpc":"2.0",
             "id": 123,
-            "method": "send_signal",
+            "method": "task.send_signal",
             "params":{
                 "task_id": 456,
                 "signal": 9
@@ -78,7 +80,7 @@ mod tests {
         }"#;
         let parsed: Request = serde_json::from_str(json_str).unwrap();
         assert_eq!(parsed.id, 123);
-        let RequestBody::SendSignal(body) = parsed.body else {
+        let RequestBody::TaskSendSignal(body) = parsed.body else {
             panic!("Invalid body variant")
         };
         assert_eq!(body.task_id, 456);

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::Serialize;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -16,8 +17,14 @@ use crate::tasks::{
 
 use super::task::Task;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Serialize)]
 pub struct TaskId(pub usize);
+
+impl std::fmt::Display for TaskId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 pub struct TaskManager {
     task_output_buffer_capacity: usize,

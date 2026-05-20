@@ -13,7 +13,7 @@ mockall = "0.14.0"
 num_cpus = "1.17.0"
 pin-project = "1.1.12"
 rustix = { version = "1.1.4", features = ["pty", "process", "fs", "termios"] }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.149"
 tokio = { version = "1.52.2", features = ["full"] }
 tokio-util = { version = "0.7.18", features = ["rt"]}
