@@ -1,11 +1,11 @@
 use serde::Deserialize;
 
-use crate::api::common::JsonRpcVersion;
+use crate::api::common::{JsonRpcVersion, RequestId};
 
 #[derive(Deserialize)]
 pub struct Request {
     pub jsonrpc: JsonRpcVersion,
-    pub id: i64,
+    pub id: RequestId,
 
     #[serde(flatten)]
     pub body: RequestBody,
@@ -58,7 +58,7 @@ mod tests {
             }
         }"#;
         let parsed: Request = serde_json::from_str(json_str).unwrap();
-        assert_eq!(parsed.id, 123);
+        assert_eq!(parsed.id, RequestId::Number(123));
         let RequestBody::TaskStart(body) = parsed.body else {
             panic!("Invalid body variant")
         };
@@ -79,7 +79,7 @@ mod tests {
             }
         }"#;
         let parsed: Request = serde_json::from_str(json_str).unwrap();
-        assert_eq!(parsed.id, 123);
+        assert_eq!(parsed.id, RequestId::Number(123));
         let RequestBody::TaskSendSignal(body) = parsed.body else {
             panic!("Invalid body variant")
         };

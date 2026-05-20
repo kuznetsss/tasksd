@@ -31,7 +31,8 @@ impl Into<&'static str> for JsonRpcVersion {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
 pub enum RequestId {
     String(String),
     Number(i64),

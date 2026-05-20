@@ -41,9 +41,11 @@
 
 ## Minimal API
 - [x] start task, send signal request and response
-- [ ] task output notification
-- [ ] task exit notification
-- [ ] error codes
+- [x] task output notification
+- [x] task exit notification
+- [~] error codes
+- [~] application
+- [ ] session
 
 ## Handler
 - [ ]

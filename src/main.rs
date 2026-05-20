@@ -1,5 +1,6 @@
 #![allow(dead_code)] // prevent too many warnings while developing
 mod api;
+mod application;
 mod tasks;
 mod transport;
 
@@ -9,7 +10,7 @@ use clap::Parser;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::transport::{Server, UnixSocketServer};
+use crate::application::Application;
 
 /// tasksd - Editor companion to manage processes
 #[derive(clap::Parser, Debug)]
@@ -30,6 +31,7 @@ struct CliOptions {
 
 fn main() -> anyhow::Result<()> {
     let cli_args = CliOptions::parse();
+    // TODO: setup tracing_subscriber
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(cli_args.thread_number)
@@ -37,37 +39,14 @@ fn main() -> anyhow::Result<()> {
         .unwrap()
         .block_on(async move {
             let root_cancellation = CancellationToken::new();
-            let server =
-                Server::new_unix_socket(&cli_args.unix_socket_path, root_cancellation.clone())?;
+            let application = Application::new(root_cancellation.clone(), cli_args)?;
             let mut tasks = JoinSet::new();
             tasks.spawn(ctrl_c_handler(root_cancellation.clone()));
-            tasks.spawn(run_server(server));
+            tasks.spawn(async move { application.run().await });
             tasks.join_next().await;
 
             Ok(())
         })
-}
-
-async fn run_server(server: UnixSocketServer) {
-    while let Ok(c) = server.wait_for_connection().await {
-        println!("Client connected");
-        tokio::spawn(async move {
-            let mut c = api::connection::Connection::new(c);
-            loop {
-                match c.reader.read_message().await {
-                    Ok(msg) => {
-                        println!("Got message: '{msg}'");
-                    }
-                    Err(e) => {
-                        println!("Error reading message: {e}");
-                        break;
-                    }
-                };
-            }
-
-            println!("Client disconnected");
-        });
-    }
 }
 
 async fn ctrl_c_handler(root_cancellation: CancellationToken) {
