@@ -4,7 +4,10 @@ use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::{CliOptions, api, tasks::task_manager::TaskManager, transport::UnixSocketServer};
+use crate::{
+    CliOptions, api, session::Session, tasks::task_manager::TaskManager,
+    transport::UnixSocketServer,
+};
 
 pub struct Application {
     root_cancellation: CancellationToken,
@@ -30,12 +33,12 @@ impl Application {
     }
 
     async fn run_server(&self) {
-        while let Some(c) = self
+        while let Some(connection) = self
             .root_cancellation
             .run_until_cancelled(self.server.wait_for_connection())
             .await
         {
-            let c = match c {
+            let connection = match connection {
                 Ok(c) => c,
                 Err(e) => {
                     warn!("Error accepting unix socket connection: {e}");
@@ -43,21 +46,13 @@ impl Application {
                 }
             };
             // TODO: create session here
-            tokio::spawn(async move {
-                let mut c = api::connection::Connection::new(c);
-                loop {
-                    match c.reader.read_message().await {
-                        Ok(msg) => {
-                            println!("Got message: '{msg}'");
-                        }
-                        Err(e) => {
-                            println!("Error reading message: {e}");
-                            break;
-                        }
-                    };
+            tokio::spawn({
+                let cancellation_token = self.root_cancellation.child_token();
+                async move {
+                    let connection = api::connection::Connection::new(connection);
+                    let session = Session::new(cancellation_token, connection);
+                    session.run().await;
                 }
-
-                println!("Client disconnected");
             });
         }
     }

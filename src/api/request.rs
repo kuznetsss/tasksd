@@ -11,6 +11,12 @@ pub struct Request {
     pub body: RequestBody,
 }
 
+impl Request {
+    pub fn parse(s: &String) -> anyhow::Result<Self> {
+        serde_json::from_str(s).map_err(Into::into)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "method", content = "params")]
 pub enum RequestBody {

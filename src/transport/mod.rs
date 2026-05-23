@@ -1,59 +1,62 @@
 use std::path::Path;
 
-pub use crate::transport::io::{Reader, Writer};
 use anyhow::Result;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
+use crate::transport::{background_writer::WriterImpl, reader::ReaderImpl};
+
 mod background_writer;
-mod io;
+pub mod connection;
+mod reader;
 mod unix_socket;
 
-#[cfg(test)]
-pub use io::{MockReader, MockWriter};
-
 pub trait ServerImpl {
-    type Reader: Reader + 'static;
-    type Writer: Writer + 'static;
+    type ReaderHalf: ReaderImpl;
+    type WriterHalf: WriterImpl;
 
     fn wait_for_connection(
         &self,
-        cancellation_token: CancellationToken,
-    ) -> impl Future<Output = Result<(Self::Reader, Self::Writer)>>;
+    ) -> impl Future<Output = Result<(Self::ReaderHalf, Self::WriterHalf)>>;
 }
 
 pub struct Server<I> {
-    cancellation_token: CancellationToken,
     inner: I,
+}
+
+impl<I: ServerImpl> Server<I> {
+    pub async fn wait_for_connection(
+        &self,
+    ) -> Result<AcceptedConnection<I::ReaderHalf, I::WriterHalf>> {
+        let (read_half, write_half) = self.inner.wait_for_connection().await?;
+        Ok(AcceptedConnection {
+            read_half,
+            write_half,
+        })
+    }
+}
+
+pub struct AcceptedConnection<R, W> {
+    read_half: R,
+    write_half: W,
+}
+
+impl<R, W> AcceptedConnection<R, W>
+where
+    R: AsyncRead + Send + Unpin,
+    W: AsyncWrite + Send + Unpin,
+{
+    pub fn into_connection(token: CancellationToken) -> Connection {
+        todo!()
+    }
 }
 
 pub type UnixSocketServer = Server<unix_socket::UnixSocketServerImpl>;
 
 impl UnixSocketServer {
-    pub fn new_unix_socket(path: &Path, cancellation_token: CancellationToken) -> Result<Self> {
+    pub fn new_unix_socket(path: &Path) -> Result<Self> {
         Ok(Self {
-            cancellation_token,
             inner: unix_socket::UnixSocketServerImpl::new(path)?,
         })
     }
-}
-
-impl<I: ServerImpl> Server<I> {
-    pub async fn wait_for_connection(&self) -> Result<Connection<I::Reader, I::Writer>> {
-        let connection_token = self.cancellation_token.child_token();
-        let (reader, writer) = self
-            .inner
-            .wait_for_connection(connection_token.clone())
-            .await?;
-        Ok(Connection {
-            reader,
-            writer,
-            cancellation_token: connection_token,
-        })
-    }
-}
-
-pub struct Connection<R, W> {
-    pub reader: R,
-    pub writer: W,
-    pub cancellation_token: CancellationToken,
 }

@@ -1,6 +1,7 @@
 #![allow(dead_code)] // prevent too many warnings while developing
 mod api;
 mod application;
+mod session;
 mod tasks;
 mod transport;
 

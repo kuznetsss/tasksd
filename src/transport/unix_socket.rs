@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use tokio::{
-    io::{BufReader, Interest},
-    net::{UnixListener, unix::OwnedReadHalf},
+use tokio::io::Interest;
+use tokio::net::{
+    UnixListener,
+    unix::{OwnedReadHalf, OwnedWriteHalf},
 };
-use tokio_util::sync::CancellationToken;
 
-use crate::transport::{ServerImpl, background_writer::BackgroundWriter};
+use crate::transport::ServerImpl;
 
 pub struct UnixSocketServerImpl {
     listener: UnixListener,
@@ -34,42 +34,27 @@ impl Drop for UnixSocketServerImpl {
 }
 
 impl ServerImpl for UnixSocketServerImpl {
-    type Reader = BufReader<OwnedReadHalf>;
-    type Writer = BackgroundWriter;
+    type ReaderHalf = OwnedReadHalf;
+    type WriterHalf = OwnedWriteHalf;
 
-    async fn wait_for_connection(
-        &self,
-        cancellation_token: CancellationToken,
-    ) -> Result<(Self::Reader, Self::Writer)> {
-        let stream = match cancellation_token
-            .run_until_cancelled(self.listener.accept())
-            .await
-        {
-            Some(Ok((s, _))) => s,
-            Some(Err(e)) => {
-                return Err(e.into());
-            }
-            None => anyhow::bail!("Cancelled"),
-        };
+    async fn wait_for_connection(&self) -> Result<(Self::ReaderHalf, Self::WriterHalf)> {
+        let (stream, _) = self.listener.accept().await?;
         stream
             .ready(Interest::READABLE | Interest::WRITABLE)
             .await?;
-        let (reader, writer) = stream.into_split();
-        Ok((
-            Self::Reader::new(reader),
-            Self::Writer::spawn(writer, cancellation_token),
-        ))
+        Ok(stream.into_split())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::transport::io::{Reader, Writer};
-
     use super::*;
     use std::path::PathBuf;
     use tempfile::TempDir;
-    use tokio::{io::AsyncWriteExt, net::UnixStream};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt, BufReader},
+        net::UnixStream,
+    };
 
     struct ServerTestContext {
         temp_dir: TempDir,
@@ -96,10 +81,7 @@ mod tests {
         let handle = tokio::spawn({
             let server = ctx.server;
             async move {
-                server
-                    .wait_for_connection(CancellationToken::new())
-                    .await
-                    .unwrap();
+                server.wait_for_connection().await.unwrap();
             }
         });
         let _ = UnixStream::connect(ctx.socket_path).await.unwrap();
@@ -117,12 +99,10 @@ mod tests {
         let handle = tokio::spawn({
             let server = ctx.server;
             async move {
-                let (mut reader, mut writer) = server
-                    .wait_for_connection(CancellationToken::new())
-                    .await
-                    .unwrap();
+                let (mut reader, mut writer) = server.wait_for_connection().await.unwrap();
                 writer.write(msg_to_write.to_string()).await.unwrap();
-                let msg = reader.read_line().await.unwrap();
+                let mut msg = String::new();
+                reader.read_to_string(&mut msg).await.unwrap();
                 assert_eq!(msg, msg_to_read);
             }
         });
@@ -131,7 +111,8 @@ mod tests {
         let (reader, mut writer) = stream.into_split();
         writer.write_all(msg_to_read.as_bytes()).await.unwrap();
         let mut reader = BufReader::new(reader);
-        let msg = reader.read_line().await.unwrap();
+        let mut msg = String::new();
+        reader.read_to_string(&mut msg).await.unwrap();
         assert_eq!(msg, msg_to_write);
 
         tokio::time::timeout(std::time::Duration::from_secs(1), handle)
@@ -146,37 +127,14 @@ mod tests {
         let handle = tokio::spawn({
             let server = ctx.server;
             async move {
-                let (mut reader, _) = server
-                    .wait_for_connection(CancellationToken::new())
-                    .await
-                    .unwrap();
-                reader.read_line().await.unwrap_err();
+                let (mut reader, _) = server.wait_for_connection().await.unwrap();
+                let mut msg = String::new();
+                reader.read_to_string(&mut msg).await.unwrap_err();
             }
         });
 
         let stream = UnixStream::connect(ctx.socket_path).await.unwrap();
         drop(stream);
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
-            .await
-            .unwrap()
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn server_wait_for_connection_cancelled() {
-        let ctx = ServerTestContext::new();
-        let cancellation_token = CancellationToken::new();
-        cancellation_token.cancel();
-        let handle = tokio::spawn({
-            let server = ctx.server;
-            async move {
-                server
-                    .wait_for_connection(cancellation_token)
-                    .await
-                    .unwrap_err();
-            }
-        });
 
         tokio::time::timeout(std::time::Duration::from_secs(1), handle)
             .await

@@ -46,6 +46,8 @@
 - [~] error codes
 - [~] application
 - [ ] session
+- [ ] figure out who should own cancellation_tokens
+- [ ] maybe optimise reader's buffer because serde_json::parse consumes a reference
 
 ## Handler
 - [ ]

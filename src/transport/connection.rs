@@ -1,100 +1,43 @@
-use crate::transport::{Reader, Writer};
-
 use anyhow::Result;
-use async_trait::async_trait;
-use tokio_util::sync::CancellationToken;
+
+use crate::transport::{
+    background_writer::BackgroundWriter,
+    reader::{Reader, ReaderImpl},
+};
 
 pub const CONTENT_LENGTH_HEADER: &str = "Content-Length: ";
 pub const END_LINE_SYMBOLS: &str = "\r\n";
 
-#[async_trait]
-pub trait MessageReader {
-    async fn read_message(&mut self) -> Result<String>;
+pub struct Connection {
+    reader: Reader<Box<dyn ReaderImpl>>,
+    writer: BackgroundWriter,
 }
 
-pub struct MessageReaderImpl<R> {
-    inner: R,
-}
-
-impl<R> MessageReaderImpl<R>
-where
-    R: Reader + Send,
-{
-    pub fn new(inner: R) -> Self {
-        Self { inner }
-    }
-}
-
-#[async_trait]
-impl<R> MessageReader for MessageReaderImpl<R>
-where
-    R: Reader + Send,
-{
-    async fn read_message(&mut self) -> Result<String> {
-        let header = self.inner.read_line().await?;
+impl Connection {
+    pub async fn read_message(&mut self) -> Result<String> {
+        let header = self.reader.read_line().await?;
         if !header.starts_with(CONTENT_LENGTH_HEADER) || !header.ends_with(END_LINE_SYMBOLS) {
             anyhow::bail!("Got unexpected symbols: {header}");
         }
         let start = CONTENT_LENGTH_HEADER.len();
         let end = header.len() - END_LINE_SYMBOLS.len();
         let content_length: usize = header[start..end].parse()?;
-        let empty_line = self.inner.read_line().await?;
+        let empty_line = self.reader.read_line().await?;
         if empty_line != END_LINE_SYMBOLS {
             anyhow::bail!("Expected a new line, got: {empty_line}");
         }
-        self.inner.read_some(content_length).await
+        self.reader
+            .read_some(content_length)
+            .await
+            .map(str::to_string)
     }
-}
 
-#[async_trait]
-pub trait MessageWriter {
-    async fn write_message(&mut self, s: &str) -> Result<()>;
-}
-
-pub struct MessageWriterImpl<W> {
-    inner: W,
-}
-
-impl<W> MessageWriterImpl<W>
-where
-    W: Writer + Send,
-{
-    pub fn new(inner: W) -> Self {
-        Self { inner }
-    }
-}
-
-#[async_trait]
-impl<W> MessageWriter for MessageWriterImpl<W>
-where
-    W: Writer + Send,
-{
-    async fn write_message(&mut self, s: &str) -> Result<()> {
+    pub async fn write_message(&mut self, s: &str) -> Result<()> {
         let message = format!(
             "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}{END_LINE_SYMBOLS}{s}",
             s.len()
         );
         self.inner.write(message).await
-    }
-}
-
-pub struct Connection {
-    pub reader: Box<dyn MessageReader + Send>,
-    pub writer: Box<dyn MessageWriter + Send>,
-    pub cancellation_token: CancellationToken,
-}
-
-impl Connection {
-    pub fn new<R, W>(c: crate::transport::Connection<R, W>) -> Self
-    where
-        R: Reader + Send + 'static,
-        W: Writer + Send + 'static,
-    {
-        Self {
-            reader: Box::new(MessageReaderImpl::new(c.reader)),
-            writer: Box::new(MessageWriterImpl::new(c.writer)),
-            cancellation_token: c.cancellation_token,
-        }
     }
 }
 
