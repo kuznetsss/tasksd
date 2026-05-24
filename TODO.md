@@ -43,17 +43,17 @@
 - [x] start task, send signal request and response
 - [x] task output notification
 - [x] task exit notification
+- [x] figure out who should own cancellation_tokens
+- [x] maybe optimise reader's buffer because serde_json::parse consumes a reference
 - [~] error codes
 - [~] application
-- [ ] session
-- [ ] figure out who should own cancellation_tokens
-- [ ] maybe optimise reader's buffer because serde_json::parse consumes a reference
+- [~] session
+- [ ] handler:
+    - [ ] task builder methods should consume and return &mut self
 
-## Handler
-- [ ]
-
-## Session
-
+## Improvements
+- [ ] Create transport::error and replace anyhow with it to be able to distinguish EOF from other errors
+- [ ] Add pub use in mod.rs files to avoid long namespaces
 
 ## More API
 

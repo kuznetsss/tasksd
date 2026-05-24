@@ -5,7 +5,7 @@ use crate::{
     tasks::{task_error::TaskError, task_manager::TaskId},
 };
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct Response {
     pub id: RequestId,
 
@@ -14,21 +14,21 @@ pub struct Response {
 }
 
 // TODO: find a more convenient way to build Response from a Result
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseBody {
     Result(ResponseResult),
     Error(ResponseError),
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum ResponseResult {
     StartTaskResult { task_id: TaskId },
     SendSignalResult,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ResponseError {
     code: usize,
     message: &'static str,

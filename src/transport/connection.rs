@@ -31,7 +31,7 @@ impl Connection {
         }
     }
 
-    pub async fn read_message(&mut self) -> Result<String> {
+    pub async fn read_message(&mut self) -> Result<&str> {
         let header = self.reader.read_line().await?;
         if !header.starts_with(CONTENT_LENGTH_HEADER) || !header.ends_with(END_LINE_SYMBOLS) {
             anyhow::bail!("Got unexpected symbols: {header}");
@@ -43,10 +43,7 @@ impl Connection {
         if empty_line != END_LINE_SYMBOLS {
             anyhow::bail!("Expected a new line, got: {empty_line}");
         }
-        self.reader
-            .read_some(content_length)
-            .await
-            .map(str::to_string)
+        self.reader.read_some(content_length).await
     }
 
     pub fn writer(&self) -> ConnectionWriter {

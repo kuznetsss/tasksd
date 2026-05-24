@@ -12,7 +12,7 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn parse(s: &String) -> anyhow::Result<Self> {
+    pub fn parse(s: &str) -> anyhow::Result<Self> {
         serde_json::from_str(s).map_err(Into::into)
     }
 }

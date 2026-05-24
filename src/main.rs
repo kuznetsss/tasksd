@@ -4,8 +4,9 @@ mod application;
 mod session;
 mod tasks;
 mod transport;
+mod handler;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use tokio::task::JoinSet;
@@ -40,12 +41,15 @@ fn main() -> anyhow::Result<()> {
         .unwrap()
         .block_on(async move {
             let root_cancellation = CancellationToken::new();
-            let application = Application::new(root_cancellation.clone(), cli_args)?;
-            let mut tasks = JoinSet::new();
-            tasks.spawn(ctrl_c_handler(root_cancellation.clone()));
-            tasks.spawn(async move { application.run().await });
-            tasks.join_next().await;
-
+            let application = Arc::new(Application::new(root_cancellation.clone(), cli_args)?);
+            let mut jobs = JoinSet::new();
+            jobs.spawn(ctrl_c_handler(root_cancellation.clone()));
+            jobs.spawn({
+                let application = application.clone();
+                async move { application.run().await }
+            });
+            jobs.join_next().await;
+            application.shutdown().await;
             Ok(())
         })
 }
