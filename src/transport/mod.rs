@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use anyhow::Result;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
 use crate::transport::{background_writer::WriterImpl, reader::ReaderImpl};
+pub use connection::Connection;
 
 mod background_writer;
 pub mod connection;
@@ -43,11 +43,11 @@ pub struct AcceptedConnection<R, W> {
 
 impl<R, W> AcceptedConnection<R, W>
 where
-    R: AsyncRead + Send + Unpin,
-    W: AsyncWrite + Send + Unpin,
+    R: ReaderImpl,
+    W: WriterImpl,
 {
-    pub fn into_connection(token: CancellationToken) -> Connection {
-        todo!()
+    pub fn into_connection(self, token: CancellationToken) -> Connection {
+        Connection::new(self.read_half, self.write_half, token)
     }
 }
 

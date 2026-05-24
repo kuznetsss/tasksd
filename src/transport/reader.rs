@@ -1,16 +1,16 @@
 use std::marker::Send;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 
 pub(in crate::transport) struct Reader<I> {
     inner: BufReader<I>,
-    buffer: String,
+    buffer: Vec<u8>,
 }
 
-pub(in crate::transport) trait ReaderImpl: AsyncRead + Send + Unpin {}
+pub trait ReaderImpl: AsyncRead + Send + Unpin + 'static {}
 
-impl<T: AsyncRead + Send + Unpin> ReaderImpl for T {}
+impl<T: AsyncRead + Send + Unpin + 'static> ReaderImpl for T {}
 
 impl<I> Reader<I>
 where
@@ -19,33 +19,27 @@ where
     pub(in crate::transport) fn new(inner: I) -> Self {
         Self {
             inner: BufReader::new(inner),
-            buffer: String::new(),
+            buffer: Vec::new(),
         }
     }
 
     pub(in crate::transport) async fn read_line(&mut self) -> Result<&str> {
+        const NEW_LINE_SYMBOL: u8 = b'\n';
         self.buffer.clear();
-        self.inner.read_line(&mut self.buffer).await?;
-        if !self.buffer.ends_with('\n') {
+        self.inner
+            .read_until(NEW_LINE_SYMBOL, &mut self.buffer)
+            .await?;
+        if !self.buffer.ends_with(&[NEW_LINE_SYMBOL]) {
             Err(anyhow::anyhow!("EOF"))
         } else {
-            Ok(&self.buffer)
+            Ok(str::from_utf8(&self.buffer)?)
         }
     }
 
     pub(in crate::transport) async fn read_some(&mut self, n: usize) -> Result<&str> {
-        self.buffer.clear();
-        self.buffer.reserve(n);
-        let mut buffer = unsafe {
-            // Safety: verify buffer content is a valid UTF-8 (done by checking str::from_utf8())
-            self.buffer.as_bytes_mut()
-        };
-        self.inner.read_exact(&mut buffer).await?;
-        if str::from_utf8(&buffer).is_err() {
-            bail!("Got invalid UTF-8 string: {buffer:?}")
-        } else {
-            Ok(&self.buffer)
-        }
+        self.buffer.resize(n, 0);
+        self.inner.read_exact(self.buffer.as_mut_slice()).await?;
+        Ok(str::from_utf8(&self.buffer)?)
     }
 }
 
@@ -105,7 +99,7 @@ mod tests {
         let mock = Builder::new().read(msg.as_bytes()).build();
         let mut reader = Reader::new(mock);
         let err = reader.read_some(msg.len() + 1).await.unwrap_err();
-        assert!(err.to_string().contains("EOF"));
+        assert!(err.to_string().contains("eof"));
     }
 
     #[tokio::test]

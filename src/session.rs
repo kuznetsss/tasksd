@@ -1,18 +1,15 @@
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::api::{self, request::Request};
+use crate::{api::request::Request, transport};
 
 pub struct Session {
     cancellation_token: CancellationToken,
-    connection: api::connection::Connection,
+    connection: transport::Connection,
 }
 
 impl Session {
-    pub fn new(
-        cancellation_token: CancellationToken,
-        connection: api::connection::Connection,
-    ) -> Self {
+    pub fn new(cancellation_token: CancellationToken, connection: transport::Connection) -> Self {
         Self {
             cancellation_token,
             connection,
@@ -21,7 +18,7 @@ impl Session {
 
     pub async fn run(mut self) {
         loop {
-            match self.connection.reader.read_message().await {
+            match self.connection.read_message().await {
                 Ok(msg) => {
                     self.handle_msg(msg);
                 }

@@ -5,8 +5,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{
-    CliOptions, api, session::Session, tasks::task_manager::TaskManager,
-    transport::UnixSocketServer,
+    CliOptions, session::Session, tasks::task_manager::TaskManager, transport::UnixSocketServer,
 };
 
 pub struct Application {
@@ -17,10 +16,7 @@ pub struct Application {
 
 impl Application {
     pub fn new(root_cancellation: CancellationToken, cli_args: CliOptions) -> Result<Self> {
-        let server = UnixSocketServer::new_unix_socket(
-            &cli_args.unix_socket_path,
-            root_cancellation.child_token(),
-        )?;
+        let server = UnixSocketServer::new_unix_socket(&cli_args.unix_socket_path)?;
         Ok(Self {
             root_cancellation,
             server,
@@ -38,7 +34,7 @@ impl Application {
             .run_until_cancelled(self.server.wait_for_connection())
             .await
         {
-            let connection = match connection {
+            let accepted_connection = match connection {
                 Ok(c) => c,
                 Err(e) => {
                     warn!("Error accepting unix socket connection: {e}");
@@ -49,7 +45,8 @@ impl Application {
             tokio::spawn({
                 let cancellation_token = self.root_cancellation.child_token();
                 async move {
-                    let connection = api::connection::Connection::new(connection);
+                    let connection =
+                        accepted_connection.into_connection(cancellation_token.clone());
                     let session = Session::new(cancellation_token, connection);
                     session.run().await;
                 }

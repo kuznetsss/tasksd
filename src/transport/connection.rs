@@ -1,7 +1,9 @@
 use anyhow::Result;
+use tokio_util::sync::CancellationToken;
 
 use crate::transport::{
-    background_writer::BackgroundWriter,
+    WriterImpl,
+    background_writer::{BackgroundWriter, WriteHandle},
     reader::{Reader, ReaderImpl},
 };
 
@@ -14,6 +16,21 @@ pub struct Connection {
 }
 
 impl Connection {
+    pub(in crate::transport) fn new<R, W>(
+        read_half: R,
+        write_half: W,
+        cancellation_token: CancellationToken,
+    ) -> Self
+    where
+        R: ReaderImpl,
+        W: WriterImpl,
+    {
+        Self {
+            reader: Reader::new(Box::new(read_half)),
+            writer: BackgroundWriter::spawn(write_half, cancellation_token),
+        }
+    }
+
     pub async fn read_message(&mut self) -> Result<String> {
         let header = self.reader.read_line().await?;
         if !header.starts_with(CONTENT_LENGTH_HEADER) || !header.ends_with(END_LINE_SYMBOLS) {
@@ -32,163 +49,168 @@ impl Connection {
             .map(str::to_string)
     }
 
-    pub async fn write_message(&mut self, s: &str) -> Result<()> {
-        let message = format!(
+    pub fn writer(&self) -> ConnectionWriter {
+        ConnectionWriter {
+            inner: self.writer.handle(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ConnectionWriter {
+    inner: WriteHandle,
+}
+
+impl ConnectionWriter {
+    pub async fn write(&self, s: &str) -> Result<()> {
+        const MESSAGE_LEN_DIGITS_NUM: usize = 6;
+        const PREFIX_LEN: usize =
+            CONTENT_LENGTH_HEADER.len() + MESSAGE_LEN_DIGITS_NUM + END_LINE_SYMBOLS.len() * 2;
+        let mut message = String::with_capacity(PREFIX_LEN + s.len());
+        use std::fmt::Write;
+        write!(
+            &mut message,
             "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}{END_LINE_SYMBOLS}{s}",
             s.len()
-        );
+        )?;
         self.inner.write(message).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use anyhow::anyhow;
-    use mockall::{Sequence, predicate::eq};
-
     use super::*;
-    use crate::transport::{MockReader, MockWriter};
+    use tokio_test::io::Builder;
 
-    macro_rules! message_reader_read_error_test {
-        ($test_name:ident, $($method:ident: $msg:expr),+ ; $error:expr) => {
+    macro_rules! read_message_error_test {
+        ($test_name:ident, [$($m:expr),+] , $e:expr) => {
             #[tokio::test]
             async fn $test_name() {
-                let mut mock = MockReader::new();
-                let mut seq = Sequence::new();
+                let mut reader_mock = Builder::new();
                 $(
-                    mock.$method().times(1).in_sequence(&mut seq).return_once(
-                        || { Box::pin( async { $msg } ) }
-                    );
-                )*
-                let mut reader = MessageReaderImpl::new(mock);
-                let err = reader.read_message().await.unwrap_err().to_string();
-                assert!(err.contains($error));
+                    reader_mock.read($m.as_bytes());
+                )+
+                let reader_mock = reader_mock.build();
+                let writer_mock = Builder::new().build();
+                let mut connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
+                let err = connection.read_message().await.unwrap_err();
+                assert!(dbg!(err.to_string()).contains($e));
             }
         };
     }
-    message_reader_read_error_test!(
-        message_reader_read_error_not_header,
-        expect_read_line: Ok("not header\r\n".to_string());
-        "Got unexpected symbols"
+
+    read_message_error_test!(read_message_early_eof, ["test"], "EOF");
+    read_message_error_test!(
+        read_message_not_a_header,
+        ["test\r\n"],
+        "unexpected symbols"
     );
-    message_reader_read_error_test!(
-        message_reader_read_error_no_end_line_symbols,
-        expect_read_line: Ok("no endl".to_string());
-        "Got unexpected symbols"
+    read_message_error_test!(
+        read_message_no_endline_symbol,
+        [format!("{CONTENT_LENGTH_HEADER}123\n")],
+        "unexpected symbols"
     );
-    message_reader_read_error_test!(
-        message_reader_read_error_reading,
-        expect_read_line: Err(anyhow!("some error"));
-        "some error"
+    read_message_error_test!(
+        read_message_length_is_not_a_number,
+        [format!("{CONTENT_LENGTH_HEADER}123abc{END_LINE_SYMBOLS}")],
+        "invalid digit"
     );
-    message_reader_read_error_test!(
-        message_reader_read_error_invalid_content_length,
-        expect_read_line: Ok(format!("{}123abc\r\n", CONTENT_LENGTH_HEADER));
-        "invalid digit found"
-    );
-    message_reader_read_error_test!(
-        message_reader_read_error_non_empty_line,
-        expect_read_line: Ok(format!("{}123\r\n", CONTENT_LENGTH_HEADER)),
-        expect_read_line: Ok("a\r\n".to_string());
+    read_message_error_test!(
+        read_message_no_empty_line,
+        [
+            format!("{CONTENT_LENGTH_HEADER}123{END_LINE_SYMBOLS}"),
+            format!("not_an_empty_line{END_LINE_SYMBOLS}")
+        ],
         "Expected a new line"
     );
-    message_reader_read_error_test!(
-        message_reader_read_error_second_read_failed,
-        expect_read_line: Ok(format!("{CONTENT_LENGTH_HEADER}123\r\n")),
-        expect_read_line: Err(anyhow!("some error"));
-        "some error"
+    read_message_error_test!(
+        read_message_too_short_content,
+        [
+            format!("{CONTENT_LENGTH_HEADER}123{END_LINE_SYMBOLS}"),
+            END_LINE_SYMBOLS,
+            "short_content"
+        ],
+        "eof"
     );
 
     #[tokio::test]
-    async fn message_reader_read_error_third_read_failed() {
-        let content_length = 123;
-        let mut mock = MockReader::new();
-        let mut seq = Sequence::new();
-        mock.expect_read_line()
-            .times(1)
-            .in_sequence(&mut seq)
-            .return_once({
-                move || {
-                    Box::pin(async move {
-                        Ok(format!(
-                            "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}",
-                            content_length
-                        ))
-                    })
-                }
-            });
-        mock.expect_read_line()
-            .times(1)
-            .in_sequence(&mut seq)
-            .return_once(|| Box::pin(async { Ok(END_LINE_SYMBOLS.to_string()) }));
-        mock.expect_read_some()
-            .times(1)
-            .in_sequence(&mut seq)
-            .with(eq(content_length))
-            .return_once(|_| Box::pin(async { Err(anyhow!("some error")) }));
-        let mut reader = MessageReaderImpl::new(mock);
-        let err = reader.read_message().await.unwrap_err().to_string();
-        assert!(err.contains("some error"));
-    }
-
-    #[tokio::test]
-    async fn message_reader_read_success() {
+    async fn read_message_success() {
         let msg = "some message";
-        let mut mock = MockReader::new();
-        let mut seq = Sequence::new();
-        mock.expect_read_line()
-            .times(1)
-            .in_sequence(&mut seq)
-            .return_once(|| {
-                Box::pin(async {
-                    Ok(format!(
-                        "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}",
-                        msg.len()
-                    ))
-                })
-            });
-        mock.expect_read_line()
-            .times(1)
-            .in_sequence(&mut seq)
-            .return_once(|| Box::pin(async { Ok(END_LINE_SYMBOLS.to_string()) }));
-        mock.expect_read_some()
-            .times(1)
-            .in_sequence(&mut seq)
-            .with(eq(msg.len()))
-            .return_once(|_| Box::pin(async { Ok(msg.to_string()) }));
-        let mut reader = MessageReaderImpl::new(mock);
-        assert_eq!(reader.read_message().await.unwrap(), msg);
+
+        let mut reader_mock = Builder::new();
+        reader_mock
+            .read(format!("{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}", msg.len()).as_bytes());
+        reader_mock.read(END_LINE_SYMBOLS.as_bytes());
+        reader_mock.read(msg.as_bytes());
+        let reader_mock = reader_mock.build();
+        let writer_mock = Builder::new().build();
+
+        let mut connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
+        let read_msg = connection.read_message().await.unwrap();
+        assert_eq!(read_msg, msg)
     }
 
     #[tokio::test]
-    async fn message_writer_writes() {
-        let mut mock = MockWriter::new();
-        mock.expect_write()
-            .with(eq("Content-Length: 4\r\n\r\ntest".to_string()))
-            .returning(|_| Box::pin(async { Ok(()) }));
-        let mut writer = MessageWriterImpl::new(mock);
-        writer.write_message("test").await.unwrap();
+    async fn read_message_multiple_times() {
+        let msgs = ["some message", "another message"];
+
+        let mut reader_mock = Builder::new();
+        for m in &msgs {
+            reader_mock
+                .read(format!("{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}", m.len()).as_bytes());
+            reader_mock.read(END_LINE_SYMBOLS.as_bytes());
+            reader_mock.read(m.as_bytes());
+        }
+        let reader_mock = reader_mock.build();
+        let writer_mock = Builder::new().build();
+
+        let mut connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
+        for m in msgs {
+            let read_msg = connection.read_message().await.unwrap();
+            assert_eq!(read_msg, m);
+        }
     }
 
     #[tokio::test]
-    async fn message_writer_write_error() {
-        let error_msg = "some error".to_string();
-        let mut mock = MockWriter::new();
-        mock.expect_write()
-            .with(eq("Content-Length: 4\r\n\r\ntest".to_string()))
-            .returning({
-                let error_msg = error_msg.clone();
-                move |_| {
-                    Box::pin({
-                        let error_msg = error_msg.clone();
-                        async move { Err(anyhow!("{}", error_msg)) }
-                    })
-                }
-            });
-        let mut writer = MessageWriterImpl::new(mock);
-        assert_eq!(
-            writer.write_message("test").await.unwrap_err().to_string(),
-            error_msg
-        );
+    async fn write_message_error_after_connection_dropped() {
+        let reader_mock = Builder::new().build();
+        let writer_mock = Builder::new().build();
+        let connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
+        let writer = connection.writer();
+        drop(connection);
+        tokio::task::yield_now().await;
+        let err = writer.write("some message").await.unwrap_err();
+        assert!(dbg!(err.to_string()).contains("closed"));
+    }
+
+    #[tokio::test]
+    async fn write_message_writes() {
+        let msg = "some message";
+        let reader_mock = Builder::new().build();
+        let writer_mock = Builder::new()
+            .write(
+                format!(
+                    "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}{END_LINE_SYMBOLS}{msg}",
+                    msg.len()
+                )
+                .as_bytes(),
+            )
+            .build();
+        let connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
+        let writer = connection.writer();
+        writer.write(&msg).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_message_error_after_token_is_cancelled() {
+        let reader_mock = Builder::new().build();
+        let writer_mock = Builder::new().build();
+        let token = CancellationToken::new();
+        let connection = Connection::new(reader_mock, writer_mock, token.clone());
+        let writer = connection.writer();
+        token.cancel();
+        tokio::task::yield_now().await;
+        let err = writer.write("some message").await.unwrap_err();
+        assert!(dbg!(err.to_string()).contains("closed"));
     }
 }

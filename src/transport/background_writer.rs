@@ -7,10 +7,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-pub(in crate::transport) trait WriterImpl:
-    AsyncWrite + Send + Unpin + 'static
-{
-}
+pub trait WriterImpl: AsyncWrite + Send + Unpin + 'static {}
 
 impl<T: AsyncWrite + Send + Unpin + 'static> WriterImpl for T {}
 
@@ -19,6 +16,7 @@ pub(in crate::transport) struct BackgroundWriter {
     write_handle: WriteHandle,
     cancellation_token: CancellationToken,
     join_handle: JoinHandle<()>,
+    drop_guard: tokio_util::sync::DropGuard,
 }
 
 #[derive(Debug, Clone)]
@@ -27,7 +25,7 @@ pub(in crate::transport) struct WriteHandle {
 }
 
 impl WriteHandle {
-    async fn write(&self, message: impl Into<String>) -> Result<()> {
+    pub(in crate::transport) async fn write(&self, message: impl Into<String>) -> Result<()> {
         self.inner.send(message.into()).await.map_err(Into::into)
     }
 }
@@ -56,10 +54,12 @@ impl BackgroundWriter {
                 }
             }
         });
+        let drop_guard = cancellation_token.clone().drop_guard();
         Self {
             write_handle: WriteHandle { inner: sender },
             cancellation_token,
             join_handle: handle,
+            drop_guard,
         }
     }
 
@@ -111,7 +111,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_line_writer_write_test() {
+    async fn background_writer_write_test() {
         let msg = "test";
         let ctx = BackgroundWriterTestCtx::new(&[msg]);
         ctx.writer.handle().write(msg).await.unwrap();
@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_line_writer_doesnt_write_when_cancelled() {
+    async fn background_writer_doesnt_write_when_cancelled() {
         let ctx = BackgroundWriterTestCtx::new(&[]);
         ctx.token.cancel();
         // It's not deterministic if there will be an error here
@@ -128,7 +128,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_line_writer_cancels_token_when_write_error() {
+    async fn background_writer_cancels_token_when_write_error() {
         use std::io::{Error, ErrorKind};
         let mut builder = Builder::new();
         builder.write_error(Error::from(ErrorKind::PermissionDenied));
@@ -136,5 +136,17 @@ mod tests {
         ctx.writer.handle().write("msg".to_string()).await.unwrap();
         ctx.writer.finish().await;
         assert!(ctx.token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn write_handle_write_error_when_background_writer_is_dropped() {
+        let builder = Builder::new();
+        let ctx = BackgroundWriterTestCtx::from_builder(builder);
+        let write_handle = ctx.writer.handle();
+        drop(ctx.writer);
+        assert!(ctx.token.is_cancelled());
+        tokio::task::yield_now().await;
+        let err = write_handle.write("some message").await.unwrap_err();
+        assert!(dbg!(err.to_string()).contains("closed"));
     }
 }

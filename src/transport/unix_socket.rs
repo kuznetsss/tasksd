@@ -100,7 +100,8 @@ mod tests {
             let server = ctx.server;
             async move {
                 let (mut reader, mut writer) = server.wait_for_connection().await.unwrap();
-                writer.write(msg_to_write.to_string()).await.unwrap();
+                writer.write(msg_to_write.as_bytes()).await.unwrap();
+                drop(writer);
                 let mut msg = String::new();
                 reader.read_to_string(&mut msg).await.unwrap();
                 assert_eq!(msg, msg_to_read);
@@ -110,6 +111,7 @@ mod tests {
         let stream = UnixStream::connect(ctx.socket_path).await.unwrap();
         let (reader, mut writer) = stream.into_split();
         writer.write_all(msg_to_read.as_bytes()).await.unwrap();
+        drop(writer);
         let mut reader = BufReader::new(reader);
         let mut msg = String::new();
         reader.read_to_string(&mut msg).await.unwrap();
@@ -129,7 +131,7 @@ mod tests {
             async move {
                 let (mut reader, _) = server.wait_for_connection().await.unwrap();
                 let mut msg = String::new();
-                reader.read_to_string(&mut msg).await.unwrap_err();
+                assert_eq!(reader.read_to_string(&mut msg).await.unwrap(), 0);
             }
         });
 
