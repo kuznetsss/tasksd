@@ -2,10 +2,16 @@ use tracing::info;
 
 use crate::{
     api::{
+        common::JsonRpcVersion,
+        notification::{Notification, NotificationBody, TaskOutputParams},
         request::{Request, RequestBody},
         response::{Response, ResponseBody, ResponseResult},
     },
-    tasks::{task_error::TaskError, task_manager::TaskManager},
+    tasks::{
+        TaskCallbackError,
+        task_error::TaskError,
+        task_manager::{TaskId, TaskManager},
+    },
     transport::connection::ConnectionWriter,
 };
 
@@ -34,7 +40,7 @@ impl Handler {
             body: response_body,
         };
         let response_str = serde_json::to_string(&response)
-            .expect(&format!("Error serializing response: {response:?}")); // TODO: fix
+            .unwrap_or_else(|_| panic!("Error serializing response: {response:?}"));
         if let Err(e) = self.connection_writer.write(&response_str).await {
             info!("Error writing to connection: {e}")
         }
@@ -43,26 +49,52 @@ impl Handler {
     fn process_request(&self, request_body: RequestBody) -> Result<ResponseResult, TaskError> {
         match request_body {
             RequestBody::TaskStart(task_start_params) => {
-                let task_builder = self.task_manager.create_task(task_start_params.executable);
+                let mut task_builder = self.task_manager.create_task(task_start_params.executable);
                 if let Some(args) = task_start_params.args {
                     task_builder.args(args);
                 }
                 if let Some(working_dir) = task_start_params.working_dir {
                     task_builder.working_dir(working_dir);
                 }
+                let task_id = task_builder.task_id();
                 if task_start_params.subscribe_to_output {
-                    task_builder.on_output(todo!());
+                    task_builder.on_output({
+                        let connection_writer = self.connection_writer.clone();
+                        move |s| {
+                            let connection_writer = connection_writer.clone();
+                            let body =
+                                NotificationBody::TaskOutput(TaskOutputParams { task_id, line: s });
+                            let notification = Notification {
+                                jsonrpc: JsonRpcVersion {},
+                                body,
+                            };
+                            let notification_str = serde_json::to_string(&notification)
+                                .expect("Serialization shouldn't fail");
+                            async move {
+                                connection_writer
+                                    .write(&notification_str)
+                                    .await
+                                    .map_err(|_| TaskCallbackError::ShouldExit)
+                            }
+                        }
+                    });
                 }
+                // TODO: subscribe to exit
                 task_builder
                     .submit()
-                    .map(|task_id| ResponseResult::StartTaskResult { task_id })
+                    .map(|_| ResponseResult::StartTaskResult { task_id })
             }
             RequestBody::TaskSendSignal(task_send_signal_params) => {
-                let task = match self.task_manager.get_task(task_send_signal_params.task_id) {
+                let task = match self
+                    .task_manager
+                    .get_task(TaskId(task_send_signal_params.task_id))
+                {
                     Some(t) => t,
-                    None => return TaskError::AlreadyExited,
+                    // TODO: return not found here
+                    None => return Err(TaskError::AlreadyExited),
                 };
-                task.send_signal(signal)
+                task.send_signal(task_send_signal_params.signal)
+                    .map(|_| ResponseResult::SendSignalResult)
             }
         }
     }

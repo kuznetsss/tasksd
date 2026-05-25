@@ -50,6 +50,7 @@ impl Task {
                 let output_buffer = output_buffer.clone();
                 move |line| {
                     output_buffer.insert_line(line);
+                    async { Ok(()) }
                 }
             })
             .expect("Task shouldn't exit yet");
@@ -173,7 +174,7 @@ impl Task {
                         let mut buf = String::new();
                         let read_bytes = stdout.read_line(&mut buf).await;
                         match read_bytes {
-                            Ok(r) if r == 0 => {
+                            Ok(0) => {
                                 // EOF
                                 return;
                             }
@@ -250,15 +251,20 @@ mod tests {
         Task::new(info, senders, events, OUTPUT_BUFFER_CAPACITY)
     }
 
+    fn noop_callback() -> impl TaskOutputCallback {
+        |_| async { Ok(()) }
+    }
+
     #[tokio::test]
     async fn new_non_existing_executable() {
-        let err = make_task("non_existing", &[], current_dir().unwrap(), |_| {}).unwrap_err();
+        let err =
+            make_task("non_existing", &[], current_dir().unwrap(), noop_callback()).unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
     #[tokio::test]
     async fn new_bad_args() {
-        let err = make_task("ls", &["\0"], current_dir().unwrap(), |_| {}).unwrap_err();
+        let err = make_task("ls", &["\0"], current_dir().unwrap(), noop_callback()).unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
@@ -268,7 +274,7 @@ mod tests {
             "ls",
             &["\0"],
             current_dir().unwrap().join("non_existing_123"),
-            |_| {},
+            noop_callback(),
         )
         .unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
@@ -281,6 +287,7 @@ mod tests {
             let captured_output = captured_output.clone();
             move |o| {
                 captured_output.lock().unwrap().push(o);
+                async { Ok(()) }
             }
         };
         let msg = "test";
@@ -296,7 +303,7 @@ mod tests {
         let executable = "ls";
         let args = ["-la"];
         let directory = PathBuf::from_str("/tmp").unwrap();
-        let task = make_task(executable, &args, &directory, |_| {}).unwrap();
+        let task = make_task(executable, &args, &directory, noop_callback()).unwrap();
         let info = task.info();
         assert_eq!(&info.executable, executable);
         assert_eq!(info.args, args);
@@ -311,6 +318,7 @@ mod tests {
             let captured_output = captured_output.clone();
             move |o| {
                 captured_output.lock().unwrap().push(o);
+                async { Ok(()) }
             }
         };
         let task = make_task("cat", &[], current_dir().unwrap(), on_output).unwrap();
@@ -327,7 +335,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_to_stdin_error() {
-        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
         task.wait().await;
         let err = task
             .write_to_stdin("some input".as_bytes())
@@ -339,9 +347,9 @@ mod tests {
 
     #[tokio::test]
     async fn on_output_after_exit_returns_error() {
-        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
         task.wait().await;
-        let err = task.on_output(|_| {}).unwrap_err();
+        let err = task.on_output(noop_callback()).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
         task.join().await;
     }
@@ -352,7 +360,7 @@ mod tests {
             "echo",
             &["-n", "line1\nline2"],
             current_dir().unwrap(),
-            |_| {},
+            noop_callback(),
         )
         .unwrap();
         task.join().await;
@@ -370,14 +378,14 @@ mod tests {
 
     #[tokio::test]
     async fn output_buffer_capacity() {
-        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
         assert_eq!(task.output_buffer().capacity(), OUTPUT_BUFFER_CAPACITY);
         task.join().await;
     }
 
     #[tokio::test]
     async fn send_signal_success() {
-        let task = make_task("cat", &[], current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("cat", &[], current_dir().unwrap(), noop_callback()).unwrap();
         tokio::task::yield_now().await;
         task.send_signal(rustix::process::Signal::TERM).unwrap();
         let finished_task = task.join().await;
@@ -389,7 +397,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_signal_error() {
-        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
         task.wait().await;
         let err = task.send_signal(rustix::process::Signal::TERM).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
@@ -401,7 +409,7 @@ mod tests {
         let executable = "ls";
         let args = ["-la"];
         let dir = current_dir().unwrap().join("../");
-        let task = make_task(executable, &args, &dir, |_| {}).unwrap();
+        let task = make_task(executable, &args, &dir, noop_callback()).unwrap();
         let finished_task = task.join().await;
         assert_eq!(finished_task.info.executable, executable);
         assert_eq!(finished_task.info.args, &args);
@@ -412,13 +420,13 @@ mod tests {
     #[tokio::test]
     #[should_panic]
     async fn panic_if_dropped_without_join() {
-        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
         task.wait().await;
     }
 
     #[tokio::test]
     async fn calling_join_twice() {
-        let task = make_task("ls", &[], current_dir().unwrap(), |_| {}).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
         task.join().await;
         task.join().await;
     }

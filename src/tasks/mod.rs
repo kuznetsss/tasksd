@@ -10,3 +10,5 @@ pub mod task_builder;
 pub mod task_error;
 pub mod task_manager;
 mod tracker;
+
+pub use events::TaskCallbackError;

@@ -38,31 +38,36 @@ pub struct TaskManager {
 pub struct TaskCreationHandle<'a> {
     manager: &'a Arc<TaskManager>,
     builder: TaskBuilder,
+    task_id: TaskId,
 }
 
 impl<'a> TaskCreationHandle<'a> {
-    pub fn args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn args(&mut self, args: impl IntoIterator<Item = impl Into<String>>) -> &mut Self {
         self.builder.args(args);
         self
     }
 
-    pub fn working_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+    pub fn working_dir(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
         self.builder.working_dir(dir);
         self
     }
 
-    pub fn on_output(mut self, cb: impl TaskOutputCallback) -> Self {
+    pub fn on_output(&mut self, cb: impl TaskOutputCallback) -> &mut Self {
         self.builder.on_output(cb);
         self
     }
 
-    pub fn on_exit(mut self, cb: impl TaskExitCallback) -> Self {
+    pub fn on_exit(&mut self, cb: impl TaskExitCallback) -> &mut Self {
         self.builder.on_exit(cb);
         self
     }
 
-    pub fn submit(self) -> Result<TaskId, TaskError> {
-        self.manager.submit(self.builder)
+    pub fn submit(self) -> Result<(), TaskError> {
+        self.manager.submit(self.builder, self.task_id)
+    }
+
+    pub fn task_id(&self) -> TaskId {
+        self.task_id
     }
 }
 
@@ -80,28 +85,28 @@ impl TaskManager {
     }
 
     pub fn create_task(self: &Arc<Self>, executable: impl Into<String>) -> TaskCreationHandle<'_> {
+        let task_id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         TaskCreationHandle {
             manager: self,
             builder: TaskBuilder::new(executable.into(), self.task_output_buffer_capacity),
+            task_id: TaskId(task_id),
         }
     }
 
-    fn submit(self: &Arc<Self>, builder: TaskBuilder) -> Result<TaskId, TaskError> {
+    fn submit(self: &Arc<Self>, builder: TaskBuilder, task_id: TaskId) -> Result<(), TaskError> {
         let lock = self.completion_coroutines.lock().unwrap();
         let completion_coroutines = lock.as_ref().ok_or(TaskError::AlreadyExited)?;
 
         let task = builder.start_task()?;
         let task = Arc::new(task);
-        let task_id = self
-            .next_id
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let task_id = TaskId(task_id);
         self.spawn_task_completion(completion_coroutines, task.clone(), task_id);
         self.tasks
             .write()
             .expect("RwLock is poisoned")
             .insert(task_id, task);
-        Ok(task_id)
+        Ok(())
     }
 
     pub fn get_task(&self, id: TaskId) -> Option<Arc<Task>> {
@@ -109,15 +114,11 @@ impl TaskManager {
             .read()
             .expect("RwLock is poisoned")
             .get(&id)
-            .map(|t| t.clone())
+            .cloned()
     }
 
     pub fn get_finished_task(&self, id: TaskId) -> Option<Arc<FinishedTask>> {
-        self.finished_tasks
-            .read()
-            .unwrap()
-            .get(id)
-            .map(|f| f.clone())
+        self.finished_tasks.read().unwrap().get(id)
     }
 
     pub async fn join(&self) {
@@ -190,17 +191,15 @@ mod tests {
     async fn create_task_output_callback_catches_output() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let captured_output = Arc::new(Mutex::new(Vec::new()));
-        let _ = tm
-            .create_task("echo")
-            .args(["-n", "hello\nworld"])
-            .on_output({
-                let captured_output = captured_output.clone();
-                move |o| {
-                    captured_output.lock().unwrap().push(o);
-                }
-            })
-            .submit()
-            .unwrap();
+        let mut builder = tm.create_task("echo");
+        builder.args(["-n", "hello\nworld"]).on_output({
+            let captured_output = captured_output.clone();
+            move |o| {
+                captured_output.lock().unwrap().push(o);
+                async { Ok(()) }
+            }
+        });
+        builder.submit().unwrap();
         tm.join().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 2);
@@ -212,16 +211,15 @@ mod tests {
     async fn create_task_exit_callback_catches_exit_code() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let captured_output = Arc::new(Mutex::new(None));
-        tm.create_task("sh")
-            .args(["-c", "exit 123"])
-            .on_exit({
-                let captured_output = captured_output.clone();
-                move |e| {
-                    *captured_output.lock().unwrap() = Some(e);
-                }
-            })
-            .submit()
-            .unwrap();
+        let mut builder = tm.create_task("sh");
+        builder.args(["-c", "exit 123"]).on_exit({
+            let captured_output = captured_output.clone();
+            move |e| {
+                *captured_output.lock().unwrap() = Some(e);
+                async {}
+            }
+        });
+        builder.submit().unwrap();
         tm.join().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.unwrap().code().unwrap(), 123);
@@ -240,7 +238,9 @@ mod tests {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let mut task_ids = HashSet::new();
         for _ in 0..3 {
-            let id = tm.create_task("ls").submit().unwrap();
+            let builder = tm.create_task("ls");
+            let id = builder.task_id();
+            builder.submit().unwrap();
             assert!(task_ids.insert(id));
         }
         tokio::time::timeout(Duration::from_secs(1), tm.join())
@@ -255,7 +255,9 @@ mod tests {
     async fn get_methods_return_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let executable = "cat";
-        let task_id = tm.create_task(executable).submit().unwrap();
+        let builder = tm.create_task(executable);
+        let task_id = builder.task_id();
+        builder.submit().unwrap();
 
         let task = tm.get_task(task_id).unwrap();
         assert!(tm.get_finished_task(task_id).is_none());
@@ -301,7 +303,9 @@ mod tests {
     #[tokio::test]
     async fn output_buffer_capacity_passed_to_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let task_id = tm.create_task("cat").submit().unwrap();
+        let builder = tm.create_task("cat");
+        let task_id = builder.task_id();
+        builder.submit().unwrap();
         let task = tm.get_task(task_id).unwrap();
         assert_eq!(task.output_buffer().capacity(), TASK_OUTPUT_BUFFER_CAPACITY);
         task.send_signal(Signal::TERM).unwrap();

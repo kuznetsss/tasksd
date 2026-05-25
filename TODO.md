@@ -49,11 +49,16 @@
 - [~] application
 - [~] session
 - [ ] handler:
-    - [ ] task builder methods should consume and return &mut self
+    - [x] task builder methods should consume and return &mut self
 
 ## Improvements
 - [ ] Create transport::error and replace anyhow with it to be able to distinguish EOF from other errors
 - [ ] Add pub use in mod.rs files to avoid long namespaces
+- [ ] Add tests:
+    - [ ] signal deserializing
+    - [ ] subscribe to output is true by default
+- [ ] Create module app and put application, session and handler there
+- [ ] Add line number to output notification
 
 ## More API
 

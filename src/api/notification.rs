@@ -23,16 +23,16 @@ pub enum NotificationBody {
 
 #[derive(Serialize)]
 pub struct TaskOutputParams {
-    task_id: TaskId,
-    line_number: usize,
-    line: Arc<String>,
+    pub task_id: TaskId,
+    // pub line_number: usize, // TODO: add line number when tasks are ready for that
+    pub line: Arc<String>,
 }
 
 #[derive(Serialize)]
 pub struct TaskExitParams {
-    task_id: TaskId,
-    exit_code: Option<i32>,
-    exited_by_signal: Option<i32>,
+    pub task_id: TaskId,
+    pub exit_code: Option<i32>,
+    pub exited_by_signal: Option<i32>,
 }
 
 #[cfg(test)]
@@ -42,11 +42,11 @@ mod tests {
     #[test]
     fn task_output_serialization() {
         let task_id = TaskId(123);
-        let line_number = 456;
+        //let line_number = 456;
         let line = "some_line";
         let body = NotificationBody::TaskOutput(TaskOutputParams {
             task_id,
-            line_number,
+            //line_number,
             line: Arc::new(line.to_string()),
         });
         let notification = Notification {
@@ -57,7 +57,7 @@ mod tests {
         assert_eq!(
             json_str,
             format!(
-                r#"{{"jsonrpc":"2.0","method":"task.output","params":{{"task_id":{task_id},"line_number":{line_number},"line":"{line}"}}}}"#
+                r#"{{"jsonrpc":"2.0","method":"task.output","params":{{"task_id":{task_id},"line":"{line}"}}}}"#
             )
         )
     }

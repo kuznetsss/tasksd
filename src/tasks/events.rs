@@ -12,11 +12,31 @@ use crate::tasks::{
     tracker::{PanicHandler, WrappedTaskTracker},
 };
 
-pub trait TaskOutputCallback: FnMut(Arc<String>) + 'static + Send {}
-impl<F> TaskOutputCallback for F where F: FnMut(Arc<String>) + 'static + Send {}
+pub trait TaskOutputCallback: (FnMut(Arc<String>) -> Self::Future) + 'static + Send {
+    type Future: Future<Output = Result<(), TaskCallbackError>> + Send;
+}
+impl<T, F> TaskOutputCallback for T
+where
+    T: (FnMut(Arc<String>) -> F) + 'static + Send,
+    F: Future<Output = Result<(), TaskCallbackError>> + Send,
+{
+    type Future = F;
+}
 
-pub trait TaskExitCallback: FnOnce(ExitStatus) + 'static + Send {}
-impl<F> TaskExitCallback for F where F: FnOnce(ExitStatus) + 'static + Send {}
+pub trait TaskExitCallback: (FnOnce(ExitStatus) -> Self::Future) + 'static + Send {
+    type Future: Future<Output = ()> + Send;
+}
+impl<T, F> TaskExitCallback for T
+where
+    T: (FnOnce(ExitStatus) -> F) + 'static + Send,
+    F: Future<Output = ()> + Send,
+{
+    type Future = F;
+}
+
+pub enum TaskCallbackError {
+    ShouldExit,
+}
 
 #[derive(Debug)]
 pub(in crate::tasks) struct TaskEvents {
@@ -44,13 +64,17 @@ impl TaskEvents {
         let mut stdout_rx = self.stdout_rx.resubscribe();
         self.related_tasks.spawn(async move {
             loop {
-                match stdout_rx.recv().await {
+                let line = match stdout_rx.recv().await {
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("Stdout receiver is too slow. Have to skip {n} lines");
+                        continue;
                     }
                     Err(_) => break,
-                    Ok(line) => f(line),
+                    Ok(line) => line,
                 };
+                if f(line).await.is_err() {
+                    break;
+                }
             }
         })
     }
@@ -65,7 +89,8 @@ impl TaskEvents {
         let mut on_exit_rx = self.on_exit_rx.clone();
         self.related_tasks.spawn(async move {
             on_exit_rx.changed().await.expect("on_exit_rx.await");
-            f(on_exit_rx.borrow_and_update().unwrap());
+            let signal = on_exit_rx.borrow_and_update().unwrap();
+            f(signal).await;
         })
     }
 
@@ -92,7 +117,7 @@ mod tests {
     use std::{
         os::unix::process::ExitStatusExt,
         pin::pin,
-        sync::Mutex,
+        sync::{Mutex, atomic::AtomicUsize},
         task::{Context, Poll, Waker},
         time::Duration,
     };
@@ -124,6 +149,7 @@ mod tests {
                     move |o| {
                         captured_output.lock().unwrap().push(o);
                         got_output.notify_waiters();
+                        async { Ok(()) }
                     }
                 })
                 .unwrap();
@@ -147,7 +173,7 @@ mod tests {
             .unwrap();
         test_data
             .events
-            .on_output(|_| panic!("The callback should never be called"))
+            .on_output(|_| async { panic!("The callback should never be called") })
             .unwrap_err();
         drop(test_data.senders);
         test_data.events.join_all().await;
@@ -241,6 +267,7 @@ mod tests {
                 move |o| {
                     captured_output2.lock().unwrap().push(o);
                     got_output2.notify_waiters();
+                    async { Ok(()) }
                 }
             })
             .unwrap();
@@ -295,6 +322,7 @@ mod tests {
                 let captured_output = captured_output.clone();
                 move |o| {
                     captured_output.lock().unwrap().push(o);
+                    async { Ok(()) }
                 }
             })
             .unwrap();
@@ -310,6 +338,32 @@ mod tests {
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 1);
         assert_eq!(*captured_output[0], output[1]);
+    }
+
+    #[tokio::test]
+    async fn on_output_subscriber_is_unsubscribed_after_returning_error() {
+        let senders = TaskSenders::new();
+        let events = TaskEvents::new(&senders);
+        let call_count = Arc::new(AtomicUsize::new(0));
+        events
+            .on_output({
+                let call_count = call_count.clone();
+                move |_| {
+                    call_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    async { Err(TaskCallbackError::ShouldExit) }
+                }
+            })
+            .unwrap();
+        for _ in 0..10 {
+            senders
+                .stdout_tx
+                .send("some line".to_string().into())
+                .unwrap();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(1), events.join_all())
+            .await
+            .unwrap();
+        assert_eq!(call_count.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     struct OnExitTestData {
@@ -330,6 +384,7 @@ mod tests {
                     let captured_exit_codes = captured_exit_codes.clone();
                     move |e| {
                         captured_exit_codes.lock().unwrap().push(e);
+                        async {}
                     }
                 })
                 .unwrap();
@@ -359,7 +414,7 @@ mod tests {
             .send(Some(ExitStatus::from_raw(123)))
             .unwrap();
         events
-            .on_exit(|_| panic!("The callback should never be called"))
+            .on_exit(|_| async { panic!("The callback should never be called") })
             .unwrap_err();
         drop(senders);
         events.join_all().await;
@@ -398,6 +453,7 @@ mod tests {
                 let captured_exit_codes2 = captured_exit_codes2.clone();
                 move |e| {
                     captured_exit_codes2.lock().unwrap().push(e);
+                    async {}
                 }
             })
             .unwrap();

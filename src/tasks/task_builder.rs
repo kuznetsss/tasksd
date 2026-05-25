@@ -149,6 +149,7 @@ mod tests {
             let captured_output = captured_output.clone();
             move |o| {
                 captured_output.lock().unwrap().push(o);
+                async { Ok(()) }
             }
         });
         let output_lines = ["some output", "other output"];
@@ -179,6 +180,7 @@ mod tests {
             let captured_exit_code = captured_exit_code.clone();
             move |e| {
                 *captured_exit_code.lock().unwrap() = Some(e);
+                async {}
             }
         });
         let exit_code = ExitStatus::from_raw(123);

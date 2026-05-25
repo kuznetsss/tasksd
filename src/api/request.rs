@@ -1,4 +1,5 @@
-use serde::Deserialize;
+use rustix::process::Signal;
+use serde::{Deserialize, Deserializer};
 
 use crate::api::common::{JsonRpcVersion, RequestId};
 
@@ -45,7 +46,24 @@ impl TaskStartParams {
 #[derive(Deserialize)]
 pub struct TaskSendSignalParams {
     pub task_id: usize,
-    pub signal: u8,
+
+    #[serde(deserialize_with = "deserialize_signal")]
+    pub signal: Signal,
+}
+
+fn deserialize_signal<'de, D>(d: D) -> Result<Signal, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+    let n = i32::deserialize(d)?;
+    match Signal::from_named_raw(n) {
+        Some(s) => Ok(s),
+        None => Err(D::Error::invalid_value(
+            serde::de::Unexpected::Signed(n as i64),
+            &"a valid signal number",
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -90,6 +108,6 @@ mod tests {
             panic!("Invalid body variant")
         };
         assert_eq!(body.task_id, 456);
-        assert_eq!(body.signal, 9);
+        assert_eq!(body.signal.as_raw(), 9);
     }
 }
