@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::{api::request::Request, tasks::task_manager::TaskManager, transport};
+use crate::{api::request::Request, handler::Handler, tasks::task_manager::TaskManager, transport};
 
 pub struct Session {
     cancellation_token: CancellationToken,
@@ -44,9 +44,15 @@ impl Session {
                 }
             }
         }
+        self.cancellation_token.cancel();
     }
 
-    fn handle_request(&self, _request: Request) {
-        tokio::spawn(async move { todo!() });
+    fn handle_request(&self, request: Request) {
+        let connection_writer = self.connection.writer();
+        let task_manager = self.task_manager.clone();
+        tokio::spawn(async move {
+            let handler = Handler::new(connection_writer, task_manager);
+            handler.handle_request(request).await;
+        });
     }
 }

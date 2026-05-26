@@ -3,7 +3,7 @@ use tracing::info;
 use crate::{
     api::{
         common::JsonRpcVersion,
-        notification::{Notification, NotificationBody, TaskOutputParams},
+        notification::{Notification, NotificationBody, TaskExitParams, TaskOutputParams},
         request::{Request, RequestBody},
         response::{Response, ResponseBody, ResponseResult},
     },
@@ -15,7 +15,7 @@ use crate::{
     transport::connection::ConnectionWriter,
 };
 
-use std::sync::Arc;
+use std::{os::unix::process::ExitStatusExt, sync::Arc};
 
 pub struct Handler {
     connection_writer: ConnectionWriter,
@@ -79,7 +79,25 @@ impl Handler {
                         }
                     });
                 }
-                // TODO: subscribe to exit
+                task_builder.on_exit({
+                    let connection_writer = self.connection_writer.clone();
+                    move |s| {
+                        let body = NotificationBody::TaskExit(TaskExitParams {
+                            task_id,
+                            exit_code: s.code(),
+                            signal: s.signal(),
+                        });
+                        let notification = Notification {
+                            jsonrpc: JsonRpcVersion {},
+                            body,
+                        };
+                        let notification_str = serde_json::to_string(&notification)
+                            .expect("Serialization shouldn't fail");
+                        async move {
+                            let _ = connection_writer.write(&notification_str).await;
+                        }
+                    }
+                });
                 task_builder
                     .submit()
                     .map(|_| ResponseResult::StartTaskResult { task_id })

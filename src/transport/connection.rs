@@ -195,7 +195,7 @@ mod tests {
             .build();
         let connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
         let writer = connection.writer();
-        writer.write(&msg).await.unwrap();
+        writer.write(msg).await.unwrap();
     }
 
     #[tokio::test]

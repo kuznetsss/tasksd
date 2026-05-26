@@ -43,7 +43,6 @@ impl Application {
                     continue;
                 }
             };
-            // TODO: create session here
             tokio::spawn({
                 let cancellation_token = self.root_cancellation.child_token();
                 let task_manager = self.task_manager.clone();
@@ -77,7 +76,7 @@ impl Drop for Application {
         assert!(
             self.shutdown_complete
                 .load(std::sync::atomic::Ordering::Relaxed),
-            "Appication is dropped without calling shutdown()"
+            "Application is dropped without calling shutdown()"
         );
     }
 }

@@ -45,10 +45,10 @@
 - [x] task exit notification
 - [x] figure out who should own cancellation_tokens
 - [x] maybe optimise reader's buffer because serde_json::parse consumes a reference
-- [~] error codes
-- [~] application
-- [~] session
-- [ ] handler:
+- [x] error codes
+- [x] application
+- [x] session
+- [x] handler:
     - [x] task builder methods should consume and return &mut self
 
 ## Improvements
@@ -59,6 +59,17 @@
     - [ ] subscribe to output is true by default
 - [ ] Create module app and put application, session and handler there
 - [ ] Add line number to output notification
+- [ ] Setup tracing_subscriber
+- [ ] Add more logging
+- [ ] Shutdown all the running tasks on shutdown
+- [ ] Subscription control (unsubscribe)
+- [ ] Refactor handler and make creating response and notification more convenient
+- [ ] Better test coverage
+- [ ] Readme
+- [ ] License
+- [ ] Documentation
+
+## Neovim plugin
 
 ## More API
 

@@ -32,7 +32,7 @@ pub struct TaskOutputParams {
 pub struct TaskExitParams {
     pub task_id: TaskId,
     pub exit_code: Option<i32>,
-    pub exited_by_signal: Option<i32>,
+    pub signal: Option<i32>,
 }
 
 #[cfg(test)]
@@ -69,7 +69,7 @@ mod tests {
         let body = NotificationBody::TaskExit(TaskExitParams {
             task_id,
             exit_code: Some(exit_code),
-            exited_by_signal: None,
+            signal: None,
         });
         let notification = Notification {
             jsonrpc: JsonRpcVersion {},
@@ -79,7 +79,7 @@ mod tests {
         assert_eq!(
             json_str,
             format!(
-                r#"{{"jsonrpc":"2.0","method":"task.exit","params":{{"task_id":{task_id},"exit_code":{exit_code},"exited_by_signal":null}}}}"#
+                r#"{{"jsonrpc":"2.0","method":"task.exit","params":{{"task_id":{task_id},"exit_code":{exit_code},"signal":null}}}}"#
             )
         )
     }

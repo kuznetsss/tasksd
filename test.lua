@@ -1,6 +1,6 @@
 local dispatcher = {
     notification = function(method, params)
-        vim.print("Got notification: " .. method)
+        vim.print("Got notification: " .. method .. " " .. vim.inspect(params))
     end,
     server_request = function(method, params)
         vim.print("Got server_request: " .. method)
@@ -13,18 +13,9 @@ local dispatcher = {
     end,
 }
 
-local client = vim.lsp.rpc.connect("/tmp/tasksd_socket")(dispatcher)
+local client = vim.lsp.rpc.connect("/tmp/tasksd_test")(dispatcher)
 
-client.request("bbb", {}, function(err, result)
-    vim.print("callback")
-    if err then
-        vim.print("Error: " .. vim.inspect(err))
-    else
-        vim.print("Result: " .. vim.inspect(result))
-    end
-end)
-
-client.request("a", {}, function(err, result)
+client.request("task.start", { executable = "ls" }, function(err, result)
     vim.print("callback")
     if err then
         vim.print("Error: " .. vim.inspect(err))
