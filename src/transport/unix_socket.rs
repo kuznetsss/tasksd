@@ -100,7 +100,7 @@ mod tests {
             let server = ctx.server;
             async move {
                 let (mut reader, mut writer) = server.wait_for_connection().await.unwrap();
-                writer.write(msg_to_write.as_bytes()).await.unwrap();
+                writer.write_all(msg_to_write.as_bytes()).await.unwrap();
                 drop(writer);
                 let mut msg = String::new();
                 reader.read_to_string(&mut msg).await.unwrap();

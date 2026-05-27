@@ -36,7 +36,8 @@ impl Handler {
             Err(e) => e.into(),
         };
         let response = Response {
-            id: request.id,
+            jsonrpc: JsonRpcVersion {},
+            id: Some(request.id),
             body: response_body,
         };
         let response_str = serde_json::to_string(&response)

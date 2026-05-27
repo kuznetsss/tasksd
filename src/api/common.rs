@@ -25,9 +25,9 @@ impl TryFrom<String> for JsonRpcVersion {
     }
 }
 
-impl Into<&'static str> for JsonRpcVersion {
-    fn into(self) -> &'static str {
-        self.value()
+impl From<JsonRpcVersion> for &'static str {
+    fn from(val: JsonRpcVersion) -> Self {
+        val.value()
     }
 }
 

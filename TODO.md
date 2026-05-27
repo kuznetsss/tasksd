@@ -52,7 +52,8 @@
     - [x] task builder methods should consume and return &mut self
 
 ## Improvements
-- [ ] Create transport::error and replace anyhow with it to be able to distinguish EOF from other errors
+- [x] Create transport::error and replace anyhow with it to be able to distinguish EOF from other errors
+- [ ] Support standard json rpc errors
 - [ ] Add pub use in mod.rs files to avoid long namespaces
 - [ ] Add tests:
     - [ ] signal deserializing
@@ -67,6 +68,7 @@
 - [ ] Better test coverage
 - [ ] Readme
 - [ ] License
+- [ ] CI
 - [ ] Documentation
 
 ## Neovim plugin

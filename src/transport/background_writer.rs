@@ -1,4 +1,3 @@
-use anyhow::Result;
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt},
     sync::mpsc::{Sender, channel},
@@ -6,6 +5,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tracing::error;
+
+use crate::transport::error::TransportError;
 
 pub trait WriterImpl: AsyncWrite + Send + Unpin + 'static {}
 
@@ -25,8 +26,11 @@ pub(in crate::transport) struct WriteHandle {
 }
 
 impl WriteHandle {
-    pub(in crate::transport) async fn write(&self, message: impl Into<String>) -> Result<()> {
-        self.inner.send(message.into()).await.map_err(Into::into)
+    pub(in crate::transport) async fn write(
+        &self,
+        message: impl Into<String>,
+    ) -> Result<(), TransportError> {
+        Ok(self.inner.send(message.into()).await?)
     }
 }
 
@@ -147,6 +151,7 @@ mod tests {
         assert!(ctx.token.is_cancelled());
         tokio::task::yield_now().await;
         let err = write_handle.write("some message").await.unwrap_err();
+        assert!(matches!(err, TransportError::WriteError(_)));
         assert!(dbg!(err.to_string()).contains("closed"));
     }
 }

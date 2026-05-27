@@ -8,6 +8,7 @@ pub use connection::Connection;
 
 mod background_writer;
 pub mod connection;
+pub mod error;
 mod reader;
 mod unix_socket;
 

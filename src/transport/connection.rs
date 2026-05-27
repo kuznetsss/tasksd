@@ -1,9 +1,9 @@
-use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
 use crate::transport::{
     WriterImpl,
     background_writer::{BackgroundWriter, WriteHandle},
+    error::TransportError,
     reader::{Reader, ReaderImpl},
 };
 
@@ -31,17 +31,23 @@ impl Connection {
         }
     }
 
-    pub async fn read_message(&mut self) -> Result<&str> {
+    pub async fn read_message(&mut self) -> Result<&str, TransportError> {
         let header = self.reader.read_line().await?;
         if !header.starts_with(CONTENT_LENGTH_HEADER) || !header.ends_with(END_LINE_SYMBOLS) {
-            anyhow::bail!("Got unexpected symbols: {header}");
+            return Err(TransportError::HeaderParseError(format!(
+                "expected header, got '{header}'"
+            )));
         }
         let start = CONTENT_LENGTH_HEADER.len();
         let end = header.len() - END_LINE_SYMBOLS.len();
-        let content_length: usize = header[start..end].parse()?;
+        let content_length: usize = header[start..end].parse().map_err(|e| {
+            TransportError::HeaderParseError(format!("error parsing content length '{e}'"))
+        })?;
         let empty_line = self.reader.read_line().await?;
         if empty_line != END_LINE_SYMBOLS {
-            anyhow::bail!("Expected a new line, got: {empty_line}");
+            return Err(TransportError::UnexpectedSymbols(format!(
+                "Expected a new line, got: {empty_line}"
+            )));
         }
         self.reader.read_some(content_length).await
     }
@@ -59,17 +65,18 @@ pub struct ConnectionWriter {
 }
 
 impl ConnectionWriter {
-    pub async fn write(&self, s: &str) -> Result<()> {
-        const MESSAGE_LEN_DIGITS_NUM: usize = 6;
+    pub async fn write(&self, s: &str) -> Result<(), TransportError> {
+        const LEN_DIGITS_HINT: usize = 6;
         const PREFIX_LEN: usize =
-            CONTENT_LENGTH_HEADER.len() + MESSAGE_LEN_DIGITS_NUM + END_LINE_SYMBOLS.len() * 2;
+            CONTENT_LENGTH_HEADER.len() + LEN_DIGITS_HINT + END_LINE_SYMBOLS.len() * 2;
         let mut message = String::with_capacity(PREFIX_LEN + s.len());
         use std::fmt::Write;
         write!(
             &mut message,
             "{CONTENT_LENGTH_HEADER}{}{END_LINE_SYMBOLS}{END_LINE_SYMBOLS}{s}",
             s.len()
-        )?;
+        )
+        .expect("formatting shouldn't fail");
         self.inner.write(message).await
     }
 }
@@ -80,37 +87,37 @@ mod tests {
     use tokio_test::io::Builder;
 
     macro_rules! read_message_error_test {
-        ($test_name:ident, [$($m:expr),+] , $e:expr) => {
+        ($test_name:ident, [$($mocked_value:expr),+] , $error_type:pat) => {
             #[tokio::test]
             async fn $test_name() {
                 let mut reader_mock = Builder::new();
                 $(
-                    reader_mock.read($m.as_bytes());
+                    reader_mock.read($mocked_value.as_bytes());
                 )+
                 let reader_mock = reader_mock.build();
                 let writer_mock = Builder::new().build();
                 let mut connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
                 let err = connection.read_message().await.unwrap_err();
-                assert!(dbg!(err.to_string()).contains($e));
+                assert!(matches!(err, $error_type));
             }
         };
     }
 
-    read_message_error_test!(read_message_early_eof, ["test"], "EOF");
+    read_message_error_test!(read_message_early_eof, ["test"], TransportError::Eof);
     read_message_error_test!(
         read_message_not_a_header,
         ["test\r\n"],
-        "unexpected symbols"
+        TransportError::HeaderParseError(_)
     );
     read_message_error_test!(
         read_message_no_endline_symbol,
         [format!("{CONTENT_LENGTH_HEADER}123\n")],
-        "unexpected symbols"
+        TransportError::HeaderParseError(_)
     );
     read_message_error_test!(
         read_message_length_is_not_a_number,
         [format!("{CONTENT_LENGTH_HEADER}123abc{END_LINE_SYMBOLS}")],
-        "invalid digit"
+        TransportError::HeaderParseError(_)
     );
     read_message_error_test!(
         read_message_no_empty_line,
@@ -118,7 +125,7 @@ mod tests {
             format!("{CONTENT_LENGTH_HEADER}123{END_LINE_SYMBOLS}"),
             format!("not_an_empty_line{END_LINE_SYMBOLS}")
         ],
-        "Expected a new line"
+        TransportError::UnexpectedSymbols(_)
     );
     read_message_error_test!(
         read_message_too_short_content,
@@ -127,7 +134,7 @@ mod tests {
             END_LINE_SYMBOLS,
             "short_content"
         ],
-        "eof"
+        TransportError::Eof
     );
 
     #[tokio::test]
@@ -177,6 +184,7 @@ mod tests {
         drop(connection);
         tokio::task::yield_now().await;
         let err = writer.write("some message").await.unwrap_err();
+        assert!(matches!(err, TransportError::WriteError(_)));
         assert!(dbg!(err.to_string()).contains("closed"));
     }
 
@@ -208,6 +216,7 @@ mod tests {
         token.cancel();
         tokio::task::yield_now().await;
         let err = writer.write("some message").await.unwrap_err();
+        assert!(matches!(err, TransportError::WriteError(_)));
         assert!(dbg!(err.to_string()).contains("closed"));
     }
 }

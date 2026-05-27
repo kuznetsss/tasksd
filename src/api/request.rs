@@ -13,8 +13,8 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn parse(s: &str) -> anyhow::Result<Self> {
-        serde_json::from_str(s).map_err(Into::into)
+    pub fn parse(s: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(s)
     }
 }
 

@@ -1,7 +1,8 @@
 use std::marker::Send;
 
-use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
+
+use crate::transport::error::TransportError;
 
 pub(in crate::transport) struct Reader<I> {
     inner: BufReader<I>,
@@ -23,20 +24,23 @@ where
         }
     }
 
-    pub(in crate::transport) async fn read_line(&mut self) -> Result<&str> {
+    pub(in crate::transport) async fn read_line(&mut self) -> Result<&str, TransportError> {
         const NEW_LINE_SYMBOL: u8 = b'\n';
         self.buffer.clear();
         self.inner
             .read_until(NEW_LINE_SYMBOL, &mut self.buffer)
             .await?;
         if !self.buffer.ends_with(&[NEW_LINE_SYMBOL]) {
-            Err(anyhow::anyhow!("EOF"))
+            Err(TransportError::Eof)
         } else {
             Ok(str::from_utf8(&self.buffer)?)
         }
     }
 
-    pub(in crate::transport) async fn read_some(&mut self, n: usize) -> Result<&str> {
+    pub(in crate::transport) async fn read_some(
+        &mut self,
+        n: usize,
+    ) -> Result<&str, TransportError> {
         self.buffer.resize(n, 0);
         self.inner.read_exact(self.buffer.as_mut_slice()).await?;
         Ok(str::from_utf8(&self.buffer)?)
@@ -62,7 +66,7 @@ mod tests {
         let mock = Builder::new().build();
         let mut reader = Reader::new(mock);
         let err = reader.read_line().await.unwrap_err();
-        assert!(err.to_string().contains("EOF"));
+        assert!(matches!(err, TransportError::Eof));
     }
 
     #[tokio::test]
@@ -70,7 +74,7 @@ mod tests {
         let mock = Builder::new().read("test".as_bytes()).build();
         let mut reader = Reader::new(mock);
         let err = reader.read_line().await.unwrap_err();
-        assert!(err.to_string().contains("EOF"));
+        assert!(matches!(err, TransportError::Eof));
     }
 
     #[tokio::test]
@@ -81,7 +85,9 @@ mod tests {
             .build();
         let mut reader = Reader::new(mock);
         let err = reader.read_line().await.unwrap_err();
-        let err = err.downcast::<std::io::Error>().unwrap();
+        let TransportError::IoError(err) = err else {
+            panic!("Unexpected error type")
+        };
         assert_eq!(err.kind(), ErrorKind::ConnectionRefused);
     }
 
@@ -99,7 +105,7 @@ mod tests {
         let mock = Builder::new().read(msg.as_bytes()).build();
         let mut reader = Reader::new(mock);
         let err = reader.read_some(msg.len() + 1).await.unwrap_err();
-        assert!(err.to_string().contains("eof"));
+        assert!(matches!(err, TransportError::Eof));
     }
 
     #[tokio::test]
@@ -110,7 +116,9 @@ mod tests {
             .build();
         let mut reader = Reader::new(mock);
         let err = reader.read_some(123).await.unwrap_err();
-        let err = err.downcast::<std::io::Error>().unwrap();
+        let TransportError::IoError(err) = err else {
+            panic!("Unexpected error type")
+        };
         assert_eq!(err.kind(), ErrorKind::ConnectionRefused);
     }
 }

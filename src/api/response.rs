@@ -1,13 +1,14 @@
 use serde::Serialize;
 
 use crate::{
-    api::common::RequestId,
+    api::common::{JsonRpcVersion, RequestId},
     tasks::{task_error::TaskError, task_manager::TaskId},
 };
 
 #[derive(Debug, Serialize)]
 pub struct Response {
-    pub id: RequestId,
+    pub jsonrpc: JsonRpcVersion,
+    pub id: Option<RequestId>,
 
     #[serde(flatten)]
     pub body: ResponseBody,
@@ -30,9 +31,19 @@ pub enum ResponseResult {
 
 #[derive(Debug, Serialize)]
 pub struct ResponseError {
-    code: usize,
+    code: i32,
     message: &'static str,
     data: Option<String>,
+}
+
+impl ResponseError {
+    pub fn invalid_request(details: String) -> Self {
+        Self {
+            code: -32600,
+            message: "Invalid Request",
+            data: Some(details),
+        }
+    }
 }
 
 impl From<TaskError> for ResponseBody {
