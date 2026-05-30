@@ -1,17 +1,13 @@
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
-    api::{
-        common::JsonRpcVersion,
-        request::Request,
-        response::{Response, ResponseBody, ResponseError},
-    },
+    api::{request::Request, response::Response},
     handler::Handler,
     tasks::task_manager::TaskManager,
-    transport::{self, connection::ConnectionWriter, error::TransportError},
+    transport::{self},
 };
 
 pub struct Session {
@@ -34,7 +30,6 @@ impl Session {
     }
 
     pub async fn run(mut self) {
-        let writer = self.connection.writer();
         while let Some(msg) = self
             .cancellation_token
             .run_until_cancelled(self.connection.read_message())
@@ -48,41 +43,29 @@ impl Session {
                 }
             };
             match Request::parse(msg) {
-                Ok(r) => self.handle_request(writer.clone(), r),
-                Err(e) => {
-                    if Self::handle_parse_error(writer.clone(), msg, e)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
+                Ok(r) => self.handle_request(r),
+                Err(e) => self.handle_parse_error(e),
             }
         }
         self.cancellation_token.cancel();
     }
 
-    fn handle_request(&self, connection_writer: ConnectionWriter, request: Request) {
+    fn handle_request(&self, request: Request) {
         let task_manager = self.task_manager.clone();
+        let connection_writer = self.connection.writer();
         tokio::spawn(async move {
             let handler = Handler::new(connection_writer, task_manager);
             handler.handle_request(request).await;
         });
     }
 
-    async fn handle_parse_error(
-        writer: ConnectionWriter,
-        msg: &str,
-        e: serde_json::Error,
-    ) -> Result<(), TransportError> {
-        info!("Error parsing request: '{msg}': {e}");
-        let response = Response {
-            jsonrpc: JsonRpcVersion {},
-            id: None,
-            body: ResponseBody::Error(ResponseError::invalid_request(e.to_string())),
-        };
-        let notification_str =
-            serde_json::to_string(&response).expect("Serialization shouldn't fail");
-        writer.write(&notification_str).await
+    fn handle_parse_error(&self, response: Response) {
+        let connection_writer = self.connection.writer();
+        tokio::spawn(async move {
+            let response = serde_json::to_string(&response).expect("Serialization shouldn't fail");
+            if let Err(e) = connection_writer.write(&response).await {
+                warn!("Error sending error response: {e}");
+            }
+        });
     }
 }

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::Serialize;
 
 use crate::{
@@ -37,11 +39,57 @@ pub struct ResponseError {
 }
 
 impl ResponseError {
-    pub fn invalid_request(details: String) -> Self {
+    pub const PARSE_ERROR_CODE: i32 = -32700;
+    pub const INVALID_REQUEST_CODE: i32 = -32600;
+    pub const METHOD_NOT_FOUND_CODE: i32 = -32601;
+    pub const INVALID_PARAMS_CODE: i32 = -32602;
+    pub const INTERNAL_ERROR_CODE: i32 = -32603;
+
+    pub fn parse_error(error: &impl fmt::Display) -> Self {
         Self {
-            code: -32600,
+            code: Self::PARSE_ERROR_CODE,
+            message: "Invalid JSON",
+            data: Some(format!("Error parsing request: {error}")),
+        }
+    }
+
+    pub fn invalid_request(request: &str, reason: &impl fmt::Display) -> Self {
+        Self {
+            code: Self::INVALID_REQUEST_CODE,
             message: "Invalid Request",
-            data: Some(details),
+            data: Some(format!("Request '{request}' is invalid: {reason}")),
+        }
+    }
+
+    pub fn method_not_found(method: &str) -> Self {
+        Self {
+            code: Self::METHOD_NOT_FOUND_CODE,
+            message: "Method not found",
+            data: Some(format!("No such method: '{method}'")),
+        }
+    }
+
+    pub fn invalid_params(method: &str, error: &impl fmt::Display) -> Self {
+        Self {
+            code: Self::INVALID_PARAMS_CODE,
+            message: "Invalid params",
+            data: Some(format!("Invalid params for method '{method}': {error}")),
+        }
+    }
+
+    pub fn internal_error(details: &impl fmt::Display) -> Self {
+        Self {
+            code: Self::INTERNAL_ERROR_CODE,
+            message: "Internal error",
+            data: Some(details.to_string()),
+        }
+    }
+
+    pub fn into_response(self, id: Option<RequestId>) -> Response {
+        Response {
+            jsonrpc: JsonRpcVersion {},
+            id,
+            body: ResponseBody::Error(self),
         }
     }
 }

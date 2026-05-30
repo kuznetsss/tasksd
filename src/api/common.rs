@@ -31,7 +31,7 @@ impl From<JsonRpcVersion> for &'static str {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Clone)]
 #[serde(untagged)]
 pub enum RequestId {
     String(String),

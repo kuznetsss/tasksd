@@ -53,19 +53,27 @@
 
 ## Improvements
 - [x] Create transport::error and replace anyhow with it to be able to distinguish EOF from other errors
-- [ ] Support standard json rpc errors
+- [x] Support standard json rpc errors
+    - -32700 - Parse error - Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.
+    - -32600 - Invalid Request - The JSON sent is not a valid Request object.
+    - -32601 - Method not found - The method does not exist / is not available.
+    - -32602 - Invalid params - Invalid method parameter(s).
+    - -32603 - Internal error - Internal JSON-RPC error.
+    - -32000 to -32099 - Server error - Reserved for implementation-defined server-errors.
+
 - [ ] Add pub use in mod.rs files to avoid long namespaces
-- [ ] Add tests:
-    - [ ] signal deserializing
-    - [ ] subscribe to output is true by default
+- [ ] Refactor handler and make creating response and notification more convenient
 - [ ] Create module app and put application, session and handler there
 - [ ] Add line number to output notification
 - [ ] Setup tracing_subscriber
 - [ ] Add more logging
 - [ ] Shutdown all the running tasks on shutdown
-- [ ] Subscription control (unsubscribe)
-- [ ] Refactor handler and make creating response and notification more convenient
 - [ ] Better test coverage
+- [ ] Add tests:
+    - [ ] signal deserializing
+    - [ ] subscribe to output is true by default
+- [ ] Subscription control (unsubscribe)
+- [ ] Integration tests
 - [ ] Readme
 - [ ] License
 - [ ] CI
