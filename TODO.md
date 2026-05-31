@@ -62,18 +62,19 @@
     - -32000 to -32099 - Server error - Reserved for implementation-defined server-errors.
 
 - [x] Add pub use in mod.rs files to avoid long namespaces
-- [ ] Create module app and put application, session and handler there
-- [ ] Refactor handler and make creating response and notification more convenient
+- [x] Create module app and put application, session and handler there
+- [x] Refactor handler and make creating response and notification more convenient
 - [ ] Add line number to output notification
-- [ ] Setup tracing_subscriber
-- [ ] Add more logging
 - [ ] Shutdown all the running tasks on shutdown
 - [ ] Subscription control (unsubscribe)
+- [ ] Setup tracing_subscriber
+- [ ] Add more logging
 - [ ] Add tests:
     - [ ] signal deserializing
     - [ ] subscribe to output is true by default
 - [ ] Better test coverage
 - [ ] Integration tests
+- [ ] Fix TODOs comments
 - [ ] Readme
 - [ ] License
 - [ ] CI

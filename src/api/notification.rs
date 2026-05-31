@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{os::unix::process::ExitStatusExt, process::ExitStatus, sync::Arc};
 
 use serde::Serialize;
 
 use crate::{api::common::JsonRpcVersion, tasks::TaskId};
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct Notification {
     pub jsonrpc: JsonRpcVersion,
 
@@ -12,7 +12,23 @@ pub struct Notification {
     pub body: NotificationBody,
 }
 
-#[derive(Serialize)]
+impl Notification {
+    pub fn to_json_string(&self) -> String {
+        serde_json::to_string(self)
+            .unwrap_or_else(|e| panic!("Error serializing notification '{self:?}': {e}"))
+    }
+}
+
+impl From<NotificationBody> for Notification {
+    fn from(value: NotificationBody) -> Self {
+        Self {
+            jsonrpc: JsonRpcVersion {},
+            body: value,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 #[serde(tag = "method", content = "params")]
 pub enum NotificationBody {
     #[serde(rename = "task.output")]
@@ -21,18 +37,32 @@ pub enum NotificationBody {
     TaskExit(TaskExitParams),
 }
 
-#[derive(Serialize)]
-pub struct TaskOutputParams {
-    pub task_id: TaskId,
-    // pub line_number: usize, // TODO: add line number when tasks are ready for that
-    pub line: Arc<String>,
+impl NotificationBody {
+    pub fn task_output(task_id: TaskId, line: Arc<String>) -> Self {
+        Self::TaskOutput(TaskOutputParams { task_id, line })
+    }
+
+    pub fn task_exit(task_id: TaskId, exit_status: ExitStatus) -> Self {
+        Self::TaskExit(TaskExitParams {
+            task_id,
+            exit_code: exit_status.code(),
+            signal: exit_status.signal(),
+        })
+    }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
+pub struct TaskOutputParams {
+    task_id: TaskId,
+    // pub line_number: usize, // TODO: add line number when tasks are ready for that
+    line: Arc<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct TaskExitParams {
-    pub task_id: TaskId,
-    pub exit_code: Option<i32>,
-    pub signal: Option<i32>,
+    task_id: TaskId,
+    exit_code: Option<i32>,
+    signal: Option<i32>,
 }
 
 #[cfg(test)]
@@ -44,15 +74,12 @@ mod tests {
         let task_id = TaskId(123);
         //let line_number = 456;
         let line = "some_line";
-        let body = NotificationBody::TaskOutput(TaskOutputParams {
+        let notification: Notification = NotificationBody::task_output(
             task_id,
             //line_number,
-            line: Arc::new(line.to_string()),
-        });
-        let notification = Notification {
-            jsonrpc: JsonRpcVersion {},
-            body,
-        };
+            Arc::new(line.to_string()),
+        )
+        .into();
         let json_str = serde_json::to_string(&notification).unwrap();
         assert_eq!(
             json_str,
@@ -65,12 +92,12 @@ mod tests {
     #[test]
     fn task_exit_serialization() {
         let task_id = TaskId(123);
-        let exit_code = 456;
-        let body = NotificationBody::TaskExit(TaskExitParams {
+        let exit_code = 1;
+        let body = NotificationBody::task_exit(
             task_id,
-            exit_code: Some(exit_code),
-            signal: None,
-        });
+            // from_raw takes a raw Unix wait status
+            std::process::ExitStatus::from_raw(exit_code << 8),
+        );
         let notification = Notification {
             jsonrpc: JsonRpcVersion {},
             body,
