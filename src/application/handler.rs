@@ -11,20 +11,23 @@ use crate::{
 
 use std::{os::unix::process::ExitStatusExt, sync::Arc};
 
-pub struct Handler {
+pub(in crate::application) struct Handler {
     connection_writer: ConnectionWriter,
     task_manager: Arc<TaskManager>,
 }
 
 impl Handler {
-    pub fn new(connection_writer: ConnectionWriter, task_manager: Arc<TaskManager>) -> Self {
+    pub(in crate::application) fn new(
+        connection_writer: ConnectionWriter,
+        task_manager: Arc<TaskManager>,
+    ) -> Self {
         Self {
             connection_writer,
             task_manager,
         }
     }
 
-    pub async fn handle_request(&self, request: Request) {
+    pub(in crate::application) async fn handle_request(&self, request: Request) {
         let response_body = match self.process_request(request.body) {
             Ok(r) => ResponseBody::Result(r),
             Err(e) => e.into(),

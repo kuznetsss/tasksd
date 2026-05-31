@@ -1,10 +1,14 @@
+mod handler;
+mod session;
+
 use std::sync::{Arc, atomic::AtomicBool};
 
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::{CliOptions, session::Session, tasks::TaskManager, transport::UnixSocketServer};
+use crate::{CliOptions, tasks::TaskManager, transport::UnixSocketServer};
+use session::Session;
 
 pub struct Application {
     root_cancellation: CancellationToken,

@@ -5,19 +5,19 @@ use tracing::{info, warn};
 
 use crate::{
     api::{Request, Response},
-    handler::Handler,
+    application::handler::Handler,
     tasks::TaskManager,
     transport::{self},
 };
 
-pub struct Session {
+pub(in crate::application) struct Session {
     cancellation_token: CancellationToken,
     connection: transport::Connection,
     task_manager: Arc<TaskManager>,
 }
 
 impl Session {
-    pub fn new(
+    pub(in crate::application) fn new(
         cancellation_token: CancellationToken,
         connection: transport::Connection,
         task_manager: Arc<TaskManager>,
@@ -29,7 +29,7 @@ impl Session {
         }
     }
 
-    pub async fn run(mut self) {
+    pub(in crate::application) async fn run(mut self) {
         while let Some(msg) = self
             .cancellation_token
             .run_until_cancelled(self.connection.read_message())

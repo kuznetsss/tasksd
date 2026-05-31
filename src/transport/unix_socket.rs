@@ -16,6 +16,7 @@ pub struct UnixSocketServerImpl {
 
 impl UnixSocketServerImpl {
     pub fn new(path: &Path) -> Result<Self> {
+        // TODO: reconsider this removal
         if path.exists() {
             std::fs::remove_file(path)?;
         }
