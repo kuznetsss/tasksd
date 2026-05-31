@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::{
     api::common::{JsonRpcVersion, RequestId},
-    tasks::{task_error::TaskError, task_manager::TaskId},
+    tasks::{TaskError, TaskId},
 };
 
 #[derive(Debug, Serialize)]

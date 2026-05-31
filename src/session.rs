@@ -4,9 +4,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::{
-    api::{request::Request, response::Response},
+    api::{Request, Response},
     handler::Handler,
-    tasks::task_manager::TaskManager,
+    tasks::TaskManager,
     transport::{self},
 };
 

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::{api::common::JsonRpcVersion, tasks::task_manager::TaskId};
+use crate::{api::common::JsonRpcVersion, tasks::TaskId};
 
 #[derive(Serialize)]
 pub struct Notification {

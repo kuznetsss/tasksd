@@ -1,16 +1,17 @@
+mod background_writer;
+mod connection;
+mod error;
+mod reader;
+mod unix_socket;
+
 use std::path::Path;
 
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
 use crate::transport::{background_writer::WriterImpl, reader::ReaderImpl};
-pub use connection::Connection;
 
-mod background_writer;
-pub mod connection;
-pub mod error;
-mod reader;
-mod unix_socket;
+pub use connection::{Connection, ConnectionWriter};
 
 pub trait ServerImpl {
     type ReaderHalf: ReaderImpl;

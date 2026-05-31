@@ -61,18 +61,18 @@
     - -32603 - Internal error - Internal JSON-RPC error.
     - -32000 to -32099 - Server error - Reserved for implementation-defined server-errors.
 
-- [ ] Add pub use in mod.rs files to avoid long namespaces
-- [ ] Refactor handler and make creating response and notification more convenient
+- [x] Add pub use in mod.rs files to avoid long namespaces
 - [ ] Create module app and put application, session and handler there
+- [ ] Refactor handler and make creating response and notification more convenient
 - [ ] Add line number to output notification
 - [ ] Setup tracing_subscriber
 - [ ] Add more logging
 - [ ] Shutdown all the running tasks on shutdown
-- [ ] Better test coverage
+- [ ] Subscription control (unsubscribe)
 - [ ] Add tests:
     - [ ] signal deserializing
     - [ ] subscribe to output is true by default
-- [ ] Subscription control (unsubscribe)
+- [ ] Better test coverage
 - [ ] Integration tests
 - [ ] Readme
 - [ ] License

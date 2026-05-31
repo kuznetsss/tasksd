@@ -2,17 +2,11 @@ use tracing::info;
 
 use crate::{
     api::{
-        common::JsonRpcVersion,
-        notification::{Notification, NotificationBody, TaskExitParams, TaskOutputParams},
-        request::{Request, RequestBody},
-        response::{Response, ResponseBody, ResponseResult},
+        JsonRpcVersion, Notification, NotificationBody, Request, RequestBody, Response,
+        ResponseBody, ResponseResult, TaskExitParams, TaskOutputParams,
     },
-    tasks::{
-        TaskCallbackError,
-        task_error::TaskError,
-        task_manager::{TaskId, TaskManager},
-    },
-    transport::connection::ConnectionWriter,
+    tasks::{TaskCallbackError, TaskError, TaskId, TaskManager},
+    transport::ConnectionWriter,
 };
 
 use std::{os::unix::process::ExitStatusExt, sync::Arc};

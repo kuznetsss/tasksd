@@ -23,7 +23,7 @@ impl Request {
 
 #[derive(Deserialize)]
 struct RequestRaw {
-    _jsonrpc: JsonRpcVersion,
+    jsonrpc: JsonRpcVersion,
     id: RequestId,
     method: String,
     #[serde(default)]

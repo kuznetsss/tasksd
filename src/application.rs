@@ -4,9 +4,7 @@ use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::{
-    CliOptions, session::Session, tasks::task_manager::TaskManager, transport::UnixSocketServer,
-};
+use crate::{CliOptions, session::Session, tasks::TaskManager, transport::UnixSocketServer};
 
 pub struct Application {
     root_cancellation: CancellationToken,
