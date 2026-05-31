@@ -1,9 +1,12 @@
 use rustix::process::Signal;
 use serde::{Deserialize, Deserializer};
 
-use crate::api::{
-    common::{JsonRpcVersion, RequestId},
-    response::{Response, ResponseError},
+use crate::{
+    api::{
+        common::{JsonRpcVersion, RequestId},
+        response::{Response, ResponseError},
+    },
+    tasks::TaskId,
 };
 
 pub struct Request {
@@ -76,7 +79,7 @@ impl TaskStartParams {
 
 #[derive(Deserialize)]
 pub struct TaskSendSignalParams {
-    pub task_id: usize,
+    pub task_id: TaskId,
 
     #[serde(deserialize_with = "deserialize_signal")]
     pub signal: Signal,
@@ -138,7 +141,7 @@ mod tests {
         let RequestBody::TaskSendSignal(body) = parsed.body else {
             panic!("Invalid body variant")
         };
-        assert_eq!(body.task_id, 456);
+        assert_eq!(body.task_id, TaskId(456));
         assert_eq!(body.signal.as_raw(), 9);
     }
 }

@@ -1,11 +1,11 @@
-use tracing::info;
+use tracing::warn;
 
 use crate::{
     api::{
         JsonRpcVersion, Notification, NotificationBody, Request, RequestBody, Response,
         ResponseBody, ResponseResult, TaskExitParams, TaskOutputParams,
     },
-    tasks::{TaskCallbackError, TaskError, TaskId, TaskManager},
+    tasks::{TaskCallbackError, TaskError, TaskManager},
     transport::ConnectionWriter,
 };
 
@@ -37,7 +37,7 @@ impl Handler {
         let response_str = serde_json::to_string(&response)
             .unwrap_or_else(|_| panic!("Error serializing response: {response:?}"));
         if let Err(e) = self.connection_writer.write(&response_str).await {
-            info!("Error writing to connection: {e}")
+            warn!("Error writing to connection: {e}")
         }
     }
 
@@ -98,10 +98,7 @@ impl Handler {
                     .map(|_| ResponseResult::StartTaskResult { task_id })
             }
             RequestBody::TaskSendSignal(task_send_signal_params) => {
-                let task = match self
-                    .task_manager
-                    .get_task(TaskId(task_send_signal_params.task_id))
-                {
+                let task = match self.task_manager.get_task(task_send_signal_params.task_id) {
                     Some(t) => t,
                     // TODO: return not found here
                     None => return Err(TaskError::AlreadyExited),
