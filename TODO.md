@@ -64,9 +64,7 @@
 - [x] Add pub use in mod.rs files to avoid long namespaces
 - [x] Create module app and put application, session and handler there
 - [x] Refactor handler and make creating response and notification more convenient
-- [ ] Add line number to output notification
-- [ ] Shutdown all the running tasks on shutdown
-- [ ] Subscription control (unsubscribe)
+- [x] Shutdown all the running tasks on shutdown
 - [ ] Setup tracing_subscriber
 - [ ] Add more logging
 - [ ] Add tests:
@@ -80,8 +78,8 @@
 - [ ] CI
 - [ ] Documentation
 
-## Neovim plugin
+## Future plans
 
-## More API
-
-
+- [ ] Subscription control (unsubscribe)
+- [ ] Add line number to output notification
+- [ ] Broadcast shutdown notification to all connections

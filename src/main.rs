@@ -27,6 +27,10 @@ struct CliOptions {
     /// Path to unix socket to open
     #[arg(short = 'u', long)]
     unix_socket_path: PathBuf,
+
+    /// Shutdown graceful period, seconds
+    #[arg(short = 'g', long)]
+    graceful_period: u64,
 }
 
 fn main() -> anyhow::Result<()> {

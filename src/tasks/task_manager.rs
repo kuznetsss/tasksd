@@ -129,6 +129,13 @@ impl TaskManager {
         completion_coroutines.join().await;
     }
 
+    pub fn send_signal_to_all_tasks(&self, signal: rustix::process::Signal) {
+        let tasks_map = self.tasks.read().unwrap();
+        for task in tasks_map.values() {
+            let _ = task.send_signal(signal);
+        }
+    }
+
     fn spawn_task_completion(
         self: &Arc<Self>,
         completion_coroutines: &WrappedTaskTracker,

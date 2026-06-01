@@ -1,9 +1,14 @@
 mod handler;
 mod session;
 
-use std::sync::{Arc, atomic::AtomicBool};
+use std::{
+    sync::{Arc, atomic::AtomicBool},
+    time::Duration,
+};
 
 use anyhow::Result;
+use rustix::process::Signal;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -15,6 +20,7 @@ pub struct Application {
     server: UnixSocketServer,
     task_manager: Arc<TaskManager>,
     shutdown_complete: AtomicBool,
+    graceful_period: Duration,
 }
 
 impl Application {
@@ -25,6 +31,7 @@ impl Application {
             server,
             task_manager: TaskManager::new(cli_args.process_buffer_size),
             shutdown_complete: AtomicBool::new(false),
+            graceful_period: Duration::from_secs(cli_args.graceful_period),
         })
     }
 
@@ -61,15 +68,56 @@ impl Application {
     pub async fn shutdown(&self) {
         if self
             .shutdown_complete
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            .is_err()
         {
             return;
         }
+
         self.root_cancellation.cancel();
-        // TODO: shutdown all the running tasks
-        self.task_manager.join().await;
-        self.shutdown_complete
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.task_manager.send_signal_to_all_tasks(Signal::TERM);
+
+        let mut parallel_jobs = JoinSet::new();
+        #[derive(Debug)]
+        enum Event {
+            Timeout,
+            Finish,
+        }
+        let graceful_period = self.graceful_period;
+        parallel_jobs.spawn({
+            let task_manager = self.task_manager.clone();
+            async move {
+                tokio::time::sleep(graceful_period).await;
+                task_manager.send_signal_to_all_tasks(Signal::KILL);
+                const KILL_TIMEOUT: Duration = Duration::from_secs(2);
+                tokio::time::sleep(KILL_TIMEOUT).await;
+                Event::Timeout
+            }
+        });
+        parallel_jobs.spawn({
+            let task_manager = self.task_manager.clone();
+            async move {
+                task_manager.join().await;
+                Event::Finish
+            }
+        });
+        match parallel_jobs.join_next().await.unwrap() {
+            Ok(Event::Finish) => {}
+            Ok(Event::Timeout) => {
+                warn!(
+                    "Some tasks are still not completed after {:?} and SIGKILL",
+                    graceful_period
+                );
+            }
+            Err(e) => {
+                warn!("Error joining shutdown jobs: {e}");
+            }
+        }
     }
 }
 
