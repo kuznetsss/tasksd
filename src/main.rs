@@ -29,13 +29,22 @@ struct CliOptions {
     unix_socket_path: PathBuf,
 
     /// Shutdown graceful period, seconds
-    #[arg(short = 'g', long)]
+    #[arg(short = 'g', long, default_value_t = 5)]
     graceful_period: u64,
+
+    /// Disable logging to the console
+    #[arg(short = 'q', long, default_value_t = false)]
+    quiet: bool,
+
+    /// Log to file
+    #[arg(short = 'l', long)]
+    log_file: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli_args = CliOptions::parse();
-    // TODO: setup tracing_subscriber
+    let _guard = application::setup_logger(cli_args.log_file.as_ref(), !cli_args.quiet)?;
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(cli_args.thread_number)

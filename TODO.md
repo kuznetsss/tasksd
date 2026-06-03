@@ -65,13 +65,14 @@
 - [x] Create module app and put application, session and handler there
 - [x] Refactor handler and make creating response and notification more convenient
 - [x] Shutdown all the running tasks on shutdown
-- [ ] Setup tracing_subscriber
+- [x] Setup tracing_subscriber
 - [ ] Add more logging
 - [ ] Add tests:
     - [ ] signal deserializing
     - [ ] subscribe to output is true by default
 - [ ] Better test coverage
 - [ ] Integration tests
+- [ ] Verify shutdown and cancellation paths
 - [ ] Fix TODOs comments
 - [ ] Readme
 - [ ] License
@@ -83,3 +84,4 @@
 - [ ] Subscription control (unsubscribe)
 - [ ] Add line number to output notification
 - [ ] Broadcast shutdown notification to all connections
+- [ ] Tasks chains

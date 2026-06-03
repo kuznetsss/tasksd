@@ -1,5 +1,8 @@
 mod handler;
 mod session;
+mod logger;
+
+pub use logger::setup_logger;
 
 use std::{
     sync::{Arc, atomic::AtomicBool},
