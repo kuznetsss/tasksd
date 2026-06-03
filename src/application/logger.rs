@@ -1,6 +1,6 @@
 use std::{io::IsTerminal, path::PathBuf};
 
-use tracing::level_filters::LevelFilter;
+use tracing::{Subscriber, level_filters::LevelFilter};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Default, Debug)]
@@ -12,6 +12,15 @@ pub fn setup_logger(
     log_file: Option<&PathBuf>,
     log_to_console: bool,
 ) -> Result<Guard, std::io::Error> {
+    let (subscriber, guard) = build_subscriber(log_file, log_to_console)?;
+    subscriber.init();
+    Ok(guard)
+}
+
+fn build_subscriber(
+    log_file: Option<&PathBuf>,
+    log_to_console: bool,
+) -> Result<(impl Subscriber, Guard), std::io::Error> {
     let mut guard = Guard::default();
     let registry = tracing_subscriber::registry();
 
@@ -39,12 +48,11 @@ pub fn setup_logger(
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
 
-    registry
+    let subscriber = registry
         .with(env_filter)
         .with(console_layer)
-        .with(file_layer)
-        .init();
-    Ok(guard)
+        .with(file_layer);
+    Ok((subscriber, guard))
 }
 
 #[cfg(test)]
@@ -55,24 +63,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn setup_logger_log_to_console() {
-        let guard = setup_logger(None, true).unwrap();
+    fn build_subscriber_log_to_console() {
+        let (_, guard) = build_subscriber(None, true).unwrap();
         assert!(guard.inner.is_none());
     }
 
     #[test]
-    fn setup_logger_non_existing_file() {
+    fn build_subscriber_non_existing_file() {
         let path = std::path::PathBuf::from_str("/proc/non_existing").unwrap();
-        let err = setup_logger(Some(&path), false).unwrap_err();
+        let err = build_subscriber(Some(&path), false);
+        assert!(err.is_err());
+        let err = unsafe { err.unwrap_err_unchecked() };
         assert_matches!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]
-    fn setup_logger_log_to_file() {
+    fn build_subscriber_log_to_file() {
         let msg = "some log";
         let mut tmp_file = tempfile::NamedTempFile::new().unwrap();
-        let guard = setup_logger(Some(&tmp_file.path().into()), false).unwrap();
-        tracing::info!("{msg}");
+        let (subscriber, guard) = build_subscriber(Some(&tmp_file.path().into()), false).unwrap();
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!("{msg}");
+        });
         drop(guard);
         let mut buffer = String::new();
         tmp_file.reopen().unwrap();

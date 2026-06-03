@@ -85,3 +85,4 @@
 - [ ] Add line number to output notification
 - [ ] Broadcast shutdown notification to all connections
 - [ ] Tasks chains
+- [ ] Limit log file size
