@@ -1,6 +1,6 @@
 mod handler;
-mod session;
 mod logger;
+mod session;
 
 pub use logger::setup_logger;
 
@@ -10,10 +10,10 @@ use std::{
 };
 
 use anyhow::Result;
-use rustix::process::Signal;
+use rustix::{path::Arg, process::Signal};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{Instrument, Level, info, span, warn};
 
 use crate::{CliOptions, tasks::TaskManager, transport::UnixSocketServer};
 use session::Session;
@@ -28,6 +28,13 @@ pub struct Application {
 
 impl Application {
     pub fn new(root_cancellation: CancellationToken, cli_args: CliOptions) -> Result<Self> {
+        info!(
+            "Opening unix socket: {}",
+            &cli_args
+                .unix_socket_path
+                .as_str()
+                .unwrap_or("<not displayable>")
+        );
         let server = UnixSocketServer::new_unix_socket(&cli_args.unix_socket_path)?;
         Ok(Self {
             root_cancellation,
@@ -43,6 +50,8 @@ impl Application {
     }
 
     async fn run_server(&self) {
+        info!("Listening for incoming connection");
+        let mut client_id = 0_usize;
         while let Some(connection) = self
             .root_cancellation
             .run_until_cancelled(self.server.wait_for_connection())
@@ -56,15 +65,20 @@ impl Application {
                 }
             };
             tokio::spawn({
+                let span = span!(Level::INFO, "client", client_id);
                 let cancellation_token = self.root_cancellation.child_token();
                 let task_manager = self.task_manager.clone();
                 async move {
+                    info!("Client connected");
                     let connection =
                         accepted_connection.into_connection(cancellation_token.clone());
                     let session = Session::new(cancellation_token, connection, task_manager);
                     session.run().await;
+                    info!("Connection closed");
                 }
+                .instrument(span)
             });
+            client_id += 1;
         }
     }
 

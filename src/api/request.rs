@@ -11,6 +11,7 @@ use crate::{
 
 pub struct Request {
     pub id: RequestId,
+    pub method: String,
     pub body: RequestBody,
 }
 
@@ -51,6 +52,7 @@ impl RequestRaw {
         })?;
         Ok(Request {
             id: self.id,
+            method: self.method,
             body: constructor(params),
         })
     }

@@ -9,6 +9,7 @@ use std::{path::PathBuf, sync::Arc};
 use clap::Parser;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 use crate::application::Application;
 
@@ -44,6 +45,11 @@ struct CliOptions {
 fn main() -> anyhow::Result<()> {
     let cli_args = CliOptions::parse();
     let _guard = application::setup_logger(cli_args.log_file.as_ref(), !cli_args.quiet)?;
+    info!(
+        "Starting {} {}",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -61,6 +67,7 @@ fn main() -> anyhow::Result<()> {
             });
             jobs.join_next().await;
             application.shutdown().await;
+            info!("Exit");
             Ok(())
         })
 }
@@ -69,6 +76,8 @@ async fn ctrl_c_handler(root_cancellation: CancellationToken) {
     tokio::signal::ctrl_c()
         .await
         .expect("Failed to listen for Ctrl-C");
+    info!("Got Ctrl-C, shutting down");
     root_cancellation.cancel();
     tokio::signal::ctrl_c().await.unwrap();
+    info!("Force exit on the second Ctrl-C");
 }

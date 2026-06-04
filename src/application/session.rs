@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{Instrument, Level, info, span, warn};
 
 use crate::{
     api::{Request, Response},
@@ -51,21 +51,35 @@ impl Session {
     }
 
     fn handle_request(&self, request: Request) {
+        let span = span!(Level::INFO, "request", id = %request.id, method = %request.method);
         let task_manager = self.task_manager.clone();
         let connection_writer = self.connection.writer();
-        tokio::spawn(async move {
-            let handler = Handler::new(connection_writer, task_manager);
-            handler.handle_request(request).await;
-        });
+        tokio::spawn(
+            async move {
+                let handler = Handler::new(connection_writer, task_manager);
+                handler.handle_request(request).await;
+            }
+            .instrument(span),
+        );
     }
 
     fn handle_parse_error(&self, response: Response) {
+        let id = response
+            .id
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "null".to_string());
+        let span = span!(Level::INFO, "parse_error", id);
         let connection_writer = self.connection.writer();
-        tokio::spawn(async move {
-            let response = serde_json::to_string(&response).expect("Serialization shouldn't fail");
-            if let Err(e) = connection_writer.write(&response).await {
-                warn!("Error sending error response: {e}");
+        tokio::spawn(
+            async move {
+                let response =
+                    serde_json::to_string(&response).expect("Serialization shouldn't fail");
+                if let Err(e) = connection_writer.write(&response).await {
+                    warn!("Error sending error response: {e}");
+                }
             }
-        });
+            .instrument(span),
+        );
     }
 }

@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use serde::{Deserialize, Serialize};
 
 use crate::api::error::ApiError;
@@ -36,6 +38,15 @@ impl From<JsonRpcVersion> for &'static str {
 pub enum RequestId {
     String(String),
     Number(i64),
+}
+
+impl Display for RequestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestId::String(s) => write!(f, "{s}"),
+            RequestId::Number(n) => write!(f, "{n}"),
+        }
+    }
 }
 
 #[cfg(test)]
