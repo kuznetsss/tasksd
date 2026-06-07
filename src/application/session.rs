@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, info, span, warn};
+use tracing::{Instrument, info, info_span, warn};
 
 use crate::{
     api::{Request, Response},
@@ -51,7 +51,7 @@ impl Session {
     }
 
     fn handle_request(&self, request: Request) {
-        let span = span!(Level::INFO, "request", id = %request.id, method = %request.method);
+        let span = info_span!("request", id = %request.id, method = %request.method);
         let task_manager = self.task_manager.clone();
         let connection_writer = self.connection.writer();
         tokio::spawn(
@@ -69,7 +69,7 @@ impl Session {
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_else(|| "null".to_string());
-        let span = span!(Level::INFO, "parse_error", id);
+        let span = info_span!("parse_error", id);
         let connection_writer = self.connection.writer();
         tokio::spawn(
             async move {

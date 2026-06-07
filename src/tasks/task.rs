@@ -7,7 +7,7 @@ use tokio::{
     sync::{broadcast, watch},
     task::AbortHandle,
 };
-use tracing::warn;
+use tracing::{Instrument, Span, info, info_span, warn};
 
 use crate::tasks::{
     events::{TaskEvents, TaskExitCallback, TaskOutputCallback},
@@ -37,12 +37,20 @@ impl Task {
         events: TaskEvents,
         output_buffer_capacity: usize,
     ) -> Result<Self, TaskError> {
+        let span = info_span!( "task",
+                    executable = info.executable,
+                    args = ?info.args);
+        let _entered = span.enter();
+
         let (pty, child_pty) = create_pty_pair().map_err(TaskError::pty_creation_error)?;
-        let (stdout, stdin) = pty.into_split().map_err(TaskError::pty_creation_error)?;
+        let (stdout, stdin) = pty
+            .into_split()
+            .map_err(TaskError::pty_creation_error)
+            .inspect_err(|e| warn!("Error splitting pty: {e}"))?;
 
         let info = Arc::new(info);
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
-        Self::spawn_stdout_reading(&internal_tasks, info.clone(), stdout, senders.stdout_tx);
+        Self::spawn_stdout_reading(&internal_tasks, stdout, senders.stdout_tx, span.clone());
 
         let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
         events
@@ -55,9 +63,11 @@ impl Task {
             })
             .expect("Task shouldn't exit yet");
 
-        let child = Self::spawn_child_process(&info, child_pty)?;
+        let child = Self::spawn_child_process(&info, child_pty)
+            .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
         let pid = child.id().expect("pid");
-        Self::spawn_waiting_for_exit(&internal_tasks, senders.on_exit_tx, child);
+        info!(pid, "Spawned a process");
+        Self::spawn_waiting_for_exit(&internal_tasks, senders.on_exit_tx, child, span.clone());
 
         let task = Self {
             info,
@@ -162,9 +172,9 @@ impl Task {
 
     fn spawn_stdout_reading(
         internal_tasks: &WrappedTaskTracker,
-        task_info: Arc<TaskInfo>,
         stdout: PtyReadPart,
         stdout_tx: broadcast::Sender<Arc<String>>,
+        span: Span,
     ) {
         internal_tasks
             .spawn({
@@ -180,10 +190,7 @@ impl Task {
                             }
                             Ok(_) => {}
                             Err(e) => {
-                                warn!(
-                                    "Error reading from stdout for the task {:?}: {e}",
-                                    task_info
-                                );
+                                warn!("Error reading from stdout for the task: {e}");
                                 return;
                             }
                         };
@@ -193,6 +200,7 @@ impl Task {
                         }
                     }
                 }
+                .instrument(span)
             })
             .expect("Internal tasks should not be joined yet");
     }
@@ -201,16 +209,21 @@ impl Task {
         internal_tasks: &WrappedTaskTracker,
         tx: watch::Sender<Option<ExitStatus>>,
         mut child: Child,
+        span: Span,
     ) {
         internal_tasks
-            .spawn(async move {
-                let exit_status = child
-                    .wait()
-                    .await
-                    .expect("Child process should finish normally");
-                tx.send(Some(exit_status))
-                    .expect("At least one receiver should be alive");
-            })
+            .spawn(
+                async move {
+                    let exit_status = child
+                        .wait()
+                        .await
+                        .expect("Child process should finish normally");
+                    info!("Task has exited. {exit_status}");
+                    tx.send(Some(exit_status))
+                        .expect("At least one receiver should be alive");
+                }
+                .instrument(span),
+            )
             .expect("Internal tasks should not be joined yet");
     }
 }

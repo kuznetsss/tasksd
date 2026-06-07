@@ -66,17 +66,18 @@
 - [x] Refactor handler and make creating response and notification more convenient
 - [x] Shutdown all the running tasks on shutdown
 - [x] Setup tracing_subscriber
-- [ ] Add more logging
+- [x] Add more logging
 - [ ] Add tests:
     - [ ] signal deserializing
     - [ ] subscribe to output is true by default
-- [ ] Better test coverage
+- [ ] CI
+- [ ] Better test coverage:
+    - Use cargo-llvm-cov for coverage: https://github.com/taiki-e/cargo-llvm-cov
 - [ ] Integration tests
 - [ ] Verify shutdown and cancellation paths
 - [ ] Fix TODOs comments
 - [ ] Readme
 - [ ] License
-- [ ] CI
 - [ ] Documentation
 
 ## Future plans

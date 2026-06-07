@@ -1,7 +1,8 @@
-use std::{os::fd::OwnedFd, task::Poll};
+use std::{os::fd::OwnedFd, task::Poll, time::Duration};
 
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncWrite, unix::AsyncFd};
+use tracing::warn;
 
 #[derive(Debug)]
 pub struct Pty(AsyncFd<OwnedFd>);
@@ -16,8 +17,10 @@ pub type PtyChild = OwnedFd;
 pub fn create_pty_pair() -> Result<(Pty, PtyChild)> {
     // Opening multiple ptys in parallel may fail with unknown error (-6) on macos.
     // Retrying in such case
-    static MAX_ATTEMPTS: usize = 5;
-    for _ in 0..MAX_ATTEMPTS {
+    const MAX_ATTEMPTS: usize = 5;
+    const INTERVAL_BETWEEN_ATTEMPTS: Duration = Duration::from_millis(50);
+
+    for i in 1..=MAX_ATTEMPTS {
         match create_pty_pair_impl() {
             Ok(r) => {
                 return Ok(r);
@@ -27,7 +30,11 @@ pub fn create_pty_pair() -> Result<(Pty, PtyChild)> {
                     .downcast_ref::<rustix::io::Errno>()
                     .is_some_and(|e| e.raw_os_error() == -6) =>
             {
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                warn!("Attempt {i} of {MAX_ATTEMPTS} to create pty failed: {e}.");
+                if i != MAX_ATTEMPTS {
+                    warn!("Will try to create pty again after {INTERVAL_BETWEEN_ATTEMPTS:?}");
+                    std::thread::sleep(INTERVAL_BETWEEN_ATTEMPTS);
+                }
                 continue;
             }
             Err(e) => return Err(e),

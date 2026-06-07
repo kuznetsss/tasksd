@@ -13,7 +13,7 @@ use anyhow::Result;
 use rustix::{path::Arg, process::Signal};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, info, span, warn};
+use tracing::{Instrument, info, info_span, warn};
 
 use crate::{CliOptions, tasks::TaskManager, transport::UnixSocketServer};
 use session::Session;
@@ -65,7 +65,7 @@ impl Application {
                 }
             };
             tokio::spawn({
-                let span = span!(Level::INFO, "client", client_id);
+                let span = info_span!("client", client_id);
                 let cancellation_token = self.root_cancellation.child_token();
                 let task_manager = self.task_manager.clone();
                 async move {
@@ -96,6 +96,8 @@ impl Application {
             return;
         }
 
+        info!("Shutdown, sending SIGTERM to all running tasks");
+
         self.root_cancellation.cancel();
         self.task_manager.send_signal_to_all_tasks(Signal::TERM);
 
@@ -110,6 +112,7 @@ impl Application {
             let task_manager = self.task_manager.clone();
             async move {
                 tokio::time::sleep(graceful_period).await;
+                warn!("Some tasks are still running after graceful period {graceful_period:?}. Sending SIGKILL");
                 task_manager.send_signal_to_all_tasks(Signal::KILL);
                 const KILL_TIMEOUT: Duration = Duration::from_secs(2);
                 tokio::time::sleep(KILL_TIMEOUT).await;

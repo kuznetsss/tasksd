@@ -6,6 +6,7 @@ use tokio::net::{
     UnixListener,
     unix::{OwnedReadHalf, OwnedWriteHalf},
 };
+use tracing::warn;
 
 use crate::transport::ServerImpl;
 
@@ -18,6 +19,7 @@ impl UnixSocketServerImpl {
     pub fn new(path: &Path) -> Result<Self> {
         // TODO: reconsider this removal
         if path.exists() {
+            warn!(path = %path.display(), "Removing existing socket file");
             std::fs::remove_file(path)?;
         }
 
