@@ -67,9 +67,9 @@
 - [x] Shutdown all the running tasks on shutdown
 - [x] Setup tracing_subscriber
 - [x] Add more logging
-- [ ] Add tests:
-    - [ ] signal deserializing
-    - [ ] subscribe to output is true by default
+- [x] Add tests:
+    - [x] signal deserializing
+    - [x] subscribe to output is true by default
 - [ ] CI
 - [ ] Better test coverage:
     - Use cargo-llvm-cov for coverage: https://github.com/taiki-e/cargo-llvm-cov

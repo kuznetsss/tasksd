@@ -63,7 +63,7 @@ pub enum RequestBody {
     TaskSendSignal(TaskSendSignalParams),
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct TaskStartParams {
     pub executable: String,
     pub args: Option<Vec<String>>,
@@ -79,7 +79,7 @@ impl TaskStartParams {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct TaskSendSignalParams {
     pub task_id: TaskId,
 
@@ -125,6 +125,7 @@ mod tests {
         assert_eq!(body.executable, "ls");
         assert_eq!(body.args, None);
         assert_eq!(body.working_dir, Some("/tmp".to_string()));
+        assert!(body.subscribe_to_output);
     }
 
     #[test]
@@ -145,5 +146,21 @@ mod tests {
         };
         assert_eq!(body.task_id, TaskId(456));
         assert_eq!(body.signal.as_raw(), 9);
+    }
+
+    #[test]
+    fn deserialize_signal_success() {
+        let original_signal = 12;
+        let json_str = format!(r#"{{"task_id": 456, "signal":{original_signal}}}"#);
+        let TaskSendSignalParams { signal, .. } = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(signal.as_raw(), original_signal);
+    }
+
+    #[test]
+    fn deserialize_signal_error() {
+        let original_signal = 12;
+        let json_str = format!(r#"{{"task_id": 456, "signal":"{original_signal}"}}"#);
+        let e = serde_json::from_str::<TaskSendSignalParams>(&json_str).unwrap_err();
+        assert!(e.to_string().contains("invalid type"));
     }
 }
