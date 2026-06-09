@@ -1,0 +1,35 @@
+name: Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.lock
+  pull_request:
+    branches: [main]
+    paths:
+      - Cargo.lock
+  schedule:
+    - cron: "0 8 * * 1"  # every Monday at 08:00 UTC
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Open issue on failure
+        if: failure() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          existing=$(gh issue list --search "Security audit failed" --state open --json number --jq length)
+          if [ "$existing" -eq 0 ]; then
+            gh issue create \
+              --title "Security audit failed ($(date -u +%Y-%m-%d))" \
+              --body "cargo audit failed on \`${{ github.event_name }}\` — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          fi

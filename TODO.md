@@ -70,14 +70,14 @@
 - [x] Add tests:
     - [x] signal deserializing
     - [x] subscribe to output is true by default
-- [ ] CI
+- [x] License
+- [x] CI
 - [ ] Better test coverage:
     - Use cargo-llvm-cov for coverage: https://github.com/taiki-e/cargo-llvm-cov
 - [ ] Integration tests
 - [ ] Verify shutdown and cancellation paths
 - [ ] Fix TODOs comments
 - [ ] Readme
-- [ ] License
 - [ ] Documentation
 
 ## Future plans
