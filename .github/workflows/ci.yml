@@ -67,3 +67,17 @@ jobs:
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  ci-success:
+    name: CI success
+    if: always()
+    needs: [fmt, clippy, test, doc, coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs passed
+        run: |
+          results='${{ toJSON(needs.*.result) }}'
+          if echo "$results" | grep -qv '"success"'; then
+            echo "One or more jobs failed: $results"
+            exit 1
+          fi

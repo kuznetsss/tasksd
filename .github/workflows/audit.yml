@@ -7,8 +7,6 @@ on:
       - Cargo.lock
   pull_request:
     branches: [main]
-    paths:
-      - Cargo.lock
   schedule:
     - cron: "0 8 * * 1"  # every Monday at 08:00 UTC
   workflow_dispatch:
