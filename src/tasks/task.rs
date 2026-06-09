@@ -86,12 +86,16 @@ impl Task {
     }
 
     pub async fn write_to_stdin(&self, msg: &[u8]) -> Result<(), TaskError> {
-        self.stdin
-            .lock()
-            .await
-            .write_all(msg)
-            .await
-            .map_err(TaskError::write_error)
+        if self.events.has_exited() {
+            Err(TaskError::AlreadyExited)
+        } else {
+            self.stdin
+                .lock()
+                .await
+                .write_all(msg)
+                .await
+                .map_err(TaskError::write_error)
+        }
     }
 
     pub fn on_output<F>(&self, f: F) -> Result<AbortHandle, TaskError>
@@ -354,7 +358,7 @@ mod tests {
             .write_to_stdin("some input".as_bytes())
             .await
             .unwrap_err();
-        assert!(matches!(err, TaskError::WriteError(_)));
+        assert!(matches!(err, TaskError::AlreadyExited));
         task.join().await;
     }
 

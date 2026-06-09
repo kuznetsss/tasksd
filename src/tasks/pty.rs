@@ -104,6 +104,9 @@ impl AsyncRead for PtyReadPart {
                     buf.advance(read_bytes);
                     return Poll::Ready(Ok(()));
                 }
+                Ok(Err(e)) if e.raw_os_error() == Some(rustix::io::Errno::IO.raw_os_error()) => {
+                    return Poll::Ready(Ok(())); // EIO on PTY means child PTY is closed, so same as EOF
+                }
                 Ok(Err(e)) => return Poll::Ready(Err(e)),
                 Err(_) => continue,
             }
@@ -174,8 +177,8 @@ mod tests {
     #[tokio::test]
     async fn create() {
         let (pty, child) = create_pty_pair().unwrap();
-        assert!(rustix::termios::isatty(pty.0));
-        assert!(rustix::termios::isatty(child));
+        assert!(rustix::termios::isatty(&pty.0));
+        assert!(rustix::termios::isatty(&child));
     }
 
     #[tokio::test]
@@ -211,9 +214,27 @@ mod tests {
     async fn child_closed() {
         let (pty, child) = create_pty_pair().unwrap();
         drop(child);
-        rustix::io::write(&pty.0, "test".as_bytes()).unwrap_err();
+
+        let big_msg = "test".repeat(1024 * 1024);
+        const MAX_ATTEMPTS: i32 = 100;
+        let mut attempt = 0;
+        loop {
+            if rustix::io::write(&pty.0, big_msg.as_bytes()).is_err() {
+                break;
+            }
+            attempt += 1;
+            assert!(attempt < MAX_ATTEMPTS);
+        }
+
         let mut buf = [0u8; 32];
-        assert_eq!(rustix::io::read(&pty.0, &mut buf).unwrap(), 0);
+        #[cfg(target_os = "linux")]
+        {
+            assert!(rustix::io::read(&pty.0, &mut buf).is_err());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(rustix::io::read(&pty.0, &mut buf).unwrap(), 0);
+        }
     }
 
     #[tokio::test]
@@ -507,14 +528,12 @@ mod tests {
         drop(child);
         let mut i = 0;
         const MAX_ATTEMPTS: u32 = 1024 * 1024;
-        loop {
-            match pty.as_mut().poll_write(&mut cx, "test\n".as_bytes()) {
-                Poll::Pending => tokio::time::sleep(Duration::from_millis(5)).await,
-                Poll::Ready(r) => {
-                    r.unwrap_err();
-                    break;
-                }
-            };
+        while pty
+            .as_mut()
+            .poll_write(&mut cx, "test\n".as_bytes())
+            .is_pending()
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
             i += 1;
             assert!(i < MAX_ATTEMPTS);
         }

@@ -134,7 +134,10 @@ mod tests {
             ob.insert_line(Arc::new(make_line(i)));
         }
         // 5 6 7 8 9 is in the buffer
-        assert!(ob.get_line_range(2..1).is_empty());
+        #[allow(clippy::reversed_empty_ranges)]
+        {
+            assert!(ob.get_line_range(2..1).is_empty());
+        }
         assert!(ob.get_line_range(1..4).is_empty());
         assert_eq!(
             ob.get_line_range(5..6)
