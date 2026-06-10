@@ -94,7 +94,7 @@ impl TaskEvents {
         })
     }
 
-    fn has_exited(&self) -> bool {
+    pub(in crate::tasks) fn has_exited(&self) -> bool {
         self.on_exit_rx.has_changed().unwrap_or(true)
     }
 
@@ -523,5 +523,18 @@ mod tests {
             .expect("handle didn't complete")
             .unwrap();
         events.join_all().await;
+    }
+
+    #[tokio::test]
+    async fn has_exited_returns_true_after_exit() {
+        let senders = TaskSenders::new();
+        let events = TaskEvents::new(&senders);
+        assert!(!events.has_exited());
+        senders
+            .on_exit_tx
+            .send(Some(ExitStatus::default()))
+            .unwrap();
+        tokio::task::yield_now().await;
+        assert!(events.has_exited());
     }
 }

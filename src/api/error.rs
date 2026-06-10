@@ -16,4 +16,3 @@ impl Display for ApiError {
 }
 
 impl Error for ApiError {}
-

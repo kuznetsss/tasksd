@@ -12,5 +12,5 @@ mod task_manager;
 mod tracker;
 
 pub use events::TaskCallbackError;
-pub use task_manager::{TaskId, TaskManager};
 pub use task_error::TaskError;
+pub use task_manager::{TaskId, TaskManager};
