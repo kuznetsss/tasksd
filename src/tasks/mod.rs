@@ -3,6 +3,7 @@ mod finished_task;
 mod info;
 mod output_buffer;
 mod pty;
+mod pty_reader;
 mod recent_finished_tasks;
 mod senders;
 mod task;
@@ -10,7 +11,6 @@ mod task_builder;
 mod task_error;
 mod task_manager;
 mod tracker;
-mod pty_reader;
 
 pub use events::TaskCallbackError;
 pub use task_error::TaskError;
