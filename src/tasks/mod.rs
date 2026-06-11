@@ -10,6 +10,7 @@ mod task_builder;
 mod task_error;
 mod task_manager;
 mod tracker;
+mod pty_reader;
 
 pub use events::TaskCallbackError;
 pub use task_error::TaskError;

@@ -81,6 +81,29 @@ impl Pty {
     }
 }
 
+impl PtyReadPart {
+    pub(in crate::tasks) fn try_read(
+        &mut self,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Result<(), rustix::io::Errno> {
+        // Safety: unfilled_mut() requires for no de-initialization but read will never do that
+        let b = unsafe { buf.unfilled_mut() };
+        match rustix::io::read(self.0.get_ref(), b) {
+            Ok((read_bytes, _)) => {
+                let read_bytes = read_bytes.len();
+                // Safety: we are sure that read_bytes is the number of bytes we just initialized
+                unsafe {
+                    buf.assume_init(read_bytes);
+                }
+                buf.advance(read_bytes);
+                Ok(())
+            }
+            Err(e) if e == rustix::io::Errno::IO => Ok(()), // EIO means EOF for pty
+            Err(e) => Err(e),
+        }
+    }
+}
+
 impl AsyncRead for PtyReadPart {
     fn poll_read(
         self: std::pin::Pin<&mut Self>,

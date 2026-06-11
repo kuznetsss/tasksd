@@ -15,6 +15,7 @@ use crate::tasks::{
     info::TaskInfo,
     output_buffer::OutputBuffer,
     pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair},
+    pty_reader::PtyReader,
     senders::TaskSenders,
     task_error::TaskError,
     tracker::{PanicHandler, WrappedTaskTracker},
@@ -50,7 +51,14 @@ impl Task {
 
         let info = Arc::new(info);
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
-        Self::spawn_stdout_reading(&internal_tasks, stdout, senders.stdout_tx, span.clone());
+        Self::spawn_stdout_reading(
+            &internal_tasks,
+            stdout,
+            &child_pty,
+            &senders.on_exit_tx,
+            senders.stdout_tx,
+            span.clone(),
+        )?;
 
         let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
         events
@@ -177,13 +185,23 @@ impl Task {
     fn spawn_stdout_reading(
         internal_tasks: &WrappedTaskTracker,
         stdout: PtyReadPart,
+        child_pty: &PtyChild,
+        on_exit_sender: &watch::Sender<Option<ExitStatus>>,
         stdout_tx: broadcast::Sender<Arc<String>>,
         span: Span,
-    ) {
+    ) -> Result<(), TaskError> {
+        let child_pty = child_pty
+            .try_clone()
+            .map_err(TaskError::pty_creation_error)?;
+        let mut on_exit_receiver = on_exit_sender.subscribe();
+        let child_process_exit_future = Box::pin(async move {
+            let _ = on_exit_receiver.changed().await;
+        });
+        let pty_reader = PtyReader::new(stdout, child_pty, child_process_exit_future);
         internal_tasks
             .spawn({
                 async move {
-                    let mut stdout = BufReader::new(stdout);
+                    let mut stdout = BufReader::new(pty_reader);
                     loop {
                         let mut buf = String::new();
                         let read_bytes = stdout.read_line(&mut buf).await;
@@ -207,6 +225,7 @@ impl Task {
                 .instrument(span)
             })
             .expect("Internal tasks should not be joined yet");
+        Ok(())
     }
 
     fn spawn_waiting_for_exit(

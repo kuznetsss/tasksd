@@ -72,6 +72,14 @@
     - [x] subscribe to output is true by default
 - [x] License
 - [x] CI
+- [x] Bug: on macos when pty child dies its output buffer is dropped. So there is a race between output reader and child pty getting closed
+      Solution:
+        - create new PtyOutput struct which holds child pty, self read part and the future that the child process has exited
+        - implement AsyncRead for PtyOutput:
+            - if self pty returned pending, check whether the process has exited
+- [ ] Tests:
+    - [ ] PtyReadPart::try_read
+    - [ ] pty_reader.rs
 - [ ] Better test coverage:
     - Use cargo-llvm-cov for coverage: https://github.com/taiki-e/cargo-llvm-cov
 - [ ] Integration tests
