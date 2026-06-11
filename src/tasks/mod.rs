@@ -3,6 +3,7 @@ mod finished_task;
 mod info;
 mod output_buffer;
 mod pty;
+mod pty_reader;
 mod recent_finished_tasks;
 mod senders;
 mod task;
