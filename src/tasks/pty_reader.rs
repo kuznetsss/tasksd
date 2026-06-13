@@ -48,6 +48,12 @@ impl AsyncRead for PtyReader {
         match this.child_process_exit_future.as_mut().poll(cx) {
             Poll::Ready(_) => {
                 this.child_process_exited = true;
+                // The child is reaped, so no more output can ever arrive. The poll_read above
+                // returned Pending and armed a readiness waker — but if the buffer is already
+                // empty that waker will never fire (nothing left to make the fd readable), so
+                // waiting would hang. Read straight from the kernel instead: it returns any
+                // bytes still buffered (the readiness cache may not reflect them yet) or
+                // WouldBlock, which we treat as EOF.
                 Poll::Ready(try_read(Pin::new(&mut this.pty_read_part), buf))
             }
             Poll::Pending => Poll::Pending,
