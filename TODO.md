@@ -83,6 +83,7 @@
 - [ ] Better test coverage:
     - Use cargo-llvm-cov for coverage: https://github.com/taiki-e/cargo-llvm-cov
 - [ ] Integration tests
+- [ ] Remove anyhow where possible
 - [ ] Verify shutdown and cancellation paths
 - [ ] Fix TODOs comments
 - [ ] Readme
