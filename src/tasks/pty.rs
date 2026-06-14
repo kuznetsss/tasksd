@@ -228,20 +228,20 @@ mod tests {
 
     #[tokio::test]
     async fn pty_read_part_try_read_ok() {
-        let (pty, child) = create_pty_pair().unwrap(); // child is dropped
+        let (pty, child) = create_pty_pair().unwrap();
         let (mut read, _write) = pty.into_split().unwrap();
 
-        let msg = "some message";
+        const MSG: &str = "some message";
         assert_eq!(
-            rustix::io::write(&child, msg.as_bytes()).unwrap(),
-            msg.len()
+            rustix::io::write(&child, MSG.as_bytes()).unwrap(),
+            MSG.len()
         );
 
-        let mut buf_raw = vec![MaybeUninit::new(0); msg.len() * 2];
+        let mut buf_raw = [MaybeUninit::new(0); MSG.len() * 2];
         let mut buf = tokio::io::ReadBuf::uninit(&mut buf_raw);
         assert!(buf.filled().is_empty());
         read.try_read(&mut buf).unwrap();
-        assert_eq!(buf.filled(), msg.as_bytes());
+        assert_eq!(buf.filled(), MSG.as_bytes());
 
         buf.clear();
         let err = read.try_read(&mut buf).unwrap_err();
