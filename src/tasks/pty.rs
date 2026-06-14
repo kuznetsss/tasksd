@@ -98,7 +98,7 @@ impl PtyReadPart {
                 buf.advance(read_bytes);
                 Ok(())
             }
-            Err(e) if e == rustix::io::Errno::IO => Ok(()), // EIO means EOF for pty
+            Err(e) if e == rustix::io::Errno::IO => Ok(()), // EIO means EOF for pty on Linux
             Err(e) => Err(e),
         }
     }
@@ -183,6 +183,7 @@ impl AsyncWrite for PtyWritePart {
 #[cfg(test)]
 mod tests {
     use std::{
+        assert_matches,
         io::ErrorKind,
         mem::MaybeUninit,
         pin::{Pin, pin},
@@ -197,11 +198,59 @@ mod tests {
     };
     use tokio::io::{AsyncRead, ReadBuf};
 
-    #[tokio::test]
+    #[tokio::test] // AsyncFd requires to be created only in a context of tokio runtime
     async fn create() {
         let (pty, child) = create_pty_pair().unwrap();
         assert!(rustix::termios::isatty(&pty.0));
         assert!(rustix::termios::isatty(&child));
+    }
+
+    #[tokio::test]
+    async fn pty_read_part_try_read_error() {
+        let (pty, _child) = create_pty_pair().unwrap();
+        let (mut read, _write) = pty.into_split().unwrap();
+        let mut buf_raw = [0u8; 16];
+        let mut buf = tokio::io::ReadBuf::new(&mut buf_raw);
+        let err = read.try_read(&mut buf).unwrap_err();
+        assert_matches!(err, rustix::io::Errno::WOULDBLOCK);
+    }
+
+    #[tokio::test]
+    async fn pty_read_part_try_read_io_error() {
+        let (pty, _) = create_pty_pair().unwrap(); // child is dropped
+        let (mut read, _write) = pty.into_split().unwrap();
+        let mut buf_raw = [0u8; 16];
+        let mut buf = tokio::io::ReadBuf::new(&mut buf_raw);
+        assert!(buf.filled().is_empty());
+        read.try_read(&mut buf).unwrap();
+        assert!(buf.filled().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pty_read_part_try_read_ok() {
+        let (pty, child) = create_pty_pair().unwrap();
+        let (mut read, _write) = pty.into_split().unwrap();
+
+        const MSG: &str = "some message";
+        assert_eq!(
+            rustix::io::write(&child, MSG.as_bytes()).unwrap(),
+            MSG.len()
+        );
+
+        let mut buf_raw = [MaybeUninit::new(0); MSG.len() * 2];
+        let mut buf = tokio::io::ReadBuf::uninit(&mut buf_raw);
+        assert!(buf.filled().is_empty());
+        read.try_read(&mut buf).unwrap();
+        assert_eq!(buf.filled(), MSG.as_bytes());
+
+        buf.clear();
+        let err = read.try_read(&mut buf).unwrap_err();
+        assert_matches!(err, rustix::io::Errno::WOULDBLOCK);
+
+        drop(child);
+        assert!(buf.filled().is_empty());
+        read.try_read(&mut buf).unwrap();
+        assert!(buf.filled().is_empty());
     }
 
     #[tokio::test]

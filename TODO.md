@@ -77,12 +77,14 @@
         - create new PtyOutput struct which holds child pty, self read part and the future that the child process has exited
         - implement AsyncRead for PtyOutput:
             - if self pty returned pending, check whether the process has exited
-- [ ] Tests:
-    - [ ] PtyReadPart::try_read
-    - [ ] pty_reader.rs
+- [x] Tests:
+    - [x] PtyReadPart::try_read
+    - [x] pty_reader.rs
+- [ ] Write to output buffer in output reading corotuine directly so the buffer become lossless. Because broadcast channel is lossy (see NOTE in senders.rs)
 - [ ] Better test coverage:
     - Use cargo-llvm-cov for coverage: https://github.com/taiki-e/cargo-llvm-cov
 - [ ] Integration tests
+- [ ] Remove anyhow where possible
 - [ ] Verify shutdown and cancellation paths
 - [ ] Fix TODOs comments
 - [ ] Readme

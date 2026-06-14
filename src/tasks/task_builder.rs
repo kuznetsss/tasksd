@@ -157,7 +157,7 @@ mod tests {
             assert_eq!(
                 builder
                     .senders
-                    .stdout_tx
+                    .output_tx
                     .send(Arc::new(l.to_string()))
                     .unwrap(),
                 2
