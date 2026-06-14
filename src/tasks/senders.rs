@@ -3,6 +3,11 @@ use std::{process::ExitStatus, sync::Arc};
 use tokio::sync::{broadcast, watch};
 
 pub const CHANNEL_CAPACITY: usize = 16;
+// NOTE: broadcast is lossy which means either:
+// - slow subscriber losses data
+// - too fast producer will cause loosing data for all subscribers
+// Maybe in the future this should be changed to broadcast into output_buffer
+// with slowing down producer when needed by backpressure.
 
 #[derive(Debug)]
 pub(in crate::tasks) struct TaskSenders {
