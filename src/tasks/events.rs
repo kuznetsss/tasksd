@@ -40,7 +40,7 @@ pub enum TaskCallbackError {
 
 #[derive(Debug)]
 pub(in crate::tasks) struct TaskEvents {
-    stdout_rx: broadcast::Receiver<Arc<String>>,
+    output_rx: broadcast::Receiver<Arc<String>>,
     on_exit_rx: watch::Receiver<Option<ExitStatus>>,
     related_tasks: WrappedTaskTracker,
 }
@@ -48,7 +48,7 @@ pub(in crate::tasks) struct TaskEvents {
 impl TaskEvents {
     pub(in crate::tasks) fn new(senders: &TaskSenders) -> Self {
         Self {
-            stdout_rx: senders.stdout_tx.subscribe(),
+            output_rx: senders.output_tx.subscribe(),
             on_exit_rx: senders.on_exit_tx.subscribe(),
             related_tasks: WrappedTaskTracker::new(PanicHandler::new_aborting()),
         }
@@ -61,12 +61,12 @@ impl TaskEvents {
         if self.has_exited() {
             return Err(TaskError::AlreadyExited);
         }
-        let mut stdout_rx = self.stdout_rx.resubscribe();
+        let mut output_rx = self.output_rx.resubscribe();
         self.related_tasks.spawn(async move {
             loop {
-                let line = match stdout_rx.recv().await {
+                let line = match output_rx.recv().await {
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("Stdout receiver is too slow. Have to skip {n} lines");
+                        warn!("Output receiver is too slow. Have to skip {n} lines");
                         continue;
                     }
                     Err(_) => break,
@@ -186,7 +186,7 @@ mod tests {
         assert_eq!(
             test_data
                 .senders
-                .stdout_tx
+                .output_tx
                 .send(Arc::new(output[0].to_string()))
                 .unwrap(),
             2
@@ -196,7 +196,7 @@ mod tests {
         test_data.abort_handle.abort();
         test_data
             .senders
-            .stdout_tx
+            .output_tx
             .send(Arc::new(output[1].to_string()))
             .unwrap();
         test_data.events.join_all().await;
@@ -211,7 +211,7 @@ mod tests {
         for i in 0..CHANNEL_CAPACITY * 2 {
             test_data
                 .senders
-                .stdout_tx
+                .output_tx
                 .send(Arc::new(i.to_string()))
                 .unwrap();
             assert!(
@@ -230,14 +230,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_output_subscribes_to_stdout_tx() {
+    async fn on_output_subscribes_to_output_tx() {
         let test_data = OnOutputTestsData::new();
         let output = ["some output", "another output"];
         for o in output {
             assert_eq!(
                 test_data
                     .senders
-                    .stdout_tx
+                    .output_tx
                     .send(Arc::new(o.to_string()))
                     .unwrap(),
                 2
@@ -276,7 +276,7 @@ mod tests {
             assert_eq!(
                 test_data
                     .senders
-                    .stdout_tx
+                    .output_tx
                     .send(Arc::new(o.to_string()))
                     .unwrap(),
                 3
@@ -288,7 +288,7 @@ mod tests {
         let third_output = "third output";
         test_data
             .senders
-            .stdout_tx
+            .output_tx
             .send(Arc::new(third_output.to_string()))
             .unwrap();
         drop(test_data.senders);
@@ -311,7 +311,7 @@ mod tests {
         let output = ["first", "second"];
         assert_eq!(
             senders
-                .stdout_tx
+                .output_tx
                 .send(Arc::new(output[0].to_string()))
                 .unwrap(),
             1
@@ -328,7 +328,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             senders
-                .stdout_tx
+                .output_tx
                 .send(Arc::new(output[1].to_string()))
                 .unwrap(),
             2
@@ -356,7 +356,7 @@ mod tests {
             .unwrap();
         for _ in 0..10 {
             senders
-                .stdout_tx
+                .output_tx
                 .send("some line".to_string().into())
                 .unwrap();
         }

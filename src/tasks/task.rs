@@ -44,19 +44,19 @@ impl Task {
         let _entered = span.enter();
 
         let (pty, child_pty) = create_pty_pair().map_err(TaskError::pty_creation_error)?;
-        let (stdout, stdin) = pty
+        let (pty_read, pty_write) = pty
             .into_split()
             .map_err(TaskError::pty_creation_error)
             .inspect_err(|e| warn!("Error splitting pty: {e}"))?;
 
         let info = Arc::new(info);
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
-        Self::spawn_stdout_reading(
+        Self::spawn_output_reading(
             &internal_tasks,
-            stdout,
+            pty_read,
             &child_pty,
             &senders.on_exit_tx,
-            senders.stdout_tx,
+            senders.output_tx,
             span.clone(),
         )?;
 
@@ -79,7 +79,7 @@ impl Task {
 
         let task = Self {
             info,
-            stdin: tokio::sync::Mutex::new(stdin),
+            stdin: tokio::sync::Mutex::new(pty_write),
             pid,
             events,
             internal_tasks,
@@ -182,9 +182,9 @@ impl Task {
         Ok(child)
     }
 
-    fn spawn_stdout_reading(
+    fn spawn_output_reading(
         internal_tasks: &WrappedTaskTracker,
-        stdout: PtyReadPart,
+        pty_read_part: PtyReadPart,
         child_pty: &PtyChild,
         on_exit_sender: &watch::Sender<Option<ExitStatus>>,
         stdout_tx: broadcast::Sender<Arc<String>>,
@@ -197,7 +197,7 @@ impl Task {
         let child_process_exit_future = Box::pin(async move {
             let _ = on_exit_receiver.changed().await;
         });
-        let pty_reader = PtyReader::new(stdout, child_pty, child_process_exit_future);
+        let pty_reader = PtyReader::new(pty_read_part, child_pty, child_process_exit_future);
         internal_tasks
             .spawn({
                 async move {
