@@ -1,0 +1,73 @@
+# Tasksd
+
+![CI status](https://github.com/kuznetsss/tasksd/actions/workflows/ci.yml/badge.svg)
+![Crates audit](https://github.com/kuznetsss/tasksd/actions/workflows/audit.yml/badge.svg)
+[![Test coverage](https://codecov.io/gh/kuznetsss/tasksd/graph/badge.svg?token=NBUAOGLWUH)](https://codecov.io/gh/kuznetsss/tasksd)
+
+Tasksd is a daemon allowing to spawn shell commands via JSON-RPC API.
+As a daemon it detaches execution from the client allowing the spawned process to run even if the client is down.
+
+> [!WARNING]
+> Tasksd is still under development. There could be bugs, API-breaking changes, and any other sort of instability.
+
+## Why it exists
+
+A few reasons:
+- I was curious to try applying the idea of LSP to task running.
+- I didn't like any existing Neovim code runners and I wanted to shift as much logic as possible from Lua to Rust
+
+## Installation
+
+For now cargo is the easiest way to install tasksd (you may need the latest stable version of the rust toolchain):
+
+```bash
+cargo install --git https://github.com/kuznetsss/tasksd
+```
+
+## Usage
+
+Only one parameter - unix socket path is required to start tasksd, e.g.:
+```shell
+tasksd --unix-socket-path /tmp/tasksd_socket
+```
+Once tasksd is started it will listen for unix socket connections.
+See [API doc](docs/API.md) on how to interact with tasksd.
+
+Press `Ctrl-C` or send `SIGINT` to start graceful shutdown (shutting down all the running tasks before exiting tasksd itself).
+Second `Ctrl-C` (or `SIGINT`) will force tasksd to exit immediately.
+
+Use `--help` flag to see all the available options.
+
+## Features
+
+- tasksd is a daemon - tasks keep running after client disconnects
+- PTY is allocated for each task - spawned command sees a real terminal
+- output capture - each task output is captured into a ring buffer (by default tasksd keeps last 10 000 lines)
+- streaming JSON-RPC API - clients subscribe to live output and exit notifications over a unix socket
+- type-safe task lifecycle - tasks are modeled with the typestate pattern (builder → running → finished), so invalid transitions don't compile.
+
+## JSON-RPC API
+
+API is documented in [docs/API.md](docs/API.md).
+
+## Roadmap
+
+`0.2.0`:
+- [ ] Add line number to output notification
+- [ ] Add notifications about missed output
+- [ ] Subscription control (unsubscribe)
+- [ ] Broadcast shutdown notification to all connections
+- [ ] Tasks chains
+- [ ] Shutdown API method
+- [ ] Limit log file size
+- [ ] Support graceful shutdown by `SIGTERM`
+
+Future ideas:
+- Add suggestion module (history, runnables, tasks.json)
+- Output search/filter
+- TCP sockets support
+- No pty tasks
+
+## Acknowledgments
+
+- [pty-process](https://docs.rs/pty-process/latest/pty_process/) crate for an example of how to open ptys using [rustix](https://docs.rs/rustix/latest/rustix/)
