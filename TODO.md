@@ -81,13 +81,13 @@
     - [x] PtyReadPart::try_read
     - [x] pty_reader.rs
 - [x] Write to output buffer in output reading corotuine directly so the buffer become lossless. Because broadcast channel is lossy (see NOTE in senders.rs)
+- [ ] Readme
 - [ ] Better test coverage:
     - Use cargo-llvm-cov for coverage: https://github.com/taiki-e/cargo-llvm-cov
 - [ ] Integration tests
 - [ ] Remove anyhow where possible
 - [ ] Verify shutdown and cancellation paths
 - [ ] Fix TODOs comments
-- [ ] Readme
 - [ ] Documentation
 
 ## Future plans
@@ -97,4 +97,5 @@
 - [ ] Subscription control (unsubscribe)
 - [ ] Broadcast shutdown notification to all connections
 - [ ] Tasks chains
+- [ ] Shutdown API method
 - [ ] Limit log file size
