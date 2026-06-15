@@ -21,6 +21,10 @@ use crate::tasks::{
     tracker::{PanicHandler, WrappedTaskTracker},
 };
 
+/// Representation of a running child process.
+/// All the output of the child process is captured into [`OutputBuffer`].
+/// Subscription to output is lossy which means if a subscriber is too slow or the child process
+/// produces too much output, subscribers may miss some output lines.
 #[derive(Debug)]
 pub struct Task {
     info: Arc<TaskInfo>,
@@ -51,25 +55,16 @@ impl Task {
 
         let info = Arc::new(info);
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
+        let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
         Self::spawn_output_reading(
             &internal_tasks,
             pty_read,
             &child_pty,
             &senders.on_exit_tx,
             senders.output_tx,
+            output_buffer.clone(),
             span.clone(),
         )?;
-
-        let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
-        events
-            .on_output({
-                let output_buffer = output_buffer.clone();
-                move |line| {
-                    output_buffer.insert_line(line);
-                    async { Ok(()) }
-                }
-            })
-            .expect("Task shouldn't exit yet");
 
         let child = Self::spawn_child_process(&info, child_pty)
             .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
@@ -188,6 +183,7 @@ impl Task {
         child_pty: &PtyChild,
         on_exit_sender: &watch::Sender<Option<ExitStatus>>,
         stdout_tx: broadcast::Sender<Arc<String>>,
+        output_buffer: Arc<OutputBuffer>,
         span: Span,
     ) -> Result<(), TaskError> {
         let child_pty = child_pty
@@ -212,13 +208,14 @@ impl Task {
                             }
                             Ok(_) => {}
                             Err(e) => {
-                                warn!("Error reading from stdout for the task: {e}");
+                                warn!("Error reading output for the task: {e}");
                                 return;
                             }
                         };
                         let line = Arc::new(buf);
-                        if stdout_tx.send(line).is_err() {
-                            return;
+                        output_buffer.insert_line(line.clone());
+                        if let Err(e) = stdout_tx.send(line) {
+                            warn!("Error sending output line to subscribers: {e}");
                         }
                     }
                 }
@@ -262,13 +259,15 @@ impl Drop for Task {
 
 #[cfg(test)]
 mod tests {
+    use crate::tasks::senders::CHANNEL_CAPACITY;
+
     use super::*;
     use std::{
-        env::current_dir, os::unix::process::ExitStatusExt, path::PathBuf, str::FromStr,
+        env::current_dir, io::Write, os::unix::process::ExitStatusExt, path::PathBuf, str::FromStr,
         sync::Mutex,
     };
 
-    const OUTPUT_BUFFER_CAPACITY: usize = 10;
+    const OUTPUT_BUFFER_CAPACITY: usize = CHANNEL_CAPACITY * 2;
 
     fn make_task(
         executable: impl Into<String>,
@@ -417,6 +416,34 @@ mod tests {
         let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
         assert_eq!(task.output_buffer().capacity(), OUTPUT_BUFFER_CAPACITY);
         task.join().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn output_buffer_captures_all_the_output() {
+        const REPEAT_COUNT: usize = CHANNEL_CAPACITY * 2;
+        let mut tmp_file = tempfile::NamedTempFile::new().unwrap();
+        tmp_file
+            .write_all("some text\n".repeat(REPEAT_COUNT).as_bytes())
+            .unwrap();
+        tmp_file.flush().unwrap();
+        let captured_output = Arc::new(Mutex::new(Vec::new()));
+        let task = make_task(
+            "cat",
+            &[tmp_file.path().to_str().unwrap()],
+            current_dir().unwrap(),
+            {
+                let captured_output = captured_output.clone();
+                move |o: Arc<String>| {
+                    captured_output.lock().unwrap().push(o);
+                    async { Ok(()) }
+                }
+            },
+        )
+        .unwrap();
+        let output_buffer = task.output_buffer().clone();
+        task.join().await;
+        assert!(captured_output.lock().unwrap().len() <= REPEAT_COUNT);
+        assert_eq!(output_buffer.line_range().end, REPEAT_COUNT);
     }
 
     #[tokio::test]
