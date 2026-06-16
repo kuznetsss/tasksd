@@ -82,9 +82,34 @@
     - [x] pty_reader.rs
 - [x] Write to output buffer in output reading corotuine directly so the buffer become lossless. Because broadcast channel is lossy (see NOTE in senders.rs)
 - [x] Readme
-- [ ] Better test coverage:
+- [x] Better test coverage:
     - Use cargo-llvm-cov for coverage: https://github.com/taiki-e/cargo-llvm-cov
+- [ ] Add this before asserts in Drop:
+        if std::thread::panicking() {
+            return;
+        }
 - [ ] Integration tests
+    - [ ] invalid unix socket
+    - [ ] error accepting unix connection if possible
+    - [ ] shutdown closes running task by SIGTERM
+    - [ ] shutdown sends SIGKILL after ignoring SIGTERM
+    - [ ] application dropped without shutdown panics
+    - [ ] error reading from the client if possible
+    - [ ] invalid header
+    - [ ] missing empty line between header and body
+    - [ ] invalid json
+    - [ ] invalid request
+    - [ ] invalid method
+    - [ ] invalid params
+    - [ ] task start + output + exit notification
+    - [ ] task start + subscribe to output = false + exit notification
+    - [ ] task start failed
+    - [ ] task output -> skipped lines in subscription
+    - [ ] task start -> task send signal + output + exit notification
+    - [ ] task send signal failed
+    - [ ] running task survives client disconnect
+    - [ ] multiple clients
+    - [ ] two task start on one connection
 - [ ] Remove anyhow where possible
 - [ ] Verify shutdown and cancellation paths
 - [ ] Fix TODOs comments

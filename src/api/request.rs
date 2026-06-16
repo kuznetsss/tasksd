@@ -9,6 +9,7 @@ use crate::{
     tasks::TaskId,
 };
 
+#[derive(Debug)]
 pub struct Request {
     pub id: RequestId,
     pub method: String,
@@ -58,6 +59,7 @@ impl RequestRaw {
     }
 }
 
+#[derive(Debug)]
 pub enum RequestBody {
     TaskStart(TaskStartParams),
     TaskSendSignal(TaskSendSignalParams),
@@ -104,7 +106,58 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::api::response::ResponseBody;
+
     use super::*;
+
+    #[test]
+    fn request_parse_invalid_json() {
+        let invalid_json_str = "{";
+        let err = Request::parse(invalid_json_str).unwrap_err();
+        assert_eq!(err.id, None);
+        let body = match err.body {
+            ResponseBody::Error(b) => b,
+            b => panic!("Unexpected response body {b:?}"),
+        };
+        assert_eq!(body.code, ResponseError::PARSE_ERROR_CODE);
+    }
+
+    #[test]
+    fn request_parse_invalid_request() {
+        let invalid_json_str = "{}";
+        let err = Request::parse(invalid_json_str).unwrap_err();
+        assert_eq!(err.id, None);
+        let body = match err.body {
+            ResponseBody::Error(b) => b,
+            b => panic!("Unexpected response body {b:?}"),
+        };
+        assert_eq!(body.code, ResponseError::INVALID_REQUEST_CODE);
+    }
+
+    #[test]
+    fn request_parse_invalid_method() {
+        let invalid_json_str =
+            r#"{ "jsonrpc":"2.0", "id":123, "method":"invalid_method", "params":{} }"#;
+        let err = Request::parse(invalid_json_str).unwrap_err();
+        assert_eq!(err.id, Some(RequestId::Number(123)));
+        let body = match err.body {
+            ResponseBody::Error(b) => b,
+            b => panic!("Unexpected response body {b:?}"),
+        };
+        assert_eq!(body.code, ResponseError::METHOD_NOT_FOUND_CODE);
+    }
+
+    #[test]
+    fn request_parse_invalid_params() {
+        let invalid_json_str = r#"{ "jsonrpc":"2.0", "id":123, "method":"task.start", "params": { "invalid_param":123 } }"#;
+        let err = Request::parse(invalid_json_str).unwrap_err();
+        assert_eq!(err.id, Some(RequestId::Number(123)));
+        let body = match err.body {
+            ResponseBody::Error(b) => b,
+            b => panic!("Unexpected response body {b:?}"),
+        };
+        assert_eq!(body.code, ResponseError::INVALID_PARAMS_CODE);
+    }
 
     #[test]
     fn start_task_deserialize() {

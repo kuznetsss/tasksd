@@ -18,7 +18,11 @@ A few reasons:
 
 ## Installation
 
-For now cargo is the easiest way to install tasksd (you may need the latest stable version of the rust toolchain):
+Requirements:
+- Linux or macOS (Windows is not supported)
+- Maybe the latest stable Rust toolchain
+
+For now cargo is the easiest way to install tasksd:
 
 ```bash
 cargo install --git https://github.com/kuznetsss/tasksd
@@ -55,6 +59,7 @@ API is documented in [docs/API.md](docs/API.md).
 `0.2.0`:
 - [ ] Add line number to output notification
 - [ ] Add notifications about missed output
+- [ ] Query task output buffer for line range
 - [ ] Subscription control (unsubscribe)
 - [ ] Broadcast shutdown notification to all connections
 - [ ] Tasks chains

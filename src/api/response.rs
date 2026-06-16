@@ -99,9 +99,9 @@ pub enum ResponseResult {
 
 #[derive(Debug, Serialize)]
 pub struct ResponseError {
-    code: i32,
-    message: &'static str,
-    data: Option<String>,
+    pub code: i32,
+    pub message: &'static str,
+    pub data: Option<String>,
 }
 
 impl ResponseError {
