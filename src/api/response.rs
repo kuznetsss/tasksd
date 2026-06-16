@@ -155,3 +155,34 @@ impl ResponseError {
         Response::new(id, ResponseBody::Error(self))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_result_serialization() {
+        let result = ResponseResult::StartTaskResult {
+            task_id: TaskId(123),
+        };
+        let request_id = Some(RequestId::String("some id".to_string()));
+        let response = Response::new(request_id, result.into());
+        let json_str = serde_json::to_string(&response).unwrap();
+        assert_eq!(
+            json_str,
+            r#"{"jsonrpc":"2.0","id":"some id","result":{"task_id":123}}"#
+        )
+    }
+
+    #[test]
+    fn response_error_serialization() {
+        let error = TaskError::PtyCreationError("some error".to_string());
+        let request_id = Some(RequestId::String("some id".to_string()));
+        let response = Response::new(request_id, error.into());
+        let json_str = serde_json::to_string(&response).unwrap();
+        assert_eq!(
+            json_str,
+            r#"{"jsonrpc":"2.0","id":"some id","error":{"code":2,"message":"Error creating a new pty","data":"some error"}}"#
+        )
+    }
+}
