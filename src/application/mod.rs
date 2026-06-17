@@ -20,6 +20,7 @@ use tracing::{Instrument, info, info_span, warn};
 use crate::{tasks::TaskManager, transport::UnixSocketServer};
 use session::Session;
 
+#[derive(Debug)]
 pub struct Application {
     root_cancellation: CancellationToken,
     server: UnixSocketServer,
@@ -141,6 +142,9 @@ impl Application {
 
 impl Drop for Application {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
         assert!(
             self.shutdown_complete
                 .load(std::sync::atomic::Ordering::Relaxed),

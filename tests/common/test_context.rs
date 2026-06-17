@@ -1,15 +1,21 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use tasksd::application::{Application, CliOptions};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
+use crate::common::Client;
+
+#[derive(Debug)]
 pub struct TestContext {
     _tmp_dir: TempDir,
     socket_path: PathBuf,
     root_cancellation: CancellationToken,
-    app: Application,
+    app: Arc<Application>,
 }
 
 impl TestContext {
@@ -21,14 +27,16 @@ impl TestContext {
         &self.root_cancellation
     }
 
-    pub fn app(&self) -> &Application {
-        &self.app
+    pub fn app(&mut self) -> Arc<Application> {
+        self.app.clone()
     }
-
-    // TODO: add run server
 
     pub async fn shutdown(&self) {
         self.app.shutdown().await;
+    }
+
+    pub async fn make_client(&self) -> Client {
+        Client::connect(&self.socket_path()).await.unwrap()
     }
 }
 
@@ -56,15 +64,19 @@ impl TestContextBuilder {
 
     pub fn build(mut self) -> Result<TestContext> {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let socket_path = tmp_dir.path().join("t.sock");
+        let mut socket_path = tmp_dir.path().join("t.sock");
         let root_cancellation = CancellationToken::new();
-        self.cli_args.unix_socket_path = socket_path.clone();
+        if self.cli_args.unix_socket_path == PathBuf::default() {
+            self.cli_args.unix_socket_path = socket_path.clone();
+        } else {
+            socket_path = self.cli_args.unix_socket_path.clone();
+        }
         let app = Application::new(root_cancellation.clone(), self.cli_args)?;
         Ok(TestContext {
             _tmp_dir: tmp_dir,
             socket_path,
             root_cancellation,
-            app,
+            app: Arc::new(app),
         })
     }
 }

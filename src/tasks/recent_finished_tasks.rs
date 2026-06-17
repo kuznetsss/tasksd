@@ -5,6 +5,7 @@ use std::{
 
 use crate::tasks::{finished_task::FinishedTask, task_manager::TaskId};
 
+#[derive(Debug)]
 pub(in crate::tasks) struct RecentFinishedTasks {
     id_to_task: HashMap<TaskId, Arc<FinishedTask>>,
     recent_tasks: VecDeque<TaskId>,

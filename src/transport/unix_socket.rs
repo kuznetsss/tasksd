@@ -8,17 +8,20 @@ use tokio::net::{
 };
 
 use crate::transport::ServerImpl;
+use crate::transport::error::TransportError;
 
+#[derive(Debug)]
 pub struct UnixSocketServerImpl {
     listener: UnixListener,
     socket_path: PathBuf,
 }
 
 impl UnixSocketServerImpl {
-    pub fn new(path: &Path) -> Result<Self> {
+    pub fn new(path: &Path) -> Result<Self, TransportError> {
         // TODO: if file already exist provide more verbose error or add some logic
         Ok(Self {
-            listener: UnixListener::bind(path)?,
+            listener: UnixListener::bind(path)
+                .map_err(|e| TransportError::UnixSocketError(e, path.to_path_buf()))?,
             socket_path: path.to_path_buf(),
         })
     }

@@ -84,17 +84,15 @@
 - [x] Readme
 - [x] Better test coverage:
     - Use cargo-llvm-cov for coverage: https://github.com/taiki-e/cargo-llvm-cov
-- [ ] Add this before asserts in Drop:
+- [x] Add this before asserts in Drop:
         if std::thread::panicking() {
             return;
         }
 - [ ] Integration tests
-    - [ ] invalid unix socket
-    - [ ] error accepting unix connection if possible
-    - [ ] shutdown closes running task by SIGTERM
-    - [ ] shutdown sends SIGKILL after ignoring SIGTERM
-    - [ ] application dropped without shutdown panics
-    - [ ] error reading from the client if possible
+    - [x] invalid unix socket
+    - [x] error accepting unix connection if possible
+    - [x] application dropped without shutdown panics
+    - [x] error reading from the client if possible
     - [ ] invalid header
     - [ ] missing empty line between header and body
     - [ ] invalid json
@@ -108,6 +106,8 @@
     - [ ] task start -> task send signal + output + exit notification
     - [ ] task send signal failed
     - [ ] running task survives client disconnect
+    - [ ] shutdown closes running task by SIGTERM
+    - [ ] shutdown sends SIGKILL after ignoring SIGTERM
     - [ ] multiple clients
     - [ ] two task start on one connection
 - [ ] Remove anyhow where possible
