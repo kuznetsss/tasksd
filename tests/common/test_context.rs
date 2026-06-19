@@ -14,17 +14,12 @@ use crate::common::Client;
 pub struct TestContext {
     _tmp_dir: TempDir,
     socket_path: PathBuf,
-    root_cancellation: CancellationToken,
     app: Arc<Application>,
 }
 
 impl TestContext {
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
-    }
-
-    pub fn root_cancellation(&self) -> &CancellationToken {
-        &self.root_cancellation
     }
 
     pub fn app(&self) -> Arc<Application> {
@@ -82,7 +77,6 @@ impl TestContextBuilder {
         Ok(TestContext {
             _tmp_dir: tmp_dir,
             socket_path,
-            root_cancellation,
             app: Arc::new(app),
         })
     }

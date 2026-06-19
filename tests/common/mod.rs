@@ -1,7 +1,8 @@
-#[allow(dead_code)]
+#![allow(dead_code)]
+
+pub mod api;
 mod client;
 mod test_context;
-pub mod api;
 
 pub use client::Client;
 pub use test_context::{TestContext, TestContextBuilder};
