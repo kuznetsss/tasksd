@@ -75,13 +75,13 @@ async fn invalid_json() {
 async fn invalid_request() {
     let (ctx, mut client) = running_app().await;
 
-    let invalid_request = json![{ // id is missing
+    let invalid_request = json!({ // id is missing
         "jsonrpc":"2.0",
         "method":"task.start",
         "params":{
             "executable": "ls"
         }
-    }];
+    });
     client.send_json(&invalid_request).await.unwrap();
     let response = client.read_json().await.unwrap();
     let response = response.as_object().unwrap();
@@ -97,14 +97,14 @@ async fn invalid_method() {
     let (ctx, mut client) = running_app().await;
 
     let id = 123;
-    let invalid_request = json![{
+    let invalid_request = json!({
         "jsonrpc":"2.0",
         "id": id,
         "method":"task.invalid_method",
         "params":{
             "executable": "ls"
         }
-    }];
+    });
     client.send_json(&invalid_request).await.unwrap();
     let response = client.read_json().await.unwrap();
     let response = response.as_object().unwrap();
@@ -120,7 +120,7 @@ async fn invalid_params() {
     let (ctx, mut client) = running_app().await;
 
     let id = 123;
-    let invalid_request = json![{
+    let invalid_request = json!({
         "jsonrpc":"2.0",
         "id": id,
         "method":"task.start",
@@ -128,7 +128,7 @@ async fn invalid_params() {
             "executable": "ls",
             "invalid_param": "invalid_value"
         }
-    }];
+    });
     client.send_json(&invalid_request).await.unwrap();
     let response = client.read_json().await.unwrap();
     let response = response.as_object().unwrap();

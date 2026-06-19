@@ -1,6 +1,8 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::{Result, bail};
+use serde::de::DeserializeOwned;
+use serde_json::json;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Interest},
     net::{
@@ -13,6 +15,7 @@ use tokio::{
 pub struct Client {
     reader: BufReader<OwnedReadHalf>,
     writer: OwnedWriteHalf,
+    last_id: i64,
 }
 
 pub const HEADER: &str = "Content-Length: ";
@@ -29,6 +32,7 @@ impl Client {
         Ok(Self {
             reader: BufReader::new(reader),
             writer,
+            last_id: 0,
         })
     }
 
@@ -46,6 +50,44 @@ impl Client {
 
     pub async fn send_json(&mut self, value: &serde_json::Value) -> Result<()> {
         self.send_msg(&value.to_string()).await
+    }
+
+    pub async fn task_start(
+        &mut self,
+        executable: &str,
+        args: &[&str],
+        workdir: Option<&str>,
+        subscribe_to_output: bool,
+    ) -> Result<()> {
+        self.last_id += 1;
+        let id = self.last_id;
+        let mut json = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "task.start",
+            "params": {
+                "executable": executable,
+                "args": args,
+                "subscribe_to_output": subscribe_to_output
+            }
+        });
+
+        if let Some(w) = workdir {
+            json.as_object_mut()
+                .unwrap()
+                .get_mut("params")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert("workdir".into(), serde_json::Value::String(w.into()))
+                .unwrap();
+        }
+
+        self.send_json(&json).await
+    }
+
+    pub fn last_id(&self) -> i64 {
+        self.last_id
     }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
@@ -83,6 +125,11 @@ impl Client {
         // All messages should contain "jsonrpc": "2.0"
         assert_eq!(json.get("jsonrpc").unwrap().as_str().unwrap(), "2.0");
         Ok(json)
+    }
+
+    pub async fn read_struct<S: DeserializeOwned>(&mut self) -> Result<S> {
+        let json = self.read_json().await?;
+        serde_json::from_value(json).map_err(Into::into)
     }
 
     /// Takes 1 second if returning false

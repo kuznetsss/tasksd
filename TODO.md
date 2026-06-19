@@ -99,10 +99,10 @@
     - [x] invalid request
     - [x] invalid method
     - [x] invalid params
-    - [ ] task start + output + exit notification
-    - [ ] task start + subscribe to output = false + exit notification
-    - [ ] task start failed
-    - [ ] task output -> skipped lines in subscription
+    - [x] task start + output + exit notification
+    - [x] task start + subscribe to output = false + exit notification
+    - [x] task start failed
+    - [x] task output -> skipped lines in subscription
     - [ ] task start -> task send signal + output + exit notification
     - [ ] task send signal failed
     - [ ] running task survives client disconnect
