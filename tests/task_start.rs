@@ -1,8 +1,9 @@
 mod common;
 
-use std::io::Write;
+use std::{collections::HashMap, io::Write};
 
 use rustix::path::Arg;
+use serde::Deserialize;
 
 use crate::common::{
     api::{ErrorResponse, TaskExitNotification, TaskOutputNotification, TaskStartResponse},
@@ -107,6 +108,95 @@ async fn start_task_skipped_output() {
     assert_eq!(exit.params.task_id, task_id);
     assert_eq!(exit.params.exit_code, Some(0));
     assert_eq!(exit.params.signal, None);
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multiple_clients_start_tasks() {
+    let (ctx, mut client1) = running_app().await;
+    let mut client2 = ctx.make_client().await;
+
+    client1.task_start("ls", &[], None, false).await.unwrap();
+    client2.task_start("ls", &[], None, false).await.unwrap();
+
+    let response: TaskStartResponse = client1.read_struct().await.unwrap();
+    assert_eq!(response.id, client1.last_id());
+    let task_id1 = response.result.task_id;
+
+    let response: TaskStartResponse = client2.read_struct().await.unwrap();
+    assert_eq!(response.id, client2.last_id());
+    let task_id2 = response.result.task_id;
+
+    let exit: TaskExitNotification = client1.read_struct().await.unwrap();
+    assert_eq!(exit.params.task_id, task_id1);
+    assert_eq!(exit.params.exit_code, Some(0));
+    assert_eq!(exit.params.signal, None);
+
+    let exit: TaskExitNotification = client2.read_struct().await.unwrap();
+    assert_eq!(exit.params.task_id, task_id2);
+    assert_eq!(exit.params.exit_code, Some(0));
+    assert_eq!(exit.params.signal, None);
+
+    ctx.shutdown().await;
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ServerEvent {
+    Started(TaskStartResponse),
+    Output(TaskOutputNotification),
+    Exit(TaskExitNotification),
+}
+
+#[derive(Debug, PartialEq)]
+enum EventKind {
+    Started,
+    Output,
+    Exit,
+}
+
+impl ServerEvent {
+    fn task_id(&self) -> usize {
+        match self {
+            ServerEvent::Started(t) => t.result.task_id,
+            ServerEvent::Output(t) => t.params.task_id,
+            ServerEvent::Exit(t) => t.params.task_id,
+        }
+    }
+
+    fn kind(&self) -> EventKind {
+        match self {
+            ServerEvent::Started(_) => EventKind::Started,
+            ServerEvent::Output(_) => EventKind::Output,
+            ServerEvent::Exit(_) => EventKind::Exit,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_two_tasks_on_one_connection() {
+    let (ctx, mut client) = running_app().await;
+
+    client.task_start("echo", &["1"], None, true).await.unwrap();
+    client.task_start("echo", &["2"], None, true).await.unwrap();
+
+    let mut events_by_task: HashMap<usize, Vec<_>> = HashMap::new();
+    for _ in 0..6 {
+        let event: ServerEvent = client.read_struct().await.unwrap();
+        events_by_task
+            .entry(event.task_id())
+            .or_default()
+            .push(event.kind());
+    }
+
+    assert_eq!(events_by_task.len(), 2);
+    for events in events_by_task.values() {
+        assert_eq!(
+            events,
+            &[EventKind::Started, EventKind::Output, EventKind::Exit]
+        );
+    }
 
     ctx.shutdown().await;
 }

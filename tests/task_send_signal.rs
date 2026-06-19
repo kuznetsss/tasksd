@@ -10,7 +10,6 @@ async fn send_signal_success() {
     let (ctx, mut client) = running_app().await;
 
     client.task_start("cat", &[], None, true).await.unwrap();
-
     let response: TaskStartResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, client.last_id());
     let task_id = response.result.task_id;

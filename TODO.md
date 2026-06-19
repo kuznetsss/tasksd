@@ -106,11 +106,11 @@
     - [x] task start -> task send signal + output + exit notification
     - [x] task send signal failed
     - [x] running task survives client disconnect
-    - [ ] shutdown closes running task by SIGTERM
-    - [ ] shutdown sends SIGKILL after ignoring SIGTERM
-    - [ ] shutdown disconnects client
-    - [ ] multiple clients
-    - [ ] two task start on one connection
+    - [x] shutdown closes running task by SIGTERM
+    - [x] shutdown sends SIGKILL after ignoring SIGTERM
+    - [x] shutdown disconnects client
+    - [x] multiple clients
+    - [x] two task start on one connection
 - [ ] Remove anyhow where possible
 - [ ] Use json!() macro in tests instead of plain text
 - [ ] Verify shutdown and cancellation paths

@@ -97,7 +97,6 @@ impl Application {
 
         info!("Shutdown, sending SIGTERM to all running tasks");
 
-        self.root_cancellation.cancel();
         self.task_manager.send_signal_to_all_tasks(Signal::TERM);
 
         let mut parallel_jobs = JoinSet::new();
@@ -120,8 +119,10 @@ impl Application {
         });
         parallel_jobs.spawn({
             let task_manager = self.task_manager.clone();
+            let root_cancellation = self.root_cancellation.clone();
             async move {
                 task_manager.join().await;
+                root_cancellation.cancel();
                 Event::Finish
             }
         });
