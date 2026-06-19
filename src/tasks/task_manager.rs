@@ -313,7 +313,7 @@ mod tests {
 
     #[tokio::test]
     #[should_panic(expected = "custom panic")]
-    async fn drop_doesnt_panic_if_already_panicing() {
+    async fn drop_doesnt_panic_if_already_panicking() {
         let _tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         panic!("custom panic");
     }

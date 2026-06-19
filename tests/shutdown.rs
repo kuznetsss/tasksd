@@ -10,7 +10,7 @@ use crate::common::{
 async fn shutdown_sends_sigterm_to_running_tasks() {
     let (ctx, mut client) = running_app().await;
 
-    client.task_start("cat", &[], None, true).await.unwrap();
+    client.task_start("cat", &[], true).await.unwrap();
     let response: TaskStartResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, client.last_id());
     let task_id = response.result.task_id;
@@ -26,7 +26,7 @@ async fn shutdown_sends_sigterm_to_running_tasks() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shutdown_sends_sigkill_after_ignoring_sigkill() {
+async fn shutdown_sends_sigkill_after_ignoring_sigterm() {
     let ctx = TestContextBuilder::new()
         .adjust_cli_args(|cli| {
             cli.graceful_period = 0;
@@ -43,7 +43,6 @@ async fn shutdown_sends_sigkill_after_ignoring_sigkill() {
                 "-c",
                 r#"trap "" TERM; echo ready; while :; do sleep 1; done"#,
             ],
-            None,
             true,
         )
         .await

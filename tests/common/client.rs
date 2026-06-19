@@ -61,11 +61,10 @@ impl Client {
         &mut self,
         executable: &str,
         args: &[&str],
-        workdir: Option<&str>,
         subscribe_to_output: bool,
     ) -> Result<()> {
         let id = self.next_id();
-        let mut json = json!({
+        let json = json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": "task.start",
@@ -75,17 +74,6 @@ impl Client {
                 "subscribe_to_output": subscribe_to_output
             }
         });
-
-        if let Some(w) = workdir {
-            json.as_object_mut()
-                .unwrap()
-                .get_mut("params")
-                .unwrap()
-                .as_object_mut()
-                .unwrap()
-                .insert("workdir".into(), serde_json::Value::String(w.into()))
-                .unwrap();
-        }
 
         self.send_json(&json).await
     }

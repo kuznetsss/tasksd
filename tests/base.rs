@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::common::{
     TestContextBuilder,
-    api::{TaskSendSignalResponse, TaskStartResponse},
+    api::{ErrorResponse, TaskSendSignalResponse, TaskStartResponse},
     running_app,
 };
 
@@ -28,7 +28,7 @@ async fn application_dropped_without_shutdown_panics() {
 
 #[tokio::test]
 #[should_panic(expected = "custom panic")]
-async fn application_doesnt_double_panic_if_already_panicing() {
+async fn application_doesnt_double_panic_if_already_panicking() {
     let _ctx = TestContextBuilder::new().build().unwrap();
     panic!("custom panic")
 }
@@ -66,11 +66,9 @@ async fn invalid_json() {
     let (ctx, mut client) = running_app().await;
 
     client.send_msg("{").await.unwrap();
-    let response = client.read_json().await.unwrap();
-    let response = response.as_object().unwrap();
-    assert!(response.get("id").unwrap().is_null());
-    let error = response.get("error").unwrap().as_object().unwrap();
-    assert_eq!(error.get("code").unwrap().as_i64().unwrap(), -32700);
+    let response: ErrorResponse = client.read_struct().await.unwrap();
+    assert!(response.id.is_none());
+    assert_eq!(response.error.code, -32700);
 
     ctx.shutdown().await;
 }
@@ -87,11 +85,9 @@ async fn invalid_request() {
         }
     });
     client.send_json(&invalid_request).await.unwrap();
-    let response = client.read_json().await.unwrap();
-    let response = response.as_object().unwrap();
-    assert!(response.get("id").unwrap().is_null());
-    let error = response.get("error").unwrap().as_object().unwrap();
-    assert_eq!(error.get("code").unwrap().as_i64().unwrap(), -32600);
+    let response: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, None);
+    assert_eq!(response.error.code, -32600);
 
     ctx.shutdown().await;
 }
@@ -110,11 +106,9 @@ async fn invalid_method() {
         }
     });
     client.send_json(&invalid_request).await.unwrap();
-    let response = client.read_json().await.unwrap();
-    let response = response.as_object().unwrap();
-    assert_eq!(response.get("id").unwrap().as_i64().unwrap(), id);
-    let error = response.get("error").unwrap().as_object().unwrap();
-    assert_eq!(error.get("code").unwrap().as_i64().unwrap(), -32601);
+    let response: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, Some(id));
+    assert_eq!(response.error.code, -32601);
 
     ctx.shutdown().await;
 }
@@ -134,11 +128,9 @@ async fn invalid_params() {
         }
     });
     client.send_json(&invalid_request).await.unwrap();
-    let response = client.read_json().await.unwrap();
-    let response = response.as_object().unwrap();
-    assert_eq!(response.get("id").unwrap().as_i64().unwrap(), id);
-    let error = response.get("error").unwrap().as_object().unwrap();
-    assert_eq!(error.get("code").unwrap().as_i64().unwrap(), -32602);
+    let response: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, Some(id));
+    assert_eq!(response.error.code, -32602);
 
     ctx.shutdown().await;
 }
@@ -147,7 +139,7 @@ async fn invalid_params() {
 async fn running_task_survives_client_disconnect() {
     let (ctx, mut client) = running_app().await;
 
-    client.task_start("cat", &[], None, true).await.unwrap();
+    client.task_start("cat", &[], true).await.unwrap();
 
     let response: TaskStartResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, client.last_id());

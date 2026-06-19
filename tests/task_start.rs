@@ -20,7 +20,7 @@ async fn start_task_output_exit_notifications() {
     tmp_file.flush().unwrap();
 
     client
-        .task_start("cat", &[tmp_file.path().as_str().unwrap()], None, true)
+        .task_start("cat", &[tmp_file.path().as_str().unwrap()], true)
         .await
         .unwrap();
 
@@ -48,7 +48,7 @@ async fn start_task_output_exit_notifications() {
 async fn start_task_not_subscribed_to_output() {
     let (ctx, mut client) = running_app().await;
 
-    client.task_start("ls", &[], None, false).await.unwrap();
+    client.task_start("ls", &[], false).await.unwrap();
 
     let response: TaskStartResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, client.last_id());
@@ -67,12 +67,12 @@ async fn start_task_failed() {
     let (ctx, mut client) = running_app().await;
 
     client
-        .task_start("non_existing_executable", &[], None, false)
+        .task_start("non_existing_executable", &[], false)
         .await
         .unwrap();
 
     let response: ErrorResponse = client.read_struct().await.unwrap();
-    assert_eq!(response.id, client.last_id());
+    assert_eq!(response.id, Some(client.last_id()));
     assert_eq!(response.error.code, 3);
 
     ctx.shutdown().await;
@@ -90,7 +90,7 @@ async fn start_task_skipped_output() {
     tmp_file.flush().unwrap();
 
     client
-        .task_start("cat", &[tmp_file.path().as_str().unwrap()], None, true)
+        .task_start("cat", &[tmp_file.path().as_str().unwrap()], true)
         .await
         .unwrap();
 
@@ -117,8 +117,8 @@ async fn multiple_clients_start_tasks() {
     let (ctx, mut client1) = running_app().await;
     let mut client2 = ctx.make_client().await;
 
-    client1.task_start("ls", &[], None, false).await.unwrap();
-    client2.task_start("ls", &[], None, false).await.unwrap();
+    client1.task_start("ls", &[], false).await.unwrap();
+    client2.task_start("ls", &[], false).await.unwrap();
 
     let response: TaskStartResponse = client1.read_struct().await.unwrap();
     assert_eq!(response.id, client1.last_id());
@@ -178,8 +178,8 @@ impl ServerEvent {
 async fn start_two_tasks_on_one_connection() {
     let (ctx, mut client) = running_app().await;
 
-    client.task_start("echo", &["1"], None, true).await.unwrap();
-    client.task_start("echo", &["2"], None, true).await.unwrap();
+    client.task_start("echo", &["1"], true).await.unwrap();
+    client.task_start("echo", &["2"], true).await.unwrap();
 
     let mut events_by_task: HashMap<usize, Vec<_>> = HashMap::new();
     for _ in 0..6 {

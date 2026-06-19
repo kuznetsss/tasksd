@@ -492,7 +492,7 @@ mod tests {
 
     #[tokio::test]
     #[should_panic(expected = "custom panic")]
-    async fn doesnt_double_panic_if_already_panicing() {
+    async fn doesnt_double_panic_if_already_panicking() {
         let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
         task.wait().await;
         panic!("custom panic");

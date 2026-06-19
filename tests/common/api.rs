@@ -48,7 +48,7 @@ pub struct TaskExitNotificationParams {
 
 #[derive(Deserialize)]
 pub struct ErrorResponse {
-    pub id: i64,
+    pub id: Option<i64>,
     pub error: ErrorResponseDetails,
 }
 

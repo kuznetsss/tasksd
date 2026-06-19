@@ -16,7 +16,7 @@ pub use connection::{Connection, ConnectionWriter};
 #[cfg(test)]
 pub use error::TransportError;
 
-pub trait ServerImpl {
+pub trait ServerImpl: std::fmt::Debug {
     type ReaderHalf: ReaderImpl;
     type WriterHalf: WriterImpl;
 
@@ -26,11 +26,11 @@ pub trait ServerImpl {
 }
 
 #[derive(Debug)]
-pub struct Server<I: std::fmt::Debug> {
+pub struct Server<I> {
     inner: I,
 }
 
-impl<I: ServerImpl + std::fmt::Debug> Server<I> {
+impl<I: ServerImpl> Server<I> {
     pub async fn wait_for_connection(
         &self,
     ) -> Result<AcceptedConnection<I::ReaderHalf, I::WriterHalf>> {
