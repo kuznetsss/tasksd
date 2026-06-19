@@ -105,7 +105,7 @@
     - [x] task output -> skipped lines in subscription
     - [x] task start -> task send signal + output + exit notification
     - [x] task send signal failed
-    - [ ] running task survives client disconnect
+    - [x] running task survives client disconnect
     - [ ] shutdown closes running task by SIGTERM
     - [ ] shutdown sends SIGKILL after ignoring SIGTERM
     - [ ] shutdown disconnects client
@@ -116,13 +116,3 @@
 - [ ] Verify shutdown and cancellation paths
 - [ ] Fix TODOs comments
 - [ ] Documentation
-
-## Future plans
-
-- [ ] Add line number to output notification
-- [ ] Add notifications about missed output
-- [ ] Subscription control (unsubscribe)
-- [ ] Broadcast shutdown notification to all connections
-- [ ] Tasks chains
-- [ ] Shutdown API method
-- [ ] Limit log file size

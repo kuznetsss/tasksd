@@ -56,5 +56,5 @@ pub struct ErrorResponse {
 pub struct ErrorResponseDetails {
     pub code: i64,
     pub message: String,
-    pub data: String,
+    pub data: Option<String>,
 }

@@ -1,6 +1,10 @@
 use serde_json::json;
 
-use crate::common::{TestContextBuilder, running_app};
+use crate::common::{
+    TestContextBuilder,
+    api::{TaskSendSignalResponse, TaskStartResponse},
+    running_app,
+};
 
 mod common;
 
@@ -135,6 +139,28 @@ async fn invalid_params() {
     assert_eq!(response.get("id").unwrap().as_i64().unwrap(), id);
     let error = response.get("error").unwrap().as_object().unwrap();
     assert_eq!(error.get("code").unwrap().as_i64().unwrap(), -32602);
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn running_task_survives_client_disconnect() {
+    let (ctx, mut client) = running_app().await;
+
+    client.task_start("cat", &[], None, true).await.unwrap();
+
+    let response: TaskStartResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+    let task_id = response.result.task_id;
+
+    drop(client);
+    let mut client = ctx.make_client().await;
+    // TODO: subscribe new client on exit event of the running task when implemented
+
+    let signal = 9;
+    client.send_signal(task_id, signal).await.unwrap();
+    let response: TaskSendSignalResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
 
     ctx.shutdown().await;
 }

@@ -60,7 +60,7 @@ API is documented in [docs/API.md](docs/API.md).
 - [ ] Add line number to output notification
 - [ ] Add notifications about missed output
 - [ ] Query task output buffer for line range
-- [ ] Subscription control (unsubscribe)
+- [ ] Subscription control (subscribe on output/exit, unsubscribe)
 - [ ] Broadcast shutdown notification to all connections
 - [ ] Tasks chains
 - [ ] Shutdown API method

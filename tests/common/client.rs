@@ -147,7 +147,7 @@ impl Client {
 
     pub async fn read_struct<S: DeserializeOwned>(&mut self) -> Result<S> {
         let json = self.read_json().await?;
-        serde_json::from_value(json).map_err(Into::into)
+        serde_json::from_value(dbg!(json)).map_err(Into::into)
     }
 
     /// Takes 1 second if returning false
