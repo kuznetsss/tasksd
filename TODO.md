@@ -103,8 +103,8 @@
     - [x] task start + subscribe to output = false + exit notification
     - [x] task start failed
     - [x] task output -> skipped lines in subscription
-    - [ ] task start -> task send signal + output + exit notification
-    - [ ] task send signal failed
+    - [x] task start -> task send signal + output + exit notification
+    - [x] task send signal failed
     - [ ] running task survives client disconnect
     - [ ] shutdown closes running task by SIGTERM
     - [ ] shutdown sends SIGKILL after ignoring SIGTERM

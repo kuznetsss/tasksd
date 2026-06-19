@@ -52,6 +52,11 @@ impl Client {
         self.send_msg(&value.to_string()).await
     }
 
+    fn next_id(&mut self) -> i64 {
+        self.last_id += 1;
+        self.last_id
+    }
+
     pub async fn task_start(
         &mut self,
         executable: &str,
@@ -59,8 +64,7 @@ impl Client {
         workdir: Option<&str>,
         subscribe_to_output: bool,
     ) -> Result<()> {
-        self.last_id += 1;
-        let id = self.last_id;
+        let id = self.next_id();
         let mut json = json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -83,6 +87,20 @@ impl Client {
                 .unwrap();
         }
 
+        self.send_json(&json).await
+    }
+
+    pub async fn send_signal(&mut self, task_id: usize, signal: i32) -> Result<()> {
+        let id = self.next_id();
+        let json = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "task.send_signal",
+            "params": {
+                "task_id": task_id,
+                "signal": signal
+            }
+        });
         self.send_json(&json).await
     }
 

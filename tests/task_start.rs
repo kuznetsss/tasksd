@@ -1,3 +1,5 @@
+mod common;
+
 use std::io::Write;
 
 use rustix::path::Arg;
@@ -6,15 +8,6 @@ use crate::common::{
     api::{ErrorResponse, TaskExitNotification, TaskOutputNotification, TaskStartResponse},
     running_app,
 };
-
-mod common;
-
-/*
-    - [x] task start + output + exit notification
-    - [x] task start + subscribe to output = false + exit notification
-    - [x] task start failed
-    - [ ] task output -> skipped lines in subscription
-*/
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn start_task_output_exit_notifications() {

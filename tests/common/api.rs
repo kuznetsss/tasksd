@@ -13,6 +13,15 @@ pub struct TaskStartResult {
 }
 
 #[derive(Deserialize)]
+pub struct TaskSendSignalResponse {
+    pub id: i64,
+    pub result: TaskSendSignalResponseResult,
+}
+
+#[derive(Deserialize)]
+pub struct TaskSendSignalResponseResult {}
+
+#[derive(Deserialize)]
 pub struct TaskOutputNotification {
     pub method: MustBe!("task.output"),
     pub params: TaskOutputNotificationParams,
