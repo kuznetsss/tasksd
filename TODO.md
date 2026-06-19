@@ -93,12 +93,12 @@
     - [x] error accepting unix connection if possible
     - [x] application dropped without shutdown panics
     - [x] error reading from the client if possible
-    - [ ] invalid header
-    - [ ] missing empty line between header and body
-    - [ ] invalid json
-    - [ ] invalid request
-    - [ ] invalid method
-    - [ ] invalid params
+    - [x] invalid header
+    - [x] missing empty line between header and body
+    - [x] invalid json
+    - [x] invalid request
+    - [x] invalid method
+    - [x] invalid params
     - [ ] task start + output + exit notification
     - [ ] task start + subscribe to output = false + exit notification
     - [ ] task start failed
@@ -108,9 +108,11 @@
     - [ ] running task survives client disconnect
     - [ ] shutdown closes running task by SIGTERM
     - [ ] shutdown sends SIGKILL after ignoring SIGTERM
+    - [ ] shutdown disconnects client
     - [ ] multiple clients
     - [ ] two task start on one connection
 - [ ] Remove anyhow where possible
+- [ ] Use json!() macro in tests instead of plain text
 - [ ] Verify shutdown and cancellation paths
 - [ ] Fix TODOs comments
 - [ ] Documentation

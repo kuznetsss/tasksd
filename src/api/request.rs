@@ -66,6 +66,7 @@ pub enum RequestBody {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskStartParams {
     pub executable: String,
     pub args: Option<Vec<String>>,
@@ -82,6 +83,7 @@ impl TaskStartParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskSendSignalParams {
     pub task_id: TaskId,
 
@@ -106,6 +108,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use crate::api::response::ResponseBody;
 
     use super::*;
@@ -161,7 +165,7 @@ mod tests {
 
     #[test]
     fn start_task_deserialize() {
-        let json_str = r#"{
+        let json = json![{
             "jsonrpc":"2.0",
             "id": 123,
             "method": "task.start",
@@ -169,8 +173,8 @@ mod tests {
                 "executable": "ls",
                 "working_dir":"/tmp"
             }
-        }"#;
-        let parsed = Request::parse(json_str).unwrap();
+        }];
+        let parsed = Request::parse(&json.to_string()).unwrap();
         assert_eq!(parsed.id, RequestId::Number(123));
         let RequestBody::TaskStart(body) = parsed.body else {
             panic!("Invalid body variant")
@@ -182,8 +186,19 @@ mod tests {
     }
 
     #[test]
+    fn start_task_params_denies_extra_fields() {
+        let json = json![{
+            "executable": "ls",
+            "working_dir":"/tmp",
+            "extra_field": "some value"
+        }];
+        let err = serde_json::from_str::<TaskStartParams>(&json.to_string()).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
     fn send_signal_deserialize() {
-        let json_str = r#"{
+        let json = json![{
             "jsonrpc":"2.0",
             "id": 123,
             "method": "task.send_signal",
@@ -191,14 +206,26 @@ mod tests {
                 "task_id": 456,
                 "signal": 9
             }
-        }"#;
-        let parsed = Request::parse(json_str).unwrap();
+        }];
+        let parsed = Request::parse(&json.to_string()).unwrap();
         assert_eq!(parsed.id, RequestId::Number(123));
         let RequestBody::TaskSendSignal(body) = parsed.body else {
             panic!("Invalid body variant")
         };
         assert_eq!(body.task_id, TaskId(456));
         assert_eq!(body.signal.as_raw(), 9);
+    }
+
+    #[test]
+    fn send_signal_params_denies_extra_fields() {
+        let json = json!({
+            "task_id": 123,
+            "signal": 9,
+            "extra_field": "some value"
+        });
+
+        let err = serde_json::from_str::<TaskSendSignalParams>(&json.to_string()).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]

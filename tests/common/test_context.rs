@@ -27,8 +27,15 @@ impl TestContext {
         &self.root_cancellation
     }
 
-    pub fn app(&mut self) -> Arc<Application> {
+    pub fn app(&self) -> Arc<Application> {
         self.app.clone()
+    }
+
+    pub fn spawn_app_run(&self) {
+        let app = self.app();
+        tokio::spawn(async move {
+            app.run().await;
+        });
     }
 
     pub async fn shutdown(&self) {
