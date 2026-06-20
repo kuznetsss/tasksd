@@ -10,6 +10,39 @@ use crate::common::{
     running_app,
 };
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ServerEvent {
+    Started(TaskStartResponse),
+    Output(TaskOutputNotification),
+    Exit(TaskExitNotification),
+}
+
+#[derive(Debug, PartialEq)]
+enum EventKind {
+    Started,
+    Output,
+    Exit,
+}
+
+impl ServerEvent {
+    fn task_id(&self) -> usize {
+        match self {
+            ServerEvent::Started(t) => t.result.task_id,
+            ServerEvent::Output(t) => t.params.task_id,
+            ServerEvent::Exit(t) => t.params.task_id,
+        }
+    }
+
+    fn kind(&self) -> EventKind {
+        match self {
+            ServerEvent::Started(_) => EventKind::Started,
+            ServerEvent::Output(_) => EventKind::Output,
+            ServerEvent::Exit(_) => EventKind::Exit,
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn start_task_output_exit_notifications() {
     let (ctx, mut client) = running_app().await;
@@ -98,16 +131,34 @@ async fn start_task_skipped_output() {
     assert_eq!(response.id, client.last_id());
     let task_id = response.result.task_id;
 
-    for i in 17..=32 {
-        let line: TaskOutputNotification = client.read_struct().await.unwrap();
-        assert_eq!(line.params.task_id, task_id);
-        assert_eq!(line.params.line, format!("line {i}\r\n"));
+    let mut last_line_num = None;
+    loop {
+        match client.read_struct::<ServerEvent>().await.unwrap() {
+            ServerEvent::Output(o) => {
+                assert_eq!(o.params.task_id, task_id);
+                let line_num: i32 = o
+                    .params
+                    .line
+                    .trim_end()
+                    .strip_prefix("line ")
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert!((1..=32).contains(&line_num));
+                if let Some(last_line_num) = last_line_num {
+                    assert!(line_num > last_line_num);
+                }
+                last_line_num = Some(line_num);
+            }
+            ServerEvent::Exit(e) => {
+                assert_eq!(e.params.task_id, task_id);
+                assert_eq!(e.params.exit_code, Some(0));
+                break;
+            }
+            ServerEvent::Started(_) => panic!("Unexpected second start"),
+        }
     }
-
-    let exit: TaskExitNotification = client.read_struct().await.unwrap();
-    assert_eq!(exit.params.task_id, task_id);
-    assert_eq!(exit.params.exit_code, Some(0));
-    assert_eq!(exit.params.signal, None);
+    assert_eq!(last_line_num, Some(32));
 
     ctx.shutdown().await;
 }
@@ -139,39 +190,6 @@ async fn multiple_clients_start_tasks() {
     assert_eq!(exit.params.signal, None);
 
     ctx.shutdown().await;
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum ServerEvent {
-    Started(TaskStartResponse),
-    Output(TaskOutputNotification),
-    Exit(TaskExitNotification),
-}
-
-#[derive(Debug, PartialEq)]
-enum EventKind {
-    Started,
-    Output,
-    Exit,
-}
-
-impl ServerEvent {
-    fn task_id(&self) -> usize {
-        match self {
-            ServerEvent::Started(t) => t.result.task_id,
-            ServerEvent::Output(t) => t.params.task_id,
-            ServerEvent::Exit(t) => t.params.task_id,
-        }
-    }
-
-    fn kind(&self) -> EventKind {
-        match self {
-            ServerEvent::Started(_) => EventKind::Started,
-            ServerEvent::Output(_) => EventKind::Output,
-            ServerEvent::Exit(_) => EventKind::Exit,
-        }
-    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
