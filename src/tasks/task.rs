@@ -14,7 +14,7 @@ use crate::tasks::{
     finished_task::FinishedTask,
     info::TaskInfo,
     output_buffer::OutputBuffer,
-    pty::{PtyChild, PtyReadPart, PtyWritePart, create_pty_pair},
+    pty::{PtyChild, PtyWritePart, create_pty_pair},
     pty_reader::PtyReader,
     senders::TaskSenders,
     task_error::TaskError,
@@ -25,6 +25,8 @@ use crate::tasks::{
 /// All the output of the child process is captured into [`OutputBuffer`].
 /// Subscription to output is lossy which means if a subscriber is too slow or the child process
 /// produces too much output, subscribers may miss some output lines.
+/// There is a strong guarantee that on_exit notification is sent after
+/// all the output notifications.
 #[derive(Debug)]
 pub struct Task {
     info: Arc<TaskInfo>,
@@ -56,21 +58,42 @@ impl Task {
         let info = Arc::new(info);
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
         let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
+
+        let (internal_on_exit_sender, internal_on_exit_receiver) = watch::channel(None);
+        let child_process_exit_future = Box::pin({
+            let mut on_exit_internal_receiver = internal_on_exit_receiver.clone();
+            async move {
+                let _ = on_exit_internal_receiver.changed().await;
+            }
+        });
+        let pty_reader = PtyReader::new(
+            pty_read,
+            child_pty
+                .try_clone()
+                .map_err(TaskError::pty_creation_error)?,
+            child_process_exit_future,
+        );
+
         Self::spawn_output_reading(
             &internal_tasks,
-            pty_read,
-            &child_pty,
-            &senders.on_exit_tx,
+            pty_reader,
+            internal_on_exit_receiver,
+            senders.on_exit_tx,
             senders.output_tx,
             output_buffer.clone(),
             span.clone(),
-        )?;
+        );
 
         let child = Self::spawn_child_process(&info, child_pty)
             .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
         let pid = child.id().expect("pid");
         info!(pid, "Spawned a process");
-        Self::spawn_waiting_for_exit(&internal_tasks, senders.on_exit_tx, child, span.clone());
+        Self::spawn_waiting_for_exit(
+            &internal_tasks,
+            internal_on_exit_sender,
+            child,
+            span.clone(),
+        );
 
         let task = Self {
             info,
@@ -179,21 +202,13 @@ impl Task {
 
     fn spawn_output_reading(
         internal_tasks: &WrappedTaskTracker,
-        pty_read_part: PtyReadPart,
-        child_pty: &PtyChild,
-        on_exit_sender: &watch::Sender<Option<ExitStatus>>,
+        pty_reader: PtyReader,
+        mut internal_on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
+        on_exit_sender: watch::Sender<Option<ExitStatus>>,
         stdout_tx: broadcast::Sender<Arc<String>>,
         output_buffer: Arc<OutputBuffer>,
         span: Span,
-    ) -> Result<(), TaskError> {
-        let child_pty = child_pty
-            .try_clone()
-            .map_err(TaskError::pty_creation_error)?;
-        let mut on_exit_receiver = on_exit_sender.subscribe();
-        let child_process_exit_future = Box::pin(async move {
-            let _ = on_exit_receiver.changed().await;
-        });
-        let pty_reader = PtyReader::new(pty_read_part, child_pty, child_process_exit_future);
+    ) {
         internal_tasks
             .spawn({
                 async move {
@@ -204,12 +219,12 @@ impl Task {
                         match read_bytes {
                             Ok(0) => {
                                 // EOF
-                                return;
+                                break;
                             }
                             Ok(_) => {}
                             Err(e) => {
                                 warn!("Error reading output for the task: {e}");
-                                return;
+                                break;
                             }
                         };
                         let line = Arc::new(buf);
@@ -218,11 +233,16 @@ impl Task {
                             warn!("Error sending output line to subscribers: {e}");
                         }
                     }
+                    if internal_on_exit_receiver.changed().await.is_ok() {
+                        let exit_status = internal_on_exit_receiver.borrow().to_owned();
+                        on_exit_sender
+                            .send(exit_status)
+                            .expect("One receiver in events should be alive");
+                    }
                 }
                 .instrument(span)
             })
             .expect("Internal tasks should not be joined yet");
-        Ok(())
     }
 
     fn spawn_waiting_for_exit(
@@ -262,6 +282,8 @@ impl Drop for Task {
 
 #[cfg(test)]
 mod tests {
+    use rustix::path::Arg;
+
     use crate::tasks::senders::CHANNEL_CAPACITY;
 
     use super::*;
@@ -503,5 +525,53 @@ mod tests {
         let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
         task.join().await;
         task.join().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exit_notification_is_after_output() {
+        let mut tmp_file = tempfile::NamedTempFile::new().unwrap();
+        tmp_file
+            .write_all("line\n".repeat(CHANNEL_CAPACITY).as_bytes())
+            .unwrap();
+        tmp_file.flush().unwrap();
+
+        #[derive(Debug, PartialEq, Clone)]
+        enum Event {
+            Output,
+            Exit,
+        }
+
+        let captured_events = Arc::new(Mutex::new(Vec::new()));
+        let senders = TaskSenders::new();
+        let events = TaskEvents::new(&senders);
+        events
+            .on_output({
+                let captured_events = captured_events.clone();
+                move |_| {
+                    captured_events.lock().unwrap().push(Event::Output);
+                    async { Ok(()) }
+                }
+            })
+            .unwrap();
+        events
+            .on_exit({
+                let captured_events = captured_events.clone();
+                move |_| {
+                    captured_events.lock().unwrap().push(Event::Exit);
+                    async {}
+                }
+            })
+            .unwrap();
+
+        let info = TaskInfo {
+            executable: "cat".into(),
+            args: vec![tmp_file.path().as_str().unwrap().into()],
+            working_dir: current_dir().unwrap(),
+        };
+        let task = Task::new(info, senders, events, OUTPUT_BUFFER_CAPACITY).unwrap();
+        task.join().await;
+        let mut expected = vec![Event::Output; CHANNEL_CAPACITY];
+        expected.push(Event::Exit);
+        assert_eq!(*captured_events.lock().unwrap(), expected);
     }
 }
