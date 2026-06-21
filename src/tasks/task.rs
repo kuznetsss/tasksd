@@ -16,7 +16,7 @@ use crate::tasks::{
     output_buffer::OutputBuffer,
     pty::{PtyChild, PtyWritePart, create_pty_pair},
     pty_reader::PtyReader,
-    senders::TaskSenders,
+    senders::{TaskEvent, TaskSender},
     task_error::TaskError,
     tracker::{PanicHandler, WrappedTaskTracker},
 };
@@ -40,7 +40,7 @@ pub struct Task {
 impl Task {
     pub(in crate::tasks) fn new(
         info: TaskInfo,
-        senders: TaskSenders,
+        senders: TaskSender,
         events: TaskEvents,
         output_buffer_capacity: usize,
     ) -> Result<Self, TaskError> {
@@ -78,8 +78,7 @@ impl Task {
             &internal_tasks,
             pty_reader,
             internal_on_exit_receiver,
-            senders.on_exit_tx,
-            senders.output_tx,
+            senders.0,
             output_buffer.clone(),
             span.clone(),
         );
@@ -204,8 +203,7 @@ impl Task {
         internal_tasks: &WrappedTaskTracker,
         pty_reader: PtyReader,
         mut internal_on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
-        on_exit_sender: watch::Sender<Option<ExitStatus>>,
-        stdout_tx: broadcast::Sender<Arc<String>>,
+        events_tx: broadcast::Sender<TaskEvent>,
         output_buffer: Arc<OutputBuffer>,
         span: Span,
     ) {
@@ -229,14 +227,17 @@ impl Task {
                         };
                         let line = Arc::new(buf);
                         output_buffer.insert_line(line.clone());
-                        if let Err(e) = stdout_tx.send(line) {
+                        if let Err(e) = events_tx.send(TaskEvent::Output(line)) {
                             warn!("Error sending output line to subscribers: {e}");
                         }
                     }
                     if internal_on_exit_receiver.changed().await.is_ok() {
-                        let exit_status = internal_on_exit_receiver.borrow().to_owned();
-                        on_exit_sender
-                            .send(exit_status)
+                        let exit_status = internal_on_exit_receiver
+                            .borrow()
+                            .to_owned()
+                            .expect("Exit status should always be Some");
+                        events_tx
+                            .send(TaskEvent::Exit(exit_status))
                             .expect("One receiver in events should be alive");
                     }
                 }
@@ -300,15 +301,15 @@ mod tests {
         working_dir: impl Into<PathBuf>,
         on_output: impl TaskOutputCallback,
     ) -> Result<Task, TaskError> {
-        let senders = TaskSenders::new();
-        let events = TaskEvents::new(&senders);
+        let sender = TaskSender::new();
+        let events = TaskEvents::new(&sender);
         events.on_output(on_output).unwrap();
         let info = TaskInfo {
             executable: executable.into(),
             args: args.iter().map(|&s| String::from(s)).collect(),
             working_dir: working_dir.into(),
         };
-        Task::new(info, senders, events, OUTPUT_BUFFER_CAPACITY)
+        Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY)
     }
 
     fn noop_callback() -> impl TaskOutputCallback {
@@ -542,8 +543,8 @@ mod tests {
         }
 
         let captured_events = Arc::new(Mutex::new(Vec::new()));
-        let senders = TaskSenders::new();
-        let events = TaskEvents::new(&senders);
+        let sender = TaskSender::new();
+        let events = TaskEvents::new(&sender);
         events
             .on_output({
                 let captured_events = captured_events.clone();
@@ -568,7 +569,7 @@ mod tests {
             args: vec![tmp_file.path().as_str().unwrap().into()],
             working_dir: current_dir().unwrap(),
         };
-        let task = Task::new(info, senders, events, OUTPUT_BUFFER_CAPACITY).unwrap();
+        let task = Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY).unwrap();
         task.join().await;
         let mut expected = vec![Event::Output; CHANNEL_CAPACITY];
         expected.push(Event::Exit);

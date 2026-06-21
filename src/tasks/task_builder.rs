@@ -3,7 +3,7 @@ use std::{env::current_dir, path::PathBuf};
 use crate::tasks::{
     events::{TaskEvents, TaskExitCallback, TaskOutputCallback},
     info::TaskInfo,
-    senders::TaskSenders,
+    senders::TaskSender,
     task::Task,
     task_error::TaskError,
 };
@@ -13,21 +13,21 @@ pub struct TaskBuilder {
     args: Option<Vec<String>>,
     working_dir: Option<PathBuf>,
 
-    senders: TaskSenders,
+    sender: TaskSender,
     events: TaskEvents,
     output_buffer_capacity: usize,
 }
 
 impl TaskBuilder {
     pub fn new(executable: impl Into<String>, output_buffer_capacity: usize) -> Self {
-        let senders = TaskSenders::new();
-        let events = TaskEvents::new(&senders);
+        let sender = TaskSender::new();
+        let events = TaskEvents::new(&sender);
         Self {
             executable: executable.into(),
             args: None,
             working_dir: None,
             events,
-            senders,
+            sender,
             output_buffer_capacity,
         }
     }
@@ -78,7 +78,7 @@ impl TaskBuilder {
             working_dir,
         };
 
-        Task::new(info, self.senders, self.events, self.output_buffer_capacity)
+        Task::new(info, self.sender, self.events, self.output_buffer_capacity)
     }
 }
 
@@ -94,8 +94,8 @@ mod tests {
 
     const OUTPUT_BUFFER_CAPACITY: usize = 10;
 
-    #[test]
-    fn arg_adds_arg() {
+    #[tokio::test]
+    async fn arg_adds_arg() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
         assert!(builder.args.is_none());
         let arg = "some_arg";
@@ -110,8 +110,8 @@ mod tests {
         assert_eq!(builder.args.as_ref().unwrap()[1], another_arg);
     }
 
-    #[test]
-    fn args_adds_args() {
+    #[tokio::test]
+    async fn args_adds_args() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
         assert!(builder.args.is_none());
         let args = ["some", "args"];
@@ -129,8 +129,8 @@ mod tests {
         assert_eq!(builder.args.as_ref().unwrap()[args.len()..], another_args);
     }
 
-    #[test]
-    fn working_dir_sets_working_dir() {
+    #[tokio::test]
+    async fn working_dir_sets_working_dir() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
         assert!(builder.working_dir.is_none());
         let wd = "/tmp";
@@ -154,16 +154,9 @@ mod tests {
         });
         let output_lines = ["some output", "other output"];
         for l in &output_lines {
-            assert_eq!(
-                builder
-                    .senders
-                    .output_tx
-                    .send(Arc::new(l.to_string()))
-                    .unwrap(),
-                2
-            );
+            assert_eq!(builder.sender.0.send(l.to_string().into()).unwrap(), 3);
         }
-        drop(builder.senders);
+        drop(builder.sender);
         builder.events.join_all().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), output_lines.len());
@@ -184,8 +177,8 @@ mod tests {
             }
         });
         let exit_code = ExitStatus::from_raw(123);
-        builder.senders.on_exit_tx.send(Some(exit_code)).unwrap();
-        drop(builder.senders);
+        builder.sender.0.send(exit_code.into()).unwrap();
+        drop(builder.sender);
         builder.events.join_all().await;
         let captured_exit_code = captured_exit_code.lock().unwrap();
         assert!(captured_exit_code.is_some());
