@@ -81,21 +81,38 @@
     - [x] PtyReadPart::try_read
     - [x] pty_reader.rs
 - [x] Write to output buffer in output reading corotuine directly so the buffer become lossless. Because broadcast channel is lossy (see NOTE in senders.rs)
-- [ ] Readme
-- [ ] Better test coverage:
+- [x] Readme
+- [x] Better test coverage:
     - Use cargo-llvm-cov for coverage: https://github.com/taiki-e/cargo-llvm-cov
+- [x] Add this before asserts in Drop:
+        if std::thread::panicking() {
+            return;
+        }
 - [ ] Integration tests
+    - [x] invalid unix socket
+    - [x] error accepting unix connection if possible
+    - [x] application dropped without shutdown panics
+    - [x] error reading from the client if possible
+    - [x] invalid header
+    - [x] missing empty line between header and body
+    - [x] invalid json
+    - [x] invalid request
+    - [x] invalid method
+    - [x] invalid params
+    - [x] task start + output + exit notification
+    - [x] task start + subscribe to output = false + exit notification
+    - [x] task start failed
+    - [x] task output -> skipped lines in subscription
+    - [x] task start -> task send signal + output + exit notification
+    - [x] task send signal failed
+    - [x] running task survives client disconnect
+    - [x] shutdown closes running task by SIGTERM
+    - [x] shutdown sends SIGKILL after ignoring SIGTERM
+    - [x] shutdown disconnects client
+    - [x] multiple clients
+    - [x] two task start on one connection
 - [ ] Remove anyhow where possible
+- [ ] Use json!() macro in tests instead of plain text
 - [ ] Verify shutdown and cancellation paths
 - [ ] Fix TODOs comments
 - [ ] Documentation
-
-## Future plans
-
-- [ ] Add line number to output notification
-- [ ] Add notifications about missed output
-- [ ] Subscription control (unsubscribe)
-- [ ] Broadcast shutdown notification to all connections
-- [ ] Tasks chains
-- [ ] Shutdown API method
-- [ ] Limit log file size

@@ -13,7 +13,10 @@ use crate::transport::{background_writer::WriterImpl, reader::ReaderImpl};
 
 pub use connection::{Connection, ConnectionWriter};
 
-pub trait ServerImpl {
+#[cfg(test)]
+pub use error::TransportError;
+
+pub trait ServerImpl: std::fmt::Debug {
     type ReaderHalf: ReaderImpl;
     type WriterHalf: WriterImpl;
 
@@ -22,6 +25,7 @@ pub trait ServerImpl {
     ) -> impl Future<Output = Result<(Self::ReaderHalf, Self::WriterHalf)>>;
 }
 
+#[derive(Debug)]
 pub struct Server<I> {
     inner: I,
 }

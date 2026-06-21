@@ -88,9 +88,11 @@ impl TaskEvents {
         }
         let mut on_exit_rx = self.on_exit_rx.clone();
         self.related_tasks.spawn(async move {
-            on_exit_rx.changed().await.expect("on_exit_rx.await");
-            let signal = on_exit_rx.borrow_and_update().unwrap();
-            f(signal).await;
+            // If changed() returned an Err() it means task didn't start
+            if on_exit_rx.changed().await.is_ok() {
+                let signal = on_exit_rx.borrow_and_update().unwrap();
+                f(signal).await;
+            }
         })
     }
 
@@ -465,6 +467,13 @@ mod tests {
             assert_eq!(c.len(), 1);
             assert_eq!(c[0].into_raw(), test_data.exit_code);
         }
+    }
+
+    #[tokio::test]
+    async fn on_exit_sender_dropped() {
+        let test_data = OnExitTestData::new();
+        drop(test_data.senders);
+        assert!(test_data.captured_exit_codes.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

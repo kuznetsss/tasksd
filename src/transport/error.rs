@@ -1,10 +1,13 @@
-use std::fmt::Display;
+use std::{fmt::Display, path::PathBuf};
+
+use rustix::path::Arg;
 
 #[derive(Debug)]
 pub enum TransportError {
     Eof,
     UnexpectedSymbols(String),
     IoError(tokio::io::Error),
+    UnixSocketError(tokio::io::Error, PathBuf),
     WriteError(String),
     HeaderParseError(String),
 }
@@ -19,6 +22,11 @@ impl Display for TransportError {
             TransportError::HeaderParseError(details) => {
                 write!(f, "Error parsing header: {details}")
             }
+            TransportError::UnixSocketError(error, path_buf) => write!(
+                f,
+                "Error opening unix socket '{}': {error}",
+                path_buf.as_str().unwrap_or("invalid")
+            ),
         }
     }
 }

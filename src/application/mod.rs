@@ -1,7 +1,9 @@
+mod cli_options;
 mod handler;
 mod logger;
 mod session;
 
+pub use cli_options::CliOptions;
 pub use logger::setup_logger;
 
 use std::{
@@ -15,9 +17,10 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, info_span, warn};
 
-use crate::{CliOptions, tasks::TaskManager, transport::UnixSocketServer};
+use crate::{tasks::TaskManager, transport::UnixSocketServer};
 use session::Session;
 
+#[derive(Debug)]
 pub struct Application {
     root_cancellation: CancellationToken,
     server: UnixSocketServer,
@@ -46,10 +49,6 @@ impl Application {
     }
 
     pub async fn run(&self) {
-        self.run_server().await;
-    }
-
-    async fn run_server(&self) {
         info!("Listening for incoming connection");
         let mut client_id = 0_usize;
         while let Some(connection) = self
@@ -98,7 +97,6 @@ impl Application {
 
         info!("Shutdown, sending SIGTERM to all running tasks");
 
-        self.root_cancellation.cancel();
         self.task_manager.send_signal_to_all_tasks(Signal::TERM);
 
         let mut parallel_jobs = JoinSet::new();
@@ -121,8 +119,10 @@ impl Application {
         });
         parallel_jobs.spawn({
             let task_manager = self.task_manager.clone();
+            let root_cancellation = self.root_cancellation.clone();
             async move {
                 task_manager.join().await;
+                root_cancellation.cancel();
                 Event::Finish
             }
         });
@@ -143,6 +143,9 @@ impl Application {
 
 impl Drop for Application {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
         assert!(
             self.shutdown_complete
                 .load(std::sync::atomic::Ordering::Relaxed),

@@ -1,50 +1,15 @@
-#![allow(dead_code)] // prevent too many warnings while developing
-mod api;
-mod application;
-mod tasks;
-mod transport;
+use std::sync::Arc;
 
-use std::{path::PathBuf, sync::Arc};
+use tasksd::application::{Application, CliOptions, setup_logger};
 
 use clap::Parser;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::application::Application;
-
-/// tasksd - Editor companion to manage processes
-#[derive(clap::Parser, Debug)]
-#[command(version, about)]
-struct CliOptions {
-    /// Number of threads to use (default to the number of cpu cores available)
-    #[arg(short = 'j', long, default_value_t = 4)]
-    thread_number: usize,
-
-    /// Buffer size in lines for each running process
-    #[arg(short = 'b', long, default_value_t = 10000)]
-    process_buffer_size: usize,
-
-    /// Path to unix socket to open
-    #[arg(short = 'u', long)]
-    unix_socket_path: PathBuf,
-
-    /// Shutdown graceful period, seconds
-    #[arg(short = 'g', long, default_value_t = 5)]
-    graceful_period: u64,
-
-    /// Disable logging to the console
-    #[arg(short = 'q', long, default_value_t = false)]
-    quiet: bool,
-
-    /// Log to file
-    #[arg(short = 'l', long)]
-    log_file: Option<PathBuf>,
-}
-
 fn main() -> anyhow::Result<()> {
     let cli_args = CliOptions::parse();
-    let _guard = application::setup_logger(cli_args.log_file.as_ref(), !cli_args.quiet)?;
+    let _guard = setup_logger(cli_args.log_file.as_ref(), !cli_args.quiet)?;
     info!(
         "Starting {} {}",
         env!("CARGO_PKG_NAME"),

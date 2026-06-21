@@ -270,6 +270,9 @@ impl Task {
 
 impl Drop for Task {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
         assert!(
             self.internal_tasks.is_joined(),
             "Task is dropped without calling join()"
@@ -503,10 +506,18 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic]
+    #[should_panic(expected = "dropped without calling join()")]
     async fn panic_if_dropped_without_join() {
         let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
         task.wait().await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "custom panic")]
+    async fn doesnt_double_panic_if_already_panicking() {
+        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
+        task.wait().await;
+        panic!("custom panic");
     }
 
     #[tokio::test]

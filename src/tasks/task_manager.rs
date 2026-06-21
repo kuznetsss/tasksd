@@ -26,6 +26,7 @@ impl std::fmt::Display for TaskId {
     }
 }
 
+#[derive(Debug)]
 pub struct TaskManager {
     task_output_buffer_capacity: usize,
     tasks: RwLock<HashMap<TaskId, Arc<Task>>>,
@@ -165,6 +166,9 @@ impl TaskManager {
 
 impl Drop for TaskManager {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
         assert!(
             self.completion_coroutines.get_mut().unwrap().is_none(),
             "TaskManager is dropped without calling join()"
@@ -305,6 +309,13 @@ mod tests {
     #[should_panic(expected = "without calling join")]
     async fn panics_if_join_was_not_called() {
         let _tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "custom panic")]
+    async fn drop_doesnt_panic_if_already_panicking() {
+        let _tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
+        panic!("custom panic");
     }
 
     #[tokio::test]
