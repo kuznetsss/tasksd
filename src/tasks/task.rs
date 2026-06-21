@@ -248,7 +248,7 @@ impl Task {
 
     fn spawn_waiting_for_exit(
         internal_tasks: &WrappedTaskTracker,
-        tx: watch::Sender<Option<ExitStatus>>,
+        internal_on_exit_sender: watch::Sender<Option<ExitStatus>>,
         mut child: Child,
         span: Span,
     ) {
@@ -260,7 +260,10 @@ impl Task {
                         .await
                         .expect("Child process should finish normally");
                     info!("Task has exited. {exit_status}");
-                    tx.send(Some(exit_status))
+                    // This sender notifies only internal components about the process exit:
+                    // PtyReader and unlocks sending Exit event to subscribers
+                    internal_on_exit_sender
+                        .send(Some(exit_status))
                         .expect("At least one receiver should be alive");
                 }
                 .instrument(span),

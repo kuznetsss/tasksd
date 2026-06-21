@@ -12,30 +12,17 @@ use crate::tasks::{
     tracker::{PanicHandler, WrappedTaskTracker},
 };
 
-pub trait TaskOutputCallback: (FnMut(Arc<String>) -> Self::Future) + 'static + Send {
-    type Future: Future<Output = Result<(), TaskCallbackError>> + Send;
-}
-impl<T, F> TaskOutputCallback for T
-where
-    T: (FnMut(Arc<String>) -> F) + 'static + Send,
-    F: Future<Output = Result<(), TaskCallbackError>> + Send,
-{
-    type Future = F;
-}
-
-pub trait TaskExitCallback: (FnOnce(ExitStatus) -> Self::Future) + 'static + Send {
-    type Future: Future<Output = ()> + Send;
-}
-impl<T, F> TaskExitCallback for T
-where
-    T: (FnOnce(ExitStatus) -> F) + 'static + Send,
-    F: Future<Output = ()> + Send,
-{
-    type Future = F;
-}
-
-pub enum TaskCallbackError {
+pub enum TaskSubscriberError {
     ShouldExit,
+}
+
+pub trait TaskEventsSubscriber {
+    fn on_output(
+        &mut self,
+        line: Arc<String>,
+    ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send;
+
+    fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send;
 }
 
 #[derive(Debug)]
@@ -43,6 +30,27 @@ pub(in crate::tasks) struct TaskEvents {
     events_rx: broadcast::Receiver<TaskEvent>,
     related_tasks: WrappedTaskTracker,
     exit_rx: watch::Receiver<Option<ExitStatus>>,
+}
+
+#[derive(Debug)]
+struct TaskExitSubscriber {
+    exit_tx: watch::Sender<Option<ExitStatus>>,
+}
+
+impl TaskEventsSubscriber for TaskExitSubscriber {
+    fn on_output(
+        &mut self,
+        _: Arc<String>,
+    ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
+        async { Ok(()) }
+    }
+
+    fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+        self.exit_tx
+            .send(Some(status))
+            .expect("Receiver should still be alive");
+        async {}
+    }
 }
 
 impl TaskEvents {
@@ -54,19 +62,14 @@ impl TaskEvents {
             exit_rx,
         };
         events
-            .on_exit(move |e| {
-                exit_tx
-                    .send(Some(e))
-                    .expect("Receiver should still be alive");
-                async {}
-            })
+            .subscribe(TaskExitSubscriber { exit_tx })
             .expect("related_tasks is not exited yet");
         events
     }
 
-    pub(in crate::tasks) fn on_output<F>(&self, mut f: F) -> Result<AbortHandle, TaskError>
+    pub(in crate::tasks) fn subscribe<S>(&self, mut subscriber: S) -> Result<AbortHandle, TaskError>
     where
-        F: TaskOutputCallback,
+        S: TaskEventsSubscriber,
     {
         if self.has_exited() {
             return Err(TaskError::AlreadyExited);
@@ -74,40 +77,22 @@ impl TaskEvents {
         let mut events_rx = self.events_rx.resubscribe();
         self.related_tasks.spawn(async move {
             loop {
-                let output = match events_rx.recv().await {
+                match events_rx.recv().await {
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("Output receiver is too slow. Have to skip {n} lines");
                         continue;
                     }
                     Err(_) => break,
-                    Ok(TaskEvent::Output(o)) => o,
-                    Ok(TaskEvent::Exit(_)) => break,
-                };
-                if f(output).await.is_err() {
-                    break;
+                    Ok(TaskEvent::Output(line)) => {
+                        if subscriber.on_output(line).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(TaskEvent::Exit(e)) => {
+                        subscriber.on_exit(e).await;
+                        break;
+                    }
                 }
-            }
-        })
-    }
-
-    pub(in crate::tasks) fn on_exit<F>(&self, f: F) -> Result<AbortHandle, TaskError>
-    where
-        F: TaskExitCallback,
-    {
-        if self.has_exited() {
-            return Err(TaskError::AlreadyExited);
-        }
-        let mut events_rx = self.events_rx.resubscribe();
-        self.related_tasks.spawn(async move {
-            loop {
-                let exit_status = match events_rx.recv().await {
-                    Ok(TaskEvent::Exit(e)) => e,
-                    Ok(_) => continue,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(_) => break,
-                };
-                f(exit_status).await;
-                break;
             }
         })
     }
@@ -145,6 +130,12 @@ mod tests {
     use crate::tasks::senders::CHANNEL_CAPACITY;
 
     use super::*;
+
+    struct CapturingSubscriber {
+        captured_output: Arc<Mutex<Vec<Arc<String>>>>,
+
+
+    }
 
     struct OnOutputTestsData {
         sender: TaskSender,

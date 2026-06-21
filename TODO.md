@@ -88,7 +88,7 @@
         if std::thread::panicking() {
             return;
         }
-- [ ] Integration tests
+- [x] Integration tests
     - [x] invalid unix socket
     - [x] error accepting unix connection if possible
     - [x] application dropped without shutdown panics
@@ -111,6 +111,13 @@
     - [x] shutdown disconnects client
     - [x] multiple clients
     - [x] two task start on one connection
+- [ ] Bug: there is no strong guarantee that exit event will be sent after all the output events:
+    - [x] Exit event should be sent after all the output events
+    - [x] Output and exit events should be merged into one stream
+    - [x] The guarantee could be provided only inside on receiver task,
+          so on_exit() and on_output() should be merged into a single subscribe()
+    - [ ] Update tests and the rest of the code
+    - [ ] Rename senders.rs -> sender.rs
 - [ ] Remove anyhow where possible
 - [ ] Use json!() macro in tests instead of plain text
 - [ ] Verify shutdown and cancellation paths
