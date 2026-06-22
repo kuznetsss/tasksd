@@ -2,6 +2,7 @@ mod cli_options;
 mod handler;
 mod logger;
 mod session;
+mod subscriber;
 
 pub use cli_options::CliOptions;
 pub use logger::setup_logger;

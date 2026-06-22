@@ -313,14 +313,14 @@ mod tests {
     impl TaskEventsSubscriber for NoopSubscriber {
         fn on_output(
             &mut self,
-            line: Arc<String>,
+            _: Arc<String>,
         ) -> impl Future<
             Output = std::result::Result<(), crate::tasks::events::TaskSubscriberError>,
         > + Send {
             async { Ok(()) }
         }
 
-        fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+        fn on_exit(&mut self, _: ExitStatus) -> impl Future<Output = ()> + Send {
             async {}
         }
     }
@@ -355,6 +355,7 @@ mod tests {
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
+    #[derive(Default)]
     struct CapturingSubscriber {
         captured_output: Arc<Mutex<Vec<Arc<String>>>>,
         captured_exit_codes: Arc<Mutex<Vec<ExitStatus>>>,
@@ -369,7 +370,7 @@ mod tests {
             async { Ok(()) }
         }
 
-        fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+        fn on_exit(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
             self.captured_exit_codes.lock().unwrap().push(status);
             async {}
         }
@@ -411,14 +412,16 @@ mod tests {
     #[tokio::test]
     async fn write_to_stdin_success() {
         let captured_output = Arc::new(Mutex::new(Vec::new()));
-        let on_output = {
-            let captured_output = captured_output.clone();
-            move |o| {
-                captured_output.lock().unwrap().push(o);
-                async { Ok(()) }
-            }
-        };
-        let task = make_task("cat", &[], current_dir().unwrap(), on_output).unwrap();
+        let task = make_task(
+            "cat",
+            &[],
+            current_dir().unwrap(),
+            CapturingSubscriber {
+                captured_output: captured_output.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         for m in ["one", "two\n", "three"] {
             task.write_to_stdin(m.as_bytes()).await.unwrap();
         }
@@ -493,12 +496,9 @@ mod tests {
             "cat",
             &[tmp_file.path().to_str().unwrap()],
             current_dir().unwrap(),
-            {
-                let captured_output = captured_output.clone();
-                move |o: Arc<String>| {
-                    captured_output.lock().unwrap().push(o);
-                    async { Ok(()) }
-                }
+            CapturingSubscriber {
+                captured_output: captured_output.clone(),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -577,13 +577,13 @@ mod tests {
     impl TaskEventsSubscriber for EventsCapturingSubscriber {
         fn on_output(
             &mut self,
-            line: Arc<String>,
+            _: Arc<String>,
         ) -> impl Future<Output = std::result::Result<(), TaskSubscriberError>> + Send {
             self.captured_events.lock().unwrap().push(Event::Output);
             async { Ok(()) }
         }
 
-        fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+        fn on_exit(&mut self, _: ExitStatus) -> impl Future<Output = ()> + Send {
             self.captured_events.lock().unwrap().push(Event::Exit);
             async {}
         }

@@ -1,11 +1,9 @@
 use tracing::warn;
 
 use crate::{
-    api::{
-        Notification, NotificationBody, Request, RequestBody, Response, ResponseResult,
-        TaskSendSignalParams, TaskStartParams,
-    },
-    tasks::{TaskCallbackError, TaskError, TaskManager},
+    api::{Request, RequestBody, Response, ResponseResult, TaskSendSignalParams, TaskStartParams},
+    application::subscriber::Subscriber,
+    tasks::{TaskError, TaskManager},
     transport::ConnectionWriter,
 };
 
@@ -48,36 +46,12 @@ impl Handler {
             task_builder.working_dir(working_dir);
         }
         let task_id = task_builder.task_id();
-        if params.subscribe_to_output {
-            task_builder.on_output({
-                let connection_writer = self.connection_writer.clone();
-                move |s| {
-                    let connection_writer = connection_writer.clone();
-                    let notification: Notification =
-                        NotificationBody::task_output(task_id, s).into();
-                    async move {
-                        connection_writer
-                            .write(&notification.to_json_string())
-                            .await
-                            .map_err(|_| TaskCallbackError::ShouldExit)
-                    }
-                }
-            });
-        }
-        task_builder.on_exit({
-            let connection_writer = self.connection_writer.clone();
-            move |s| {
-                let notification: Notification = NotificationBody::task_exit(task_id, s).into();
-                async move {
-                    if let Err(e) = connection_writer
-                        .write(&notification.to_json_string())
-                        .await
-                    {
-                        warn!("Error writing on_exit notification: {e}");
-                    }
-                }
-            }
-        });
+        let subscriber = Subscriber::new(
+            self.connection_writer.clone(),
+            task_id,
+            params.subscribe_to_output,
+        );
+        task_builder.subscribe(subscriber);
         task_builder
             .submit()
             .map(|_| ResponseResult::StartTaskResult { task_id })

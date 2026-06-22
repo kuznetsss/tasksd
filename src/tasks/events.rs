@@ -16,13 +16,13 @@ pub enum TaskSubscriberError {
     ShouldExit,
 }
 
-pub trait TaskEventsSubscriber {
+pub trait TaskEventsSubscriber: Send + 'static {
     fn on_output(
         &mut self,
         line: Arc<String>,
     ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send;
 
-    fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send;
+    fn on_exit(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send;
 }
 
 #[derive(Debug)]
@@ -45,7 +45,7 @@ impl TaskEventsSubscriber for TaskExitSubscriber {
         async { Ok(()) }
     }
 
-    fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+    fn on_exit(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
         self.exit_tx
             .send(Some(status))
             .expect("Receiver should still be alive");
@@ -131,6 +131,7 @@ mod tests {
 
     use super::*;
 
+    #[derive(Default)]
     struct CapturingSubscriber {
         captured_output: Arc<Mutex<Vec<Arc<String>>>>,
         got_output: Arc<Notify>,
@@ -147,7 +148,7 @@ mod tests {
             async { Ok(()) }
         }
 
-        fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+        fn on_exit(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
             self.captured_exit_codes.lock().unwrap().push(status);
             async {}
         }
@@ -200,7 +201,7 @@ mod tests {
     impl TaskEventsSubscriber for PanickingSubscriber {
         fn on_output(
             &mut self,
-            line: Arc<String>,
+            _: Arc<String>,
         ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
             panic!("Unexpected on_output() call");
             #[allow(unreachable_code)]
@@ -209,7 +210,7 @@ mod tests {
             }
         }
 
-        fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+        fn on_exit(&mut self, _: ExitStatus) -> impl Future<Output = ()> + Send {
             panic!("Unexpected on_exit() call");
             #[allow(unreachable_code)]
             async {}
@@ -367,14 +368,14 @@ mod tests {
     impl TaskEventsSubscriber for CountingSubscriber {
         fn on_output(
             &mut self,
-            line: Arc<String>,
+            _: Arc<String>,
         ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
             self.output_call_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             async { Ok(()) }
         }
 
-        fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+        fn on_exit(&mut self, _: ExitStatus) -> impl Future<Output = ()> + Send {
             self.exit_call_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             async {}
@@ -420,7 +421,7 @@ mod tests {
         let captured_exit_codes2 = Arc::new(Mutex::new(Vec::new()));
         test_data
             .events
-            .on_exit(CapturingSubscriber {
+            .subscribe(CapturingSubscriber {
                 captured_exit_codes: captured_exit_codes2.clone(),
                 ..Default::default()
             })

@@ -1,10 +1,7 @@
 use std::{env::current_dir, path::PathBuf};
 
 use crate::tasks::{
-    events::{TaskEvents, TaskExitCallback, TaskOutputCallback},
-    info::TaskInfo,
-    senders::TaskSender,
-    task::Task,
+    TaskEventsSubscriber, events::TaskEvents, info::TaskInfo, senders::TaskSender, task::Task,
     task_error::TaskError,
 };
 
@@ -50,21 +47,13 @@ impl TaskBuilder {
         self
     }
 
-    pub fn on_output<F>(&mut self, f: F) -> &mut Self
+    pub fn subscribe<S>(&mut self, s: S) -> &mut Self
     where
-        F: TaskOutputCallback,
+        S: TaskEventsSubscriber,
     {
         self.events
-            .on_output(f)
+            .subscribe(s)
             .expect("Task can't exit in builder");
-        self
-    }
-
-    pub fn on_exit<F>(&mut self, f: F) -> &mut Self
-    where
-        F: TaskExitCallback,
-    {
-        self.events.on_exit(f).expect("Task can't exit in builder");
         self
     }
 
@@ -89,6 +78,8 @@ mod tests {
         process::ExitStatus,
         sync::{Arc, Mutex},
     };
+
+    use crate::tasks::TaskSubscriberError;
 
     use super::*;
 
@@ -141,16 +132,34 @@ mod tests {
         );
     }
 
+    #[derive(Default)]
+    struct CapturingSubscriber {
+        captured_output: Arc<Mutex<Vec<Arc<String>>>>,
+        captured_exit_code: Arc<Mutex<Option<ExitStatus>>>,
+    }
+
+    impl TaskEventsSubscriber for CapturingSubscriber {
+        fn on_output(
+            &mut self,
+            line: Arc<String>,
+        ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
+            self.captured_output.lock().unwrap().push(line);
+            async { Ok(()) }
+        }
+
+        fn on_exit(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+            *self.captured_exit_code.lock().unwrap() = Some(status);
+            async {}
+        }
+    }
+
     #[tokio::test]
-    async fn on_output_subscribes_to_stdout() {
+    async fn subscribe_subscribes_to_output() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
         let captured_output = Arc::new(Mutex::new(Vec::new()));
-        builder.on_output({
-            let captured_output = captured_output.clone();
-            move |o| {
-                captured_output.lock().unwrap().push(o);
-                async { Ok(()) }
-            }
+        builder.subscribe(CapturingSubscriber {
+            captured_output: captured_output.clone(),
+            ..Default::default()
         });
         let output_lines = ["some output", "other output"];
         for l in &output_lines {
@@ -166,15 +175,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_exit_subscribes_to_exit_code() {
+    async fn subscribe_subscribes_to_exit_code() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
         let captured_exit_code = Arc::new(Mutex::new(None));
-        builder.on_exit({
-            let captured_exit_code = captured_exit_code.clone();
-            move |e| {
-                *captured_exit_code.lock().unwrap() = Some(e);
-                async {}
-            }
+        builder.subscribe(CapturingSubscriber {
+            captured_exit_code: captured_exit_code.clone(),
+            ..Default::default()
         });
         let exit_code = ExitStatus::from_raw(123);
         builder.sender.0.send(exit_code.into()).unwrap();

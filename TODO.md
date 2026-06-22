@@ -117,6 +117,7 @@
     - [x] The guarantee could be provided only inside on receiver task,
           so on_exit() and on_output() should be merged into a single subscribe()
     - [ ] Update tests and the rest of the code
+    - [ ] Move test subscribers into a separate module
     - [ ] Rename senders.rs -> sender.rs
 - [ ] Remove anyhow where possible
 - [ ] Use json!() macro in tests instead of plain text

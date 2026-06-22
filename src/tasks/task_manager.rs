@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::tasks::{
-    events::{TaskExitCallback, TaskOutputCallback},
+    TaskEventsSubscriber,
     finished_task::FinishedTask,
     recent_finished_tasks::RecentFinishedTasks,
     task_builder::TaskBuilder,
@@ -53,13 +53,8 @@ impl<'a> TaskCreationHandle<'a> {
         self
     }
 
-    pub fn on_output(&mut self, cb: impl TaskOutputCallback) -> &mut Self {
-        self.builder.on_output(cb);
-        self
-    }
-
-    pub fn on_exit(&mut self, cb: impl TaskExitCallback) -> &mut Self {
-        self.builder.on_exit(cb);
+    pub fn subscribe(&mut self, s: impl TaskEventsSubscriber) -> &mut Self {
+        self.builder.subscribe(s);
         self
     }
 
