@@ -133,48 +133,91 @@ mod tests {
 
     struct CapturingSubscriber {
         captured_output: Arc<Mutex<Vec<Arc<String>>>>,
-
-
+        got_output: Arc<Notify>,
+        captured_exit_codes: Arc<Mutex<Vec<ExitStatus>>>,
     }
 
-    struct OnOutputTestsData {
+    impl TaskEventsSubscriber for CapturingSubscriber {
+        fn on_output(
+            &mut self,
+            line: Arc<String>,
+        ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
+            self.captured_output.lock().unwrap().push(line);
+            self.got_output.notify_waiters();
+            async { Ok(()) }
+        }
+
+        fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+            self.captured_exit_codes.lock().unwrap().push(status);
+            async {}
+        }
+    }
+
+    struct TestData {
         sender: TaskSender,
         events: TaskEvents,
         captured_output: Arc<Mutex<Vec<Arc<String>>>>,
+        captured_exit_codes: Arc<Mutex<Vec<ExitStatus>>>,
         abort_handle: AbortHandle,
         got_output: Arc<Notify>,
+        exit_code: i32,
     }
 
-    impl OnOutputTestsData {
+    impl TestData {
         fn new() -> Self {
             let sender = TaskSender::new();
             let events = TaskEvents::new(&sender);
             let captured_output = Arc::new(Mutex::new(Vec::new()));
+            let captured_exit_codes = Arc::new(Mutex::new(Vec::new()));
             let got_output = Arc::new(Notify::new());
             let abort_handle = events
-                .on_output({
-                    let captured_output = captured_output.clone();
-                    let got_output = got_output.clone();
-                    move |o| {
-                        captured_output.lock().unwrap().push(o);
-                        got_output.notify_waiters();
-                        async { Ok(()) }
-                    }
+                .subscribe(CapturingSubscriber {
+                    captured_output: captured_output.clone(),
+                    got_output: got_output.clone(),
+                    captured_exit_codes: captured_exit_codes.clone(),
                 })
                 .unwrap();
             Self {
                 sender,
                 events,
                 captured_output,
+                captured_exit_codes,
                 abort_handle,
                 got_output,
+                exit_code: 123,
             }
+        }
+
+        fn send_code(&self) {
+            self.sender
+                .0
+                .send(ExitStatus::from_raw(self.exit_code).into())
+                .unwrap();
         }
     }
 
+    struct PanickingSubscriber {}
+    impl TaskEventsSubscriber for PanickingSubscriber {
+        fn on_output(
+            &mut self,
+            line: Arc<String>,
+        ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
+            panic!("Unexpected on_output() call");
+            #[allow(unreachable_code)]
+            async {
+                Ok(())
+            }
+        }
+
+        fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+            panic!("Unexpected on_exit() call");
+            #[allow(unreachable_code)]
+            async {}
+        }
+    }
     #[tokio::test]
-    async fn on_output_returns_error_after_exit() {
-        let test_data = OnOutputTestsData::new();
+    async fn subscribe_returns_error_after_exit() {
+        let test_data = TestData::new();
         test_data
             .sender
             .0
@@ -183,15 +226,15 @@ mod tests {
         tokio::task::yield_now().await;
         test_data
             .events
-            .on_output(|_| async { panic!("The callback should never be called") })
+            .subscribe(PanickingSubscriber {})
             .unwrap_err();
         drop(test_data.sender);
         test_data.events.join_all().await;
     }
 
     #[tokio::test]
-    async fn on_output_abort_handle_cancels_subscription() {
-        let test_data = OnOutputTestsData::new();
+    async fn subscribe_abort_handle_cancels_subscription() {
+        let test_data = TestData::new();
         let output = ["some output", "another output"];
         assert_eq!(
             test_data
@@ -217,8 +260,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn on_output_slow_receiver() {
-        let test_data = OnOutputTestsData::new();
+    async fn subscribe_slow_output_receiver() {
+        let test_data = TestData::new();
         for i in 0..CHANNEL_CAPACITY * 2 {
             test_data.sender.0.send(i.to_string().into()).unwrap();
             assert!(
@@ -237,8 +280,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_output_subscribes_to_output_tx() {
-        let test_data = OnOutputTestsData::new();
+    async fn subscribe_subscribes_to_output() {
+        let test_data = TestData::new();
         let output = ["some output", "another output"];
         for o in output {
             assert_eq!(test_data.sender.0.send(o.to_string().into()).unwrap(), 3);
@@ -255,20 +298,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_output_multiple_receivers() {
-        let test_data = OnOutputTestsData::new();
+    async fn subscribe_output_multiple_receivers() {
+        let test_data = TestData::new();
         let captured_output2 = Arc::new(Mutex::new(Vec::new()));
         let got_output2 = Arc::new(Notify::new());
         let abort_handle2 = test_data
             .events
-            .on_output({
-                let captured_output2 = captured_output2.clone();
-                let got_output2 = got_output2.clone();
-                move |o| {
-                    captured_output2.lock().unwrap().push(o);
-                    got_output2.notify_waiters();
-                    async { Ok(()) }
-                }
+            .subscribe(CapturingSubscriber {
+                captured_output: captured_output2.clone(),
+                got_output: got_output2.clone(),
+                captured_exit_codes: Arc::new(Mutex::new(Vec::new())),
             })
             .unwrap();
         let output = ["first output", "second output"];
@@ -298,18 +337,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_output_subscriber_doesnt_receive_old_messages() {
+    async fn subscribe_output_subscriber_doesnt_receive_old_messages() {
         let sender = TaskSender::new();
         let events = TaskEvents::new(&sender);
         let output = ["first", "second"];
         assert_eq!(sender.0.send(output[0].to_string().into()).unwrap(), 2);
         let captured_output = Arc::new(Mutex::new(Vec::new()));
         events
-            .on_output({
-                let captured_output = captured_output.clone();
-                move |o| {
-                    captured_output.lock().unwrap().push(o);
-                    async { Ok(()) }
+            .subscribe({
+                CapturingSubscriber {
+                    captured_output: captured_output.clone(),
+                    ..Default::default()
                 }
             })
             .unwrap();
@@ -321,18 +359,37 @@ mod tests {
         assert_eq!(*captured_output[0], output[1]);
     }
 
+    struct CountingSubscriber {
+        output_call_count: Arc<AtomicUsize>,
+        exit_call_count: Arc<AtomicUsize>,
+    }
+
+    impl TaskEventsSubscriber for CountingSubscriber {
+        fn on_output(
+            &mut self,
+            line: Arc<String>,
+        ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
+            self.output_call_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            async { Ok(()) }
+        }
+
+        fn on_exit<F>(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
+            self.exit_call_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            async {}
+        }
+    }
+
     #[tokio::test]
-    async fn on_output_subscriber_is_unsubscribed_after_returning_error() {
+    async fn subscribe_output_subscriber_is_unsubscribed_after_returning_error() {
         let sender = TaskSender::new();
         let events = TaskEvents::new(&sender);
         let call_count = Arc::new(AtomicUsize::new(0));
         events
-            .on_output({
-                let call_count = call_count.clone();
-                move |_| {
-                    call_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    async { Err(TaskCallbackError::ShouldExit) }
-                }
+            .subscribe(CountingSubscriber {
+                output_call_count: call_count.clone(),
+                exit_call_count: Default::default(),
             })
             .unwrap();
         for _ in 0..10 {
@@ -345,72 +402,9 @@ mod tests {
         assert_eq!(call_count.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
-    struct OnExitTestData {
-        sender: TaskSender,
-        events: TaskEvents,
-        abort_handle: AbortHandle,
-        captured_exit_codes: Arc<Mutex<Vec<ExitStatus>>>,
-        exit_code: i32,
-    }
-
-    impl OnExitTestData {
-        fn new() -> Self {
-            let sender = TaskSender::new();
-            let events = TaskEvents::new(&sender);
-            let captured_exit_codes = Arc::new(Mutex::new(Vec::new()));
-            let abort_handle = events
-                .on_exit({
-                    let captured_exit_codes = captured_exit_codes.clone();
-                    move |e| {
-                        captured_exit_codes.lock().unwrap().push(e);
-                        async {}
-                    }
-                })
-                .unwrap();
-            Self {
-                sender,
-                events,
-                abort_handle,
-                captured_exit_codes,
-                exit_code: 123,
-            }
-        }
-
-        fn send_code(&self) {
-            self.sender
-                .0
-                .send(ExitStatus::from_raw(self.exit_code).into())
-                .unwrap();
-        }
-    }
-
     #[tokio::test]
-    async fn on_exit_returns_error_after_exit() {
-        let sender = TaskSender::new();
-        let events = TaskEvents::new(&sender);
-        sender.0.send(ExitStatus::from_raw(123).into()).unwrap();
-        tokio::task::yield_now().await;
-        events
-            .on_exit(|_| async { panic!("The callback should never be called") })
-            .unwrap_err();
-        drop(sender);
-        events.join_all().await;
-    }
-
-    #[tokio::test]
-    async fn on_exit_abort_handle_cancels_subscription() {
-        let test_data = OnExitTestData::new();
-        assert!(!test_data.abort_handle.is_finished());
-        test_data.abort_handle.abort();
-        test_data.send_code();
-        drop(test_data.sender);
-        test_data.events.join_all().await;
-        assert!(test_data.captured_exit_codes.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn on_exit_subscribes_to_exit_code() {
-        let test_data = OnExitTestData::new();
+    async fn subscribe_subscribes_to_exit_code() {
+        let test_data = TestData::new();
         test_data.send_code();
         drop(test_data.sender);
         test_data.events.join_all().await;
@@ -421,17 +415,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_exit_multiple_subscribers() {
-        let test_data = OnExitTestData::new();
+    async fn subscribe_exit_multiple_subscribers() {
+        let test_data = TestData::new();
         let captured_exit_codes2 = Arc::new(Mutex::new(Vec::new()));
         test_data
             .events
-            .on_exit({
-                let captured_exit_codes2 = captured_exit_codes2.clone();
-                move |e| {
-                    captured_exit_codes2.lock().unwrap().push(e);
-                    async {}
-                }
+            .on_exit(CapturingSubscriber {
+                captured_exit_codes: captured_exit_codes2.clone(),
+                ..Default::default()
             })
             .unwrap();
         test_data.send_code();
@@ -445,23 +436,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_exit_sender_dropped() {
-        let test_data = OnExitTestData::new();
+    async fn subscribe_sender_dropped() {
+        let test_data = TestData::new();
         drop(test_data.sender);
         assert!(test_data.captured_exit_codes.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn join_all_can_be_called_multiple_times() {
-        let test_data = OnOutputTestsData::new();
+        let test_data = TestData::new();
         drop(test_data.sender);
-        test_data.events.join_all().await;
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            test_data.events.join_all(),
-        )
-        .await
-        .unwrap();
+        for _ in 0..2 {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                test_data.events.join_all(),
+            )
+            .await
+            .unwrap();
+        }
     }
 
     #[tokio::test]
