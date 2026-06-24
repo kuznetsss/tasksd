@@ -119,6 +119,10 @@
     - [x] Update tests and the rest of the code
     - [x] Move test subscribers into a separate module
     - [x] Rename senders.rs -> sender.rs
+    - [ ] Add missing test cases for Task
+    - [ ] Fix tasks::task::tests::exit_notification_is_after_output
+            captured_events could be 15 output + 1 exit or 16 output + 1 exit
+
 - [ ] Remove anyhow where possible
 - [ ] Use json!() macro in tests instead of plain text
 - [ ] Verify shutdown and cancellation paths

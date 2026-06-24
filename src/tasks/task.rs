@@ -33,6 +33,7 @@ pub struct Task {
     stdin: tokio::sync::Mutex<PtyWritePart>,
     pid: u32,
     events: TaskEvents,
+    exit_rx: watch::Receiver<Option<ExitStatus>>,
     internal_tasks: WrappedTaskTracker,
     output_buffer: Arc<OutputBuffer>,
 }
@@ -86,6 +87,7 @@ impl Task {
             .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
         let pid = child.id().expect("pid");
         info!(pid, "Spawned a process");
+        let exit_rx = senders.exit_tx.subscribe();
         Self::spawn_waiting_for_exit(&internal_tasks, senders.exit_tx, child, span.clone());
 
         let task = Self {
@@ -93,6 +95,7 @@ impl Task {
             stdin: tokio::sync::Mutex::new(pty_write),
             pid,
             events,
+            exit_rx,
             internal_tasks,
             output_buffer,
         };
@@ -105,7 +108,7 @@ impl Task {
     }
 
     pub async fn write_to_stdin(&self, msg: &[u8]) -> Result<(), TaskError> {
-        if self.events.has_exited() {
+        if self.has_exited() {
             Err(TaskError::AlreadyExited)
         } else {
             self.stdin
@@ -121,6 +124,9 @@ impl Task {
     where
         S: TaskEventsSubscriber,
     {
+        if self.has_exited() {
+            return Err(TaskError::AlreadyExited);
+        }
         self.events.subscribe(s)
     }
 
@@ -141,8 +147,20 @@ impl Task {
         &self.output_buffer
     }
 
+    pub fn has_exited(&self) -> bool {
+        self.exit_rx.has_changed().unwrap_or(true)
+    }
+
+    async fn exit_status(&self) -> ExitStatus {
+        self.wait().await;
+        self.exit_rx
+            .borrow()
+            .to_owned()
+            .expect("ExitStatus should always be Some")
+    }
+
     pub async fn wait(&self) {
-        self.events.exit_status().await;
+        let _ = self.exit_rx.clone().changed().await;
     }
 
     pub async fn join(&self) -> FinishedTask {
@@ -150,7 +168,7 @@ impl Task {
         self.events.join_all().await;
         FinishedTask {
             info: self.info.clone(),
-            exit_status: self.events.exit_status().await,
+            exit_status: self.exit_status().await,
         }
     }
 
@@ -589,6 +607,6 @@ mod tests {
         let task = make_task("ls", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
         task.wait().await;
         assert!(task.has_exited());
-
+        task.join().await;
     }
 }
