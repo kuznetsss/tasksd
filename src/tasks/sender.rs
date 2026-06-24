@@ -1,6 +1,6 @@
 use std::{process::ExitStatus, sync::Arc};
 
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 pub const CHANNEL_CAPACITY: usize = 16;
 
@@ -23,11 +23,15 @@ impl From<ExitStatus> for TaskEvent {
 }
 
 #[derive(Debug)]
-pub(in crate::tasks) struct TaskSender(pub broadcast::Sender<TaskEvent>);
+pub(in crate::tasks) struct TaskSender {
+    pub events_tx: broadcast::Sender<TaskEvent>,
+    pub exit_tx: watch::Sender<Option<ExitStatus>>,
+}
 
 impl TaskSender {
     pub(in crate::tasks) fn new() -> Self {
-        let (output_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
-        Self(output_tx)
+        let (events_tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let (exit_tx, _) = watch::channel(None);
+        Self { events_tx, exit_tx }
     }
 }

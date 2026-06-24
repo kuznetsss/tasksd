@@ -1,7 +1,7 @@
 use std::{env::current_dir, path::PathBuf};
 
 use crate::tasks::{
-    TaskEventsSubscriber, events::TaskEvents, info::TaskInfo, senders::TaskSender, task::Task,
+    TaskEventsSubscriber, events::TaskEvents, info::TaskInfo, sender::TaskSender, task::Task,
     task_error::TaskError,
 };
 
@@ -142,7 +142,10 @@ mod tests {
         });
         let output_lines = ["some output", "other output"];
         for l in &output_lines {
-            assert_eq!(builder.sender.0.send(l.to_string().into()).unwrap(), 3);
+            assert_eq!(
+                builder.sender.events_tx.send(l.to_string().into()).unwrap(),
+                2
+            );
         }
         drop(builder.sender);
         builder.events.join_all().await;
@@ -162,7 +165,7 @@ mod tests {
             ..Default::default()
         });
         let exit_code = ExitStatus::from_raw(123);
-        builder.sender.0.send(exit_code.into()).unwrap();
+        builder.sender.events_tx.send(exit_code.into()).unwrap();
         drop(builder.sender);
         builder.events.join_all().await;
         let captured_exit_code = captured_exit_code.lock().unwrap();

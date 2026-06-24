@@ -16,7 +16,7 @@ use crate::tasks::{
     output_buffer::OutputBuffer,
     pty::{PtyChild, PtyWritePart, create_pty_pair},
     pty_reader::PtyReader,
-    senders::{TaskEvent, TaskSender},
+    sender::{TaskEvent, TaskSender},
     task_error::TaskError,
     tracker::{PanicHandler, WrappedTaskTracker},
 };
@@ -59,9 +59,8 @@ impl Task {
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
         let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
 
-        let (internal_on_exit_sender, internal_on_exit_receiver) = watch::channel(None);
         let child_process_exit_future = Box::pin({
-            let mut on_exit_internal_receiver = internal_on_exit_receiver.clone();
+            let mut on_exit_internal_receiver = senders.exit_tx.subscribe();
             async move {
                 let _ = on_exit_internal_receiver.changed().await;
             }
@@ -77,8 +76,8 @@ impl Task {
         Self::spawn_output_reading(
             &internal_tasks,
             pty_reader,
-            internal_on_exit_receiver,
-            senders.0,
+            senders.exit_tx.subscribe(),
+            senders.events_tx,
             output_buffer.clone(),
             span.clone(),
         );
@@ -87,12 +86,7 @@ impl Task {
             .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
         let pid = child.id().expect("pid");
         info!(pid, "Spawned a process");
-        Self::spawn_waiting_for_exit(
-            &internal_tasks,
-            internal_on_exit_sender,
-            child,
-            span.clone(),
-        );
+        Self::spawn_waiting_for_exit(&internal_tasks, senders.exit_tx, child, span.clone());
 
         let task = Self {
             info,
@@ -195,7 +189,7 @@ impl Task {
     fn spawn_output_reading(
         internal_tasks: &WrappedTaskTracker,
         pty_reader: PtyReader,
-        mut internal_on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
+        mut on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
         events_tx: broadcast::Sender<TaskEvent>,
         output_buffer: Arc<OutputBuffer>,
         span: Span,
@@ -224,8 +218,8 @@ impl Task {
                             warn!("Error sending output line to subscribers: {e}");
                         }
                     }
-                    if internal_on_exit_receiver.changed().await.is_ok() {
-                        let exit_status = internal_on_exit_receiver
+                    if on_exit_receiver.changed().await.is_ok() {
+                        let exit_status = on_exit_receiver
                             .borrow()
                             .to_owned()
                             .expect("Exit status should always be Some");
@@ -282,15 +276,14 @@ mod tests {
     use rustix::path::Arg;
 
     use crate::tasks::{
-        events::TaskSubscriberError,
-        senders::CHANNEL_CAPACITY,
-        test_subscribers::{CapturingSubscriber, NoopSubscriber},
+        sender::CHANNEL_CAPACITY,
+        test_subscribers::{CapturingSubscriber, Event, EventsCapturingSubscriber, NoopSubscriber},
     };
 
     use super::*;
     use std::{
         env::current_dir, io::Write, os::unix::process::ExitStatusExt, path::PathBuf, str::FromStr,
-        sync::Mutex,
+        sync::Mutex, time::Duration,
     };
 
     const OUTPUT_BUFFER_CAPACITY: usize = CHANNEL_CAPACITY * 2;
@@ -421,6 +414,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subscribe_after_exit_returns_error_events_based() {
+        let captured_events = Arc::new(Mutex::new(Vec::new()));
+        let task = make_task(
+            "echo",
+            &["-n", "hello"],
+            current_dir().unwrap(),
+            EventsCapturingSubscriber {
+                captured_events: captured_events.clone(),
+            },
+        )
+        .unwrap();
+        let mut attempt = 0;
+        const MAX_ATTEMPTS: usize = 5000;
+        loop {
+            if captured_events.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            assert!(attempt < MAX_ATTEMPTS);
+            attempt += 1;
+        }
+        assert_eq!(captured_events.lock().unwrap().len(), 2);
+        assert_eq!(
+            *captured_events.lock().unwrap(),
+            vec![Event::Output, Event::Exit]
+        );
+        let err = task.subscribe(NoopSubscriber {}).unwrap_err();
+        assert!(matches!(err, TaskError::AlreadyExited));
+        task.join().await;
+    }
+
+    #[tokio::test]
     async fn output_buffer_captures_output() {
         let task = make_task(
             "echo",
@@ -530,36 +555,11 @@ mod tests {
         task.join().await;
     }
 
-    #[derive(Debug, PartialEq, Clone)]
-    enum Event {
-        Output,
-        Exit,
-    }
-
-    struct EventsCapturingSubscriber {
-        captured_events: Arc<Mutex<Vec<Event>>>,
-    }
-
-    impl TaskEventsSubscriber for EventsCapturingSubscriber {
-        fn on_output(
-            &mut self,
-            _: Arc<String>,
-        ) -> impl Future<Output = std::result::Result<(), TaskSubscriberError>> + Send {
-            self.captured_events.lock().unwrap().push(Event::Output);
-            async { Ok(()) }
-        }
-
-        fn on_exit(&mut self, _: ExitStatus) -> impl Future<Output = ()> + Send {
-            self.captured_events.lock().unwrap().push(Event::Exit);
-            async {}
-        }
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn exit_notification_is_after_output() {
         let mut tmp_file = tempfile::NamedTempFile::new().unwrap();
         tmp_file
-            .write_all("line\n".repeat(CHANNEL_CAPACITY).as_bytes())
+            .write_all("line\n".repeat(CHANNEL_CAPACITY - 1).as_bytes())
             .unwrap();
         tmp_file.flush().unwrap();
 
@@ -579,8 +579,16 @@ mod tests {
         };
         let task = Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY).unwrap();
         task.join().await;
-        let mut expected = vec![Event::Output; CHANNEL_CAPACITY];
+        let mut expected = vec![Event::Output; CHANNEL_CAPACITY - 1];
         expected.push(Event::Exit);
         assert_eq!(*captured_events.lock().unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn has_exited_returns_true_after_exit() {
+        let task = make_task("ls", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
+        task.wait().await;
+        assert!(task.has_exited());
+
     }
 }

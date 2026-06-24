@@ -48,3 +48,28 @@ impl TaskEventsSubscriber for CapturingSubscriber {
         async {}
     }
 }
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Event {
+    Output,
+    Exit,
+}
+
+pub struct EventsCapturingSubscriber {
+    pub captured_events: Arc<Mutex<Vec<Event>>>,
+}
+
+impl TaskEventsSubscriber for EventsCapturingSubscriber {
+    fn on_output(
+        &mut self,
+        _: Arc<String>,
+    ) -> impl Future<Output = std::result::Result<(), TaskSubscriberError>> + Send {
+        self.captured_events.lock().unwrap().push(Event::Output);
+        async { Ok(()) }
+    }
+
+    fn on_exit(&mut self, _: ExitStatus) -> impl Future<Output = ()> + Send {
+        self.captured_events.lock().unwrap().push(Event::Exit);
+        async {}
+    }
+}

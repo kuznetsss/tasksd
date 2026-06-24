@@ -5,7 +5,7 @@ mod output_buffer;
 mod pty;
 mod pty_reader;
 mod recent_finished_tasks;
-mod senders;
+mod sender;
 mod task;
 mod task_builder;
 mod task_error;

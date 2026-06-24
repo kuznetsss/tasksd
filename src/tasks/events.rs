@@ -4,10 +4,10 @@ use tokio::{
     sync::{broadcast, watch},
     task::AbortHandle,
 };
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::tasks::{
-    senders::{TaskEvent, TaskSender},
+    sender::{TaskEvent, TaskSender},
     task_error::TaskError,
     tracker::{PanicHandler, WrappedTaskTracker},
 };
@@ -32,40 +32,13 @@ pub(in crate::tasks) struct TaskEvents {
     exit_rx: watch::Receiver<Option<ExitStatus>>,
 }
 
-#[derive(Debug)]
-struct TaskExitSubscriber {
-    exit_tx: watch::Sender<Option<ExitStatus>>,
-}
-
-impl TaskEventsSubscriber for TaskExitSubscriber {
-    #[allow(clippy::manual_async_fn)]
-    fn on_output(
-        &mut self,
-        _: Arc<String>,
-    ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
-        async { Ok(()) }
-    }
-
-    fn on_exit(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
-        self.exit_tx
-            .send(Some(status))
-            .expect("Receiver should still be alive");
-        async {}
-    }
-}
-
 impl TaskEvents {
     pub(in crate::tasks) fn new(sender: &TaskSender) -> Self {
-        let (exit_tx, exit_rx) = watch::channel(None);
-        let events = Self {
-            events_rx: sender.0.subscribe(),
+        Self {
+            events_rx: sender.events_tx.subscribe(),
             related_tasks: WrappedTaskTracker::new(PanicHandler::new_aborting()),
-            exit_rx,
-        };
-        events
-            .subscribe(TaskExitSubscriber { exit_tx })
-            .expect("related_tasks is not exited yet");
-        events
+            exit_rx: sender.exit_tx.subscribe(),
+        }
     }
 
     pub(in crate::tasks) fn subscribe<S>(&self, mut subscriber: S) -> Result<AbortHandle, TaskError>
@@ -76,6 +49,7 @@ impl TaskEvents {
             return Err(TaskError::AlreadyExited);
         }
         let mut events_rx = self.events_rx.resubscribe();
+        let exit_rx = self.exit_rx.clone();
         self.related_tasks.spawn(async move {
             loop {
                 match events_rx.recv().await {
@@ -83,7 +57,15 @@ impl TaskEvents {
                         warn!("Output receiver is too slow. Have to skip {n} lines");
                         continue;
                     }
-                    Err(_) => break,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        let status = exit_rx.borrow().to_owned();
+                        if let Some(status) = status {
+                            subscriber.on_exit(status).await;
+                        } else {
+                            error!("events channel was closed without an exit status");
+                        }
+                        break;
+                    }
                     Ok(TaskEvent::Output(line)) => {
                         if subscriber.on_output(line).await.is_err() {
                             break;
@@ -128,7 +110,7 @@ mod tests {
 
     use tokio::sync::Notify;
 
-    use crate::tasks::{senders::CHANNEL_CAPACITY, test_subscribers::CapturingSubscriber};
+    use crate::tasks::{sender::CHANNEL_CAPACITY, test_subscribers::CapturingSubscriber};
 
     use super::*;
 
@@ -169,7 +151,7 @@ mod tests {
 
         fn send_code(&self) {
             self.sender
-                .0
+                .events_tx
                 .send(ExitStatus::from_raw(self.exit_code).into())
                 .unwrap();
         }
@@ -199,7 +181,7 @@ mod tests {
         let test_data = TestData::new();
         test_data
             .sender
-            .0
+            .exit_tx
             .send(ExitStatus::from_raw(123).into())
             .unwrap();
         tokio::task::yield_now().await;
@@ -218,17 +200,17 @@ mod tests {
         assert_eq!(
             test_data
                 .sender
-                .0
+                .events_tx
                 .send(output[0].to_string().into())
                 .unwrap(),
-            3
+            2
         );
         test_data.got_output.notified().await;
         assert!(!test_data.abort_handle.is_finished());
         test_data.abort_handle.abort();
         test_data
             .sender
-            .0
+            .events_tx
             .send(output[1].to_string().into())
             .unwrap();
         drop(test_data.sender);
@@ -242,7 +224,11 @@ mod tests {
     async fn subscribe_slow_output_receiver() {
         let test_data = TestData::new();
         for i in 0..CHANNEL_CAPACITY * 2 {
-            test_data.sender.0.send(i.to_string().into()).unwrap();
+            test_data
+                .sender
+                .events_tx
+                .send(i.to_string().into())
+                .unwrap();
             assert!(
                 test_data.captured_output.lock().unwrap().is_empty(),
                 "receiver should not have run during the send burst"
@@ -263,7 +249,14 @@ mod tests {
         let test_data = TestData::new();
         let output = ["some output", "another output"];
         for o in output {
-            assert_eq!(test_data.sender.0.send(o.to_string().into()).unwrap(), 3);
+            assert_eq!(
+                test_data
+                    .sender
+                    .events_tx
+                    .send(o.to_string().into())
+                    .unwrap(),
+                2
+            );
         }
         drop(test_data.sender);
         test_data.events.join_all().await;
@@ -291,7 +284,14 @@ mod tests {
             .unwrap();
         let output = ["first output", "second output"];
         for o in &output {
-            assert_eq!(test_data.sender.0.send(o.to_string().into()).unwrap(), 4);
+            assert_eq!(
+                test_data
+                    .sender
+                    .events_tx
+                    .send(o.to_string().into())
+                    .unwrap(),
+                3
+            );
         }
         got_output2.notified().await;
         assert!(!abort_handle2.is_finished());
@@ -299,7 +299,7 @@ mod tests {
         let third_output = "third output";
         test_data
             .sender
-            .0
+            .events_tx
             .send(third_output.to_string().into())
             .unwrap();
         drop(test_data.sender);
@@ -320,7 +320,10 @@ mod tests {
         let sender = TaskSender::new();
         let events = TaskEvents::new(&sender);
         let output = ["first", "second"];
-        assert_eq!(sender.0.send(output[0].to_string().into()).unwrap(), 2);
+        assert_eq!(
+            sender.events_tx.send(output[0].to_string().into()).unwrap(),
+            1
+        );
         let captured_output = Arc::new(Mutex::new(Vec::new()));
         events
             .subscribe({
@@ -330,7 +333,10 @@ mod tests {
                 }
             })
             .unwrap();
-        assert_eq!(sender.0.send(output[1].to_string().into()).unwrap(), 3);
+        assert_eq!(
+            sender.events_tx.send(output[1].to_string().into()).unwrap(),
+            2
+        );
         drop(sender);
         events.join_all().await;
         let captured_output = captured_output.lock().unwrap();
@@ -372,7 +378,10 @@ mod tests {
             })
             .unwrap();
         for _ in 0..10 {
-            sender.0.send("some line".to_string().into()).unwrap();
+            sender
+                .events_tx
+                .send("some line".to_string().into())
+                .unwrap();
         }
         drop(sender);
         tokio::time::timeout(std::time::Duration::from_secs(1), events.join_all())
@@ -441,7 +450,7 @@ mod tests {
         let events = TaskEvents::new(&sender);
         let exit_code = 123;
         sender
-            .0
+            .exit_tx
             .send(ExitStatus::from_raw(exit_code).into())
             .unwrap();
         tokio::task::yield_now().await;
@@ -470,7 +479,7 @@ mod tests {
         tokio::task::yield_now().await;
         assert!(!handle.is_finished());
         sender
-            .0
+            .exit_tx
             .send(ExitStatus::from_raw(exit_code).into())
             .unwrap();
         tokio::time::timeout(Duration::from_secs(1), handle)
@@ -485,7 +494,7 @@ mod tests {
         let sender = TaskSender::new();
         let events = TaskEvents::new(&sender);
         assert!(!events.has_exited());
-        sender.0.send(ExitStatus::default().into()).unwrap();
+        sender.exit_tx.send(ExitStatus::default().into()).unwrap();
         tokio::task::yield_now().await;
         assert!(events.has_exited());
     }
