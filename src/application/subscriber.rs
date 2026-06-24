@@ -27,6 +27,7 @@ impl Subscriber {
 }
 
 impl TaskEventsSubscriber for Subscriber {
+    #[allow(clippy::manual_async_fn)]
     fn on_output(
         &mut self,
         line: std::sync::Arc<String>,
@@ -45,6 +46,7 @@ impl TaskEventsSubscriber for Subscriber {
         }
     }
 
+    #[allow(clippy::manual_async_fn)]
     fn on_exit(&mut self, status: std::process::ExitStatus) -> impl Future<Output = ()> + Send {
         async move {
             let notification: Notification =
@@ -59,4 +61,3 @@ impl TaskEventsSubscriber for Subscriber {
         }
     }
 }
-
