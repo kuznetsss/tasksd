@@ -12,6 +12,9 @@ mod task_error;
 mod task_manager;
 mod tracker;
 
+#[cfg(test)]
+mod test_subscribers;
+
 pub use events::{TaskEventsSubscriber, TaskSubscriberError};
 pub use task_error::TaskError;
 pub use task_manager::{TaskId, TaskManager};

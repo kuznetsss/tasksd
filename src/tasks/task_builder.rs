@@ -79,7 +79,7 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
-    use crate::tasks::TaskSubscriberError;
+    use crate::tasks::test_subscribers::CapturingSubscriber;
 
     use super::*;
 
@@ -132,27 +132,6 @@ mod tests {
         );
     }
 
-    #[derive(Default)]
-    struct CapturingSubscriber {
-        captured_output: Arc<Mutex<Vec<Arc<String>>>>,
-        captured_exit_code: Arc<Mutex<Option<ExitStatus>>>,
-    }
-
-    impl TaskEventsSubscriber for CapturingSubscriber {
-        fn on_output(
-            &mut self,
-            line: Arc<String>,
-        ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
-            self.captured_output.lock().unwrap().push(line);
-            async { Ok(()) }
-        }
-
-        fn on_exit(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
-            *self.captured_exit_code.lock().unwrap() = Some(status);
-            async {}
-        }
-    }
-
     #[tokio::test]
     async fn subscribe_subscribes_to_output() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
@@ -177,9 +156,9 @@ mod tests {
     #[tokio::test]
     async fn subscribe_subscribes_to_exit_code() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
-        let captured_exit_code = Arc::new(Mutex::new(None));
+        let captured_exit_code = Arc::new(Mutex::new(Vec::new()));
         builder.subscribe(CapturingSubscriber {
-            captured_exit_code: captured_exit_code.clone(),
+            captured_exit_codes: captured_exit_code.clone(),
             ..Default::default()
         });
         let exit_code = ExitStatus::from_raw(123);
@@ -187,8 +166,8 @@ mod tests {
         drop(builder.sender);
         builder.events.join_all().await;
         let captured_exit_code = captured_exit_code.lock().unwrap();
-        assert!(captured_exit_code.is_some());
-        assert_eq!(captured_exit_code.unwrap().into_raw(), exit_code.into_raw());
+        assert_eq!(captured_exit_code.len(), 1);
+        assert_eq!(captured_exit_code[0].into_raw(), exit_code.into_raw());
     }
 
     #[tokio::test]

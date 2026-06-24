@@ -38,6 +38,7 @@ struct TaskExitSubscriber {
 }
 
 impl TaskEventsSubscriber for TaskExitSubscriber {
+    #[allow(clippy::manual_async_fn)]
     fn on_output(
         &mut self,
         _: Arc<String>,
@@ -127,32 +128,9 @@ mod tests {
 
     use tokio::sync::Notify;
 
-    use crate::tasks::senders::CHANNEL_CAPACITY;
+    use crate::tasks::{senders::CHANNEL_CAPACITY, test_subscribers::CapturingSubscriber};
 
     use super::*;
-
-    #[derive(Default)]
-    struct CapturingSubscriber {
-        captured_output: Arc<Mutex<Vec<Arc<String>>>>,
-        got_output: Arc<Notify>,
-        captured_exit_codes: Arc<Mutex<Vec<ExitStatus>>>,
-    }
-
-    impl TaskEventsSubscriber for CapturingSubscriber {
-        fn on_output(
-            &mut self,
-            line: Arc<String>,
-        ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
-            self.captured_output.lock().unwrap().push(line);
-            self.got_output.notify_waiters();
-            async { Ok(()) }
-        }
-
-        fn on_exit(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
-            self.captured_exit_codes.lock().unwrap().push(status);
-            async {}
-        }
-    }
 
     struct TestData {
         sender: TaskSender,
@@ -372,7 +350,7 @@ mod tests {
         ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
             self.output_call_count
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            async { Ok(()) }
+            async { Err(TaskSubscriberError::ShouldExit) }
         }
 
         fn on_exit(&mut self, _: ExitStatus) -> impl Future<Output = ()> + Send {

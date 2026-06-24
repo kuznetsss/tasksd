@@ -281,7 +281,11 @@ impl Drop for Task {
 mod tests {
     use rustix::path::Arg;
 
-    use crate::tasks::{events::TaskSubscriberError, senders::CHANNEL_CAPACITY};
+    use crate::tasks::{
+        events::TaskSubscriberError,
+        senders::CHANNEL_CAPACITY,
+        test_subscribers::{CapturingSubscriber, NoopSubscriber},
+    };
 
     use super::*;
     use std::{
@@ -306,23 +310,6 @@ mod tests {
             working_dir: working_dir.into(),
         };
         Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY)
-    }
-
-    struct NoopSubscriber {}
-
-    impl TaskEventsSubscriber for NoopSubscriber {
-        fn on_output(
-            &mut self,
-            _: Arc<String>,
-        ) -> impl Future<
-            Output = std::result::Result<(), crate::tasks::events::TaskSubscriberError>,
-        > + Send {
-            async { Ok(()) }
-        }
-
-        fn on_exit(&mut self, _: ExitStatus) -> impl Future<Output = ()> + Send {
-            async {}
-        }
     }
 
     #[tokio::test]
@@ -353,27 +340,6 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
-    }
-
-    #[derive(Default)]
-    struct CapturingSubscriber {
-        captured_output: Arc<Mutex<Vec<Arc<String>>>>,
-        captured_exit_codes: Arc<Mutex<Vec<ExitStatus>>>,
-    }
-
-    impl TaskEventsSubscriber for CapturingSubscriber {
-        fn on_output(
-            &mut self,
-            line: Arc<String>,
-        ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
-            self.captured_output.lock().unwrap().push(line);
-            async { Ok(()) }
-        }
-
-        fn on_exit(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
-            self.captured_exit_codes.lock().unwrap().push(status);
-            async {}
-        }
     }
 
     #[tokio::test]
