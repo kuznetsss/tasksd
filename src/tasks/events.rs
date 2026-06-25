@@ -84,6 +84,7 @@ impl TaskEvents {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{
         os::unix::process::ExitStatusExt,

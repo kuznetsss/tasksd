@@ -26,7 +26,5 @@ monostate = "1.0.2"
 tempfile = "3.27.0"
 tokio-test = "0.4.5"
 
-
-
-
-
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)'] }

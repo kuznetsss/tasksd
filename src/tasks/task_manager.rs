@@ -172,6 +172,7 @@ impl Drop for TaskManager {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{
         collections::HashSet, env::current_dir, os::unix::process::ExitStatusExt, pin::pin,

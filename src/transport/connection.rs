@@ -82,6 +82,7 @@ impl ConnectionWriter {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use tokio_test::io::Builder;

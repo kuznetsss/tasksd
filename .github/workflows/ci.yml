@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly # nightly is required for coverage(off)
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
@@ -73,10 +73,23 @@ jobs:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  coverage-optout:
+    name: Tests excluded from coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Every test module must opt out of coverage
+        run: |
+          if rg -U --pcre2 -n '#\[cfg\(test\)\]\n\s*mod tests \{' src/; then
+            echo "::error::The 'mod tests' above is missing #[cfg_attr(coverage_nightly, coverage(off))]"
+            exit 1
+          fi
+          echo "OK: all 'mod tests' modules opt out of coverage"
+
   ci-success:
     name: CI success
     if: always()
-    needs: [fmt, clippy, test, doc, coverage]
+    needs: [fmt, clippy, test, doc, coverage, coverage-optout]
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs passed

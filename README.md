@@ -1,7 +1,7 @@
 # Tasksd
 
-![CI status](https://github.com/kuznetsss/tasksd/actions/workflows/ci.yml/badge.svg)
-![Crates audit](https://github.com/kuznetsss/tasksd/actions/workflows/audit.yml/badge.svg)
+[![CI status](https://github.com/kuznetsss/tasksd/actions/workflows/ci.yml/badge.svg)](https://github.com/kuznetsss/tasksd/actions/workflows/ci.yml)
+[![Crates audit](https://github.com/kuznetsss/tasksd/actions/workflows/audit.yml/badge.svg)](https://github.com/kuznetsss/tasksd/actions/workflows/audit.yml)
 [![Test coverage](https://codecov.io/gh/kuznetsss/tasksd/graph/badge.svg?token=NBUAOGLWUH)](https://codecov.io/gh/kuznetsss/tasksd)
 
 Tasksd is a daemon allowing to spawn shell commands via JSON-RPC API.
@@ -48,7 +48,6 @@ Use `--help` flag to see all the available options.
 - PTY is allocated for each task - spawned command sees a real terminal
 - output capture - each task output is captured into a ring buffer (by default tasksd keeps last 10 000 lines)
 - streaming JSON-RPC API - clients subscribe to live output and exit notifications over a unix socket
-- type-safe task lifecycle - tasks are modeled with the typestate pattern (builder → running → finished), so invalid transitions don't compile.
 
 ## JSON-RPC API
 

@@ -56,6 +56,7 @@ fn build_subscriber(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use core::assert_matches;
     use std::{io::Read, str::FromStr};

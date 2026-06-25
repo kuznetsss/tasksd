@@ -181,6 +181,7 @@ impl AsyncWrite for PtyWritePart {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{
         assert_matches,

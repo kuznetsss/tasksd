@@ -49,6 +49,7 @@ impl RecentFinishedTasks {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{env::current_dir, process::ExitStatus};
 
