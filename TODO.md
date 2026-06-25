@@ -122,7 +122,8 @@
     - [x] Add missing test cases for Task
     - [x] Fix tasks::task::tests::exit_notification_is_after_output
             captured_events could be 15 output + 1 exit or 16 output + 1 exit
-- [ ] Exclude tests from code coverage
+- [x] Exclude tests from code coverage
+- [ ] Check missing code coverage
 - [ ] Remove anyhow where possible
 - [ ] Use json!() macro in tests instead of plain text
 - [ ] Verify shutdown and cancellation paths
