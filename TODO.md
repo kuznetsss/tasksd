@@ -111,7 +111,7 @@
     - [x] shutdown disconnects client
     - [x] multiple clients
     - [x] two task start on one connection
-- [ ] Bug: there is no strong guarantee that exit event will be sent after all the output events:
+- [x] Bug: there is no strong guarantee that exit event will be sent after all the output events:
     - [x] Exit event should be sent after all the output events
     - [x] Output and exit events should be merged into one stream
     - [x] The guarantee could be provided only inside on receiver task,
@@ -119,10 +119,10 @@
     - [x] Update tests and the rest of the code
     - [x] Move test subscribers into a separate module
     - [x] Rename senders.rs -> sender.rs
-    - [ ] Add missing test cases for Task
-    - [ ] Fix tasks::task::tests::exit_notification_is_after_output
+    - [x] Add missing test cases for Task
+    - [x] Fix tasks::task::tests::exit_notification_is_after_output
             captured_events could be 15 output + 1 exit or 16 output + 1 exit
-
+- [ ] Exclude tests from code coverage
 - [ ] Remove anyhow where possible
 - [ ] Use json!() macro in tests instead of plain text
 - [ ] Verify shutdown and cancellation paths
