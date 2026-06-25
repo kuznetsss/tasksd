@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::tasks::{
-    events::{TaskExitCallback, TaskOutputCallback},
+    TaskEventsSubscriber,
     finished_task::FinishedTask,
     recent_finished_tasks::RecentFinishedTasks,
     task_builder::TaskBuilder,
@@ -53,13 +53,8 @@ impl<'a> TaskCreationHandle<'a> {
         self
     }
 
-    pub fn on_output(&mut self, cb: impl TaskOutputCallback) -> &mut Self {
-        self.builder.on_output(cb);
-        self
-    }
-
-    pub fn on_exit(&mut self, cb: impl TaskExitCallback) -> &mut Self {
-        self.builder.on_exit(cb);
+    pub fn subscribe(&mut self, s: impl TaskEventsSubscriber) -> &mut Self {
+        self.builder.subscribe(s);
         self
     }
 
@@ -186,6 +181,8 @@ mod tests {
     use futures::task::noop_waker;
     use rustix::process::Signal;
 
+    use crate::tasks::test_subscribers::CapturingSubscriber;
+
     use super::*;
 
     const TASK_OUTPUT_BUFFER_CAPACITY: usize = 10;
@@ -203,13 +200,12 @@ mod tests {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let captured_output = Arc::new(Mutex::new(Vec::new()));
         let mut builder = tm.create_task("echo");
-        builder.args(["-n", "hello\nworld"]).on_output({
-            let captured_output = captured_output.clone();
-            move |o| {
-                captured_output.lock().unwrap().push(o);
-                async { Ok(()) }
-            }
-        });
+        builder
+            .args(["-n", "hello\nworld"])
+            .subscribe(CapturingSubscriber {
+                captured_output: captured_output.clone(),
+                ..Default::default()
+            });
         builder.submit().unwrap();
         tm.join().await;
         let captured_output = captured_output.lock().unwrap();
@@ -221,19 +217,19 @@ mod tests {
     #[tokio::test]
     async fn create_task_exit_callback_catches_exit_code() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let captured_output = Arc::new(Mutex::new(None));
+        let captured_exit_codes = Arc::new(Mutex::new(Vec::new()));
         let mut builder = tm.create_task("sh");
-        builder.args(["-c", "exit 123"]).on_exit({
-            let captured_output = captured_output.clone();
-            move |e| {
-                *captured_output.lock().unwrap() = Some(e);
-                async {}
-            }
-        });
+        builder
+            .args(["-c", "exit 123"])
+            .subscribe(CapturingSubscriber {
+                captured_exit_codes: captured_exit_codes.clone(),
+                ..Default::default()
+            });
         builder.submit().unwrap();
         tm.join().await;
-        let captured_output = captured_output.lock().unwrap();
-        assert_eq!(captured_output.unwrap().code().unwrap(), 123);
+        let captured_output = captured_exit_codes.lock().unwrap();
+        assert_eq!(captured_output.len(), 1);
+        assert_eq!(captured_output[0].code().unwrap(), 123);
     }
 
     #[tokio::test]

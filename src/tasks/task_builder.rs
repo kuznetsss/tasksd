@@ -1,10 +1,7 @@
 use std::{env::current_dir, path::PathBuf};
 
 use crate::tasks::{
-    events::{TaskEvents, TaskExitCallback, TaskOutputCallback},
-    info::TaskInfo,
-    senders::TaskSenders,
-    task::Task,
+    TaskEventsSubscriber, events::TaskEvents, info::TaskInfo, sender::TaskSender, task::Task,
     task_error::TaskError,
 };
 
@@ -13,21 +10,21 @@ pub struct TaskBuilder {
     args: Option<Vec<String>>,
     working_dir: Option<PathBuf>,
 
-    senders: TaskSenders,
+    sender: TaskSender,
     events: TaskEvents,
     output_buffer_capacity: usize,
 }
 
 impl TaskBuilder {
     pub fn new(executable: impl Into<String>, output_buffer_capacity: usize) -> Self {
-        let senders = TaskSenders::new();
-        let events = TaskEvents::new(&senders);
+        let sender = TaskSender::new();
+        let events = TaskEvents::new(&sender);
         Self {
             executable: executable.into(),
             args: None,
             working_dir: None,
             events,
-            senders,
+            sender,
             output_buffer_capacity,
         }
     }
@@ -50,21 +47,13 @@ impl TaskBuilder {
         self
     }
 
-    pub fn on_output<F>(&mut self, f: F) -> &mut Self
+    pub fn subscribe<S>(&mut self, s: S) -> &mut Self
     where
-        F: TaskOutputCallback,
+        S: TaskEventsSubscriber,
     {
         self.events
-            .on_output(f)
+            .subscribe(s)
             .expect("Task can't exit in builder");
-        self
-    }
-
-    pub fn on_exit<F>(&mut self, f: F) -> &mut Self
-    where
-        F: TaskExitCallback,
-    {
-        self.events.on_exit(f).expect("Task can't exit in builder");
         self
     }
 
@@ -78,7 +67,7 @@ impl TaskBuilder {
             working_dir,
         };
 
-        Task::new(info, self.senders, self.events, self.output_buffer_capacity)
+        Task::new(info, self.sender, self.events, self.output_buffer_capacity)
     }
 }
 
@@ -90,12 +79,14 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
+    use crate::tasks::test_subscribers::CapturingSubscriber;
+
     use super::*;
 
     const OUTPUT_BUFFER_CAPACITY: usize = 10;
 
-    #[test]
-    fn arg_adds_arg() {
+    #[tokio::test]
+    async fn arg_adds_arg() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
         assert!(builder.args.is_none());
         let arg = "some_arg";
@@ -110,8 +101,8 @@ mod tests {
         assert_eq!(builder.args.as_ref().unwrap()[1], another_arg);
     }
 
-    #[test]
-    fn args_adds_args() {
+    #[tokio::test]
+    async fn args_adds_args() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
         assert!(builder.args.is_none());
         let args = ["some", "args"];
@@ -129,8 +120,8 @@ mod tests {
         assert_eq!(builder.args.as_ref().unwrap()[args.len()..], another_args);
     }
 
-    #[test]
-    fn working_dir_sets_working_dir() {
+    #[tokio::test]
+    async fn working_dir_sets_working_dir() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
         assert!(builder.working_dir.is_none());
         let wd = "/tmp";
@@ -142,28 +133,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_output_subscribes_to_stdout() {
+    async fn subscribe_subscribes_to_output() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
         let captured_output = Arc::new(Mutex::new(Vec::new()));
-        builder.on_output({
-            let captured_output = captured_output.clone();
-            move |o| {
-                captured_output.lock().unwrap().push(o);
-                async { Ok(()) }
-            }
+        builder.subscribe(CapturingSubscriber {
+            captured_output: captured_output.clone(),
+            ..Default::default()
         });
         let output_lines = ["some output", "other output"];
         for l in &output_lines {
             assert_eq!(
-                builder
-                    .senders
-                    .output_tx
-                    .send(Arc::new(l.to_string()))
-                    .unwrap(),
+                builder.sender.events_tx.send(l.to_string().into()).unwrap(),
                 2
             );
         }
-        drop(builder.senders);
+        drop(builder.sender);
         builder.events.join_all().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), output_lines.len());
@@ -173,23 +157,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_exit_subscribes_to_exit_code() {
+    async fn subscribe_subscribes_to_exit_code() {
         let mut builder = TaskBuilder::new("some_executable", OUTPUT_BUFFER_CAPACITY);
-        let captured_exit_code = Arc::new(Mutex::new(None));
-        builder.on_exit({
-            let captured_exit_code = captured_exit_code.clone();
-            move |e| {
-                *captured_exit_code.lock().unwrap() = Some(e);
-                async {}
-            }
+        let captured_exit_code = Arc::new(Mutex::new(Vec::new()));
+        builder.subscribe(CapturingSubscriber {
+            captured_exit_codes: captured_exit_code.clone(),
+            ..Default::default()
         });
         let exit_code = ExitStatus::from_raw(123);
-        builder.senders.on_exit_tx.send(Some(exit_code)).unwrap();
-        drop(builder.senders);
+        builder.sender.events_tx.send(exit_code.into()).unwrap();
+        drop(builder.sender);
         builder.events.join_all().await;
         let captured_exit_code = captured_exit_code.lock().unwrap();
-        assert!(captured_exit_code.is_some());
-        assert_eq!(captured_exit_code.unwrap().into_raw(), exit_code.into_raw());
+        assert_eq!(captured_exit_code.len(), 1);
+        assert_eq!(captured_exit_code[0].into_raw(), exit_code.into_raw());
     }
 
     #[tokio::test]

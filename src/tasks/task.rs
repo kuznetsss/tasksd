@@ -10,13 +10,13 @@ use tokio::{
 use tracing::{Instrument, Span, info, info_span, warn};
 
 use crate::tasks::{
-    events::{TaskEvents, TaskExitCallback, TaskOutputCallback},
+    events::{TaskEvents, TaskEventsSubscriber},
     finished_task::FinishedTask,
     info::TaskInfo,
     output_buffer::OutputBuffer,
     pty::{PtyChild, PtyWritePart, create_pty_pair},
     pty_reader::PtyReader,
-    senders::TaskSenders,
+    sender::{TaskEvent, TaskSender},
     task_error::TaskError,
     tracker::{PanicHandler, WrappedTaskTracker},
 };
@@ -33,6 +33,7 @@ pub struct Task {
     stdin: tokio::sync::Mutex<PtyWritePart>,
     pid: u32,
     events: TaskEvents,
+    exit_rx: watch::Receiver<Option<ExitStatus>>,
     internal_tasks: WrappedTaskTracker,
     output_buffer: Arc<OutputBuffer>,
 }
@@ -40,7 +41,7 @@ pub struct Task {
 impl Task {
     pub(in crate::tasks) fn new(
         info: TaskInfo,
-        senders: TaskSenders,
+        senders: TaskSender,
         events: TaskEvents,
         output_buffer_capacity: usize,
     ) -> Result<Self, TaskError> {
@@ -59,9 +60,8 @@ impl Task {
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
         let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
 
-        let (internal_on_exit_sender, internal_on_exit_receiver) = watch::channel(None);
         let child_process_exit_future = Box::pin({
-            let mut on_exit_internal_receiver = internal_on_exit_receiver.clone();
+            let mut on_exit_internal_receiver = senders.exit_tx.subscribe();
             async move {
                 let _ = on_exit_internal_receiver.changed().await;
             }
@@ -77,9 +77,8 @@ impl Task {
         Self::spawn_output_reading(
             &internal_tasks,
             pty_reader,
-            internal_on_exit_receiver,
-            senders.on_exit_tx,
-            senders.output_tx,
+            senders.exit_tx.subscribe(),
+            senders.events_tx,
             output_buffer.clone(),
             span.clone(),
         );
@@ -88,18 +87,15 @@ impl Task {
             .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
         let pid = child.id().expect("pid");
         info!(pid, "Spawned a process");
-        Self::spawn_waiting_for_exit(
-            &internal_tasks,
-            internal_on_exit_sender,
-            child,
-            span.clone(),
-        );
+        let exit_rx = senders.exit_tx.subscribe();
+        Self::spawn_waiting_for_exit(&internal_tasks, senders.exit_tx, child, span.clone());
 
         let task = Self {
             info,
             stdin: tokio::sync::Mutex::new(pty_write),
             pid,
             events,
+            exit_rx,
             internal_tasks,
             output_buffer,
         };
@@ -112,7 +108,7 @@ impl Task {
     }
 
     pub async fn write_to_stdin(&self, msg: &[u8]) -> Result<(), TaskError> {
-        if self.events.has_exited() {
+        if self.has_exited() {
             Err(TaskError::AlreadyExited)
         } else {
             self.stdin
@@ -124,18 +120,14 @@ impl Task {
         }
     }
 
-    pub fn on_output<F>(&self, f: F) -> Result<AbortHandle, TaskError>
+    pub fn subscribe<S>(&self, s: S) -> Result<AbortHandle, TaskError>
     where
-        F: TaskOutputCallback,
+        S: TaskEventsSubscriber,
     {
-        self.events.on_output(f)
-    }
-
-    pub fn on_exit<F>(&self, f: F) -> Result<AbortHandle, TaskError>
-    where
-        F: TaskExitCallback,
-    {
-        self.events.on_exit(f)
+        if self.has_exited() {
+            return Err(TaskError::AlreadyExited);
+        }
+        self.events.subscribe(s)
     }
 
     pub fn send_signal(&self, signal: rustix::process::Signal) -> Result<(), TaskError> {
@@ -155,8 +147,20 @@ impl Task {
         &self.output_buffer
     }
 
+    pub fn has_exited(&self) -> bool {
+        self.exit_rx.has_changed().unwrap_or(true)
+    }
+
+    async fn exit_status(&self) -> ExitStatus {
+        self.wait().await;
+        self.exit_rx
+            .borrow()
+            .to_owned()
+            .expect("ExitStatus should always be Some")
+    }
+
     pub async fn wait(&self) {
-        self.events.exit_status().await;
+        let _ = self.exit_rx.clone().changed().await;
     }
 
     pub async fn join(&self) -> FinishedTask {
@@ -164,7 +168,7 @@ impl Task {
         self.events.join_all().await;
         FinishedTask {
             info: self.info.clone(),
-            exit_status: self.events.exit_status().await,
+            exit_status: self.exit_status().await,
         }
     }
 
@@ -203,9 +207,8 @@ impl Task {
     fn spawn_output_reading(
         internal_tasks: &WrappedTaskTracker,
         pty_reader: PtyReader,
-        mut internal_on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
-        on_exit_sender: watch::Sender<Option<ExitStatus>>,
-        stdout_tx: broadcast::Sender<Arc<String>>,
+        mut on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
+        events_tx: broadcast::Sender<TaskEvent>,
         output_buffer: Arc<OutputBuffer>,
         span: Span,
     ) {
@@ -229,14 +232,17 @@ impl Task {
                         };
                         let line = Arc::new(buf);
                         output_buffer.insert_line(line.clone());
-                        if let Err(e) = stdout_tx.send(line) {
+                        if let Err(e) = events_tx.send(TaskEvent::Output(line)) {
                             warn!("Error sending output line to subscribers: {e}");
                         }
                     }
-                    if internal_on_exit_receiver.changed().await.is_ok() {
-                        let exit_status = internal_on_exit_receiver.borrow().to_owned();
-                        on_exit_sender
-                            .send(exit_status)
+                    if on_exit_receiver.changed().await.is_ok() {
+                        let exit_status = on_exit_receiver
+                            .borrow()
+                            .to_owned()
+                            .expect("Exit status should always be Some");
+                        events_tx
+                            .send(TaskEvent::Exit(exit_status))
                             .expect("One receiver in events should be alive");
                     }
                 }
@@ -247,7 +253,7 @@ impl Task {
 
     fn spawn_waiting_for_exit(
         internal_tasks: &WrappedTaskTracker,
-        tx: watch::Sender<Option<ExitStatus>>,
+        internal_on_exit_sender: watch::Sender<Option<ExitStatus>>,
         mut child: Child,
         span: Span,
     ) {
@@ -259,7 +265,10 @@ impl Task {
                         .await
                         .expect("Child process should finish normally");
                     info!("Task has exited. {exit_status}");
-                    tx.send(Some(exit_status))
+                    // This sender notifies only internal components about the process exit:
+                    // PtyReader and unlocks sending Exit event to subscribers
+                    internal_on_exit_sender
+                        .send(Some(exit_status))
                         .expect("At least one receiver should be alive");
                 }
                 .instrument(span),
@@ -284,12 +293,15 @@ impl Drop for Task {
 mod tests {
     use rustix::path::Arg;
 
-    use crate::tasks::senders::CHANNEL_CAPACITY;
+    use crate::tasks::{
+        sender::CHANNEL_CAPACITY,
+        test_subscribers::{CapturingSubscriber, Event, EventsCapturingSubscriber, NoopSubscriber},
+    };
 
     use super::*;
     use std::{
         env::current_dir, io::Write, os::unix::process::ExitStatusExt, path::PathBuf, str::FromStr,
-        sync::Mutex,
+        sync::Mutex, time::Duration,
     };
 
     const OUTPUT_BUFFER_CAPACITY: usize = CHANNEL_CAPACITY * 2;
@@ -298,33 +310,34 @@ mod tests {
         executable: impl Into<String>,
         args: &[&str],
         working_dir: impl Into<PathBuf>,
-        on_output: impl TaskOutputCallback,
+        subscriber: impl TaskEventsSubscriber,
     ) -> Result<Task, TaskError> {
-        let senders = TaskSenders::new();
-        let events = TaskEvents::new(&senders);
-        events.on_output(on_output).unwrap();
+        let sender = TaskSender::new();
+        let events = TaskEvents::new(&sender);
+        events.subscribe(subscriber).unwrap();
         let info = TaskInfo {
             executable: executable.into(),
             args: args.iter().map(|&s| String::from(s)).collect(),
             working_dir: working_dir.into(),
         };
-        Task::new(info, senders, events, OUTPUT_BUFFER_CAPACITY)
-    }
-
-    fn noop_callback() -> impl TaskOutputCallback {
-        |_| async { Ok(()) }
+        Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY)
     }
 
     #[tokio::test]
     async fn new_non_existing_executable() {
-        let err =
-            make_task("non_existing", &[], current_dir().unwrap(), noop_callback()).unwrap_err();
+        let err = make_task(
+            "non_existing",
+            &[],
+            current_dir().unwrap(),
+            NoopSubscriber {},
+        )
+        .unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
     #[tokio::test]
     async fn new_bad_args() {
-        let err = make_task("ls", &["\0"], current_dir().unwrap(), noop_callback()).unwrap_err();
+        let err = make_task("ls", &["\0"], current_dir().unwrap(), NoopSubscriber {}).unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
     }
 
@@ -334,7 +347,7 @@ mod tests {
             "ls",
             &["\0"],
             current_dir().unwrap().join("non_existing_123"),
-            noop_callback(),
+            NoopSubscriber {},
         )
         .unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
@@ -343,15 +356,17 @@ mod tests {
     #[tokio::test]
     async fn new_success() {
         let captured_output = Arc::new(Mutex::new(Vec::new()));
-        let on_output = {
-            let captured_output = captured_output.clone();
-            move |o| {
-                captured_output.lock().unwrap().push(o);
-                async { Ok(()) }
-            }
-        };
         let msg = "test";
-        let task = make_task("echo", &[msg], current_dir().unwrap(), on_output).unwrap();
+        let task = make_task(
+            "echo",
+            &[msg],
+            current_dir().unwrap(),
+            CapturingSubscriber {
+                captured_output: captured_output.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         task.join().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 1);
@@ -363,7 +378,7 @@ mod tests {
         let executable = "ls";
         let args = ["-la"];
         let directory = PathBuf::from_str("/tmp").unwrap();
-        let task = make_task(executable, &args, &directory, noop_callback()).unwrap();
+        let task = make_task(executable, &args, &directory, NoopSubscriber {}).unwrap();
         let info = task.info();
         assert_eq!(&info.executable, executable);
         assert_eq!(info.args, args);
@@ -374,14 +389,16 @@ mod tests {
     #[tokio::test]
     async fn write_to_stdin_success() {
         let captured_output = Arc::new(Mutex::new(Vec::new()));
-        let on_output = {
-            let captured_output = captured_output.clone();
-            move |o| {
-                captured_output.lock().unwrap().push(o);
-                async { Ok(()) }
-            }
-        };
-        let task = make_task("cat", &[], current_dir().unwrap(), on_output).unwrap();
+        let task = make_task(
+            "cat",
+            &[],
+            current_dir().unwrap(),
+            CapturingSubscriber {
+                captured_output: captured_output.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         for m in ["one", "two\n", "three"] {
             task.write_to_stdin(m.as_bytes()).await.unwrap();
         }
@@ -395,7 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn write_to_stdin_error() {
-        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
         task.wait().await;
         let err = task
             .write_to_stdin("some input".as_bytes())
@@ -406,10 +423,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_output_after_exit_returns_error() {
-        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
+    async fn subscribe_after_exit_returns_error() {
+        let task = make_task("ls", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
         task.wait().await;
-        let err = task.on_output(noop_callback()).unwrap_err();
+        let err = task.subscribe(NoopSubscriber {}).unwrap_err();
+        assert!(matches!(err, TaskError::AlreadyExited));
+        task.join().await;
+    }
+
+    #[tokio::test]
+    async fn subscribe_after_exit_returns_error_events_based() {
+        let captured_events = Arc::new(Mutex::new(Vec::new()));
+        let task = make_task(
+            "echo",
+            &["-n", "hello"],
+            current_dir().unwrap(),
+            EventsCapturingSubscriber {
+                captured_events: captured_events.clone(),
+            },
+        )
+        .unwrap();
+        let mut attempt = 0;
+        const MAX_ATTEMPTS: usize = 5000;
+        loop {
+            if captured_events.lock().unwrap().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            assert!(attempt < MAX_ATTEMPTS);
+            attempt += 1;
+        }
+        assert_eq!(captured_events.lock().unwrap().len(), 2);
+        assert_eq!(
+            *captured_events.lock().unwrap(),
+            vec![Event::Output, Event::Exit]
+        );
+        let err = task.subscribe(NoopSubscriber {}).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
         task.join().await;
     }
@@ -420,7 +469,7 @@ mod tests {
             "echo",
             &["-n", "line1\nline2"],
             current_dir().unwrap(),
-            noop_callback(),
+            NoopSubscriber {},
         )
         .unwrap();
         task.join().await;
@@ -438,7 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn output_buffer_capacity() {
-        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
         assert_eq!(task.output_buffer().capacity(), OUTPUT_BUFFER_CAPACITY);
         task.join().await;
     }
@@ -456,12 +505,9 @@ mod tests {
             "cat",
             &[tmp_file.path().to_str().unwrap()],
             current_dir().unwrap(),
-            {
-                let captured_output = captured_output.clone();
-                move |o: Arc<String>| {
-                    captured_output.lock().unwrap().push(o);
-                    async { Ok(()) }
-                }
+            CapturingSubscriber {
+                captured_output: captured_output.clone(),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -473,7 +519,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_signal_success() {
-        let task = make_task("cat", &[], current_dir().unwrap(), noop_callback()).unwrap();
+        let task = make_task("cat", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
         tokio::task::yield_now().await;
         task.send_signal(rustix::process::Signal::TERM).unwrap();
         let finished_task = task.join().await;
@@ -485,7 +531,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_signal_error() {
-        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
         task.wait().await;
         let err = task.send_signal(rustix::process::Signal::TERM).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
@@ -497,7 +543,7 @@ mod tests {
         let executable = "ls";
         let args = ["-la"];
         let dir = current_dir().unwrap().join("../");
-        let task = make_task(executable, &args, &dir, noop_callback()).unwrap();
+        let task = make_task(executable, &args, &dir, NoopSubscriber {}).unwrap();
         let finished_task = task.join().await;
         assert_eq!(finished_task.info.executable, executable);
         assert_eq!(finished_task.info.args, &args);
@@ -508,21 +554,21 @@ mod tests {
     #[tokio::test]
     #[should_panic(expected = "dropped without calling join()")]
     async fn panic_if_dropped_without_join() {
-        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
         task.wait().await;
     }
 
     #[tokio::test]
     #[should_panic(expected = "custom panic")]
     async fn doesnt_double_panic_if_already_panicking() {
-        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
         task.wait().await;
         panic!("custom panic");
     }
 
     #[tokio::test]
     async fn calling_join_twice() {
-        let task = make_task("ls", &[], current_dir().unwrap(), noop_callback()).unwrap();
+        let task = make_task("ls", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
         task.join().await;
         task.join().await;
     }
@@ -531,35 +577,16 @@ mod tests {
     async fn exit_notification_is_after_output() {
         let mut tmp_file = tempfile::NamedTempFile::new().unwrap();
         tmp_file
-            .write_all("line\n".repeat(CHANNEL_CAPACITY).as_bytes())
+            .write_all("line\n".repeat(CHANNEL_CAPACITY - 1).as_bytes())
             .unwrap();
         tmp_file.flush().unwrap();
 
-        #[derive(Debug, PartialEq, Clone)]
-        enum Event {
-            Output,
-            Exit,
-        }
-
         let captured_events = Arc::new(Mutex::new(Vec::new()));
-        let senders = TaskSenders::new();
-        let events = TaskEvents::new(&senders);
+        let sender = TaskSender::new();
+        let events = TaskEvents::new(&sender);
         events
-            .on_output({
-                let captured_events = captured_events.clone();
-                move |_| {
-                    captured_events.lock().unwrap().push(Event::Output);
-                    async { Ok(()) }
-                }
-            })
-            .unwrap();
-        events
-            .on_exit({
-                let captured_events = captured_events.clone();
-                move |_| {
-                    captured_events.lock().unwrap().push(Event::Exit);
-                    async {}
-                }
+            .subscribe(EventsCapturingSubscriber {
+                captured_events: captured_events.clone(),
             })
             .unwrap();
 
@@ -568,10 +595,18 @@ mod tests {
             args: vec![tmp_file.path().as_str().unwrap().into()],
             working_dir: current_dir().unwrap(),
         };
-        let task = Task::new(info, senders, events, OUTPUT_BUFFER_CAPACITY).unwrap();
+        let task = Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY).unwrap();
         task.join().await;
-        let mut expected = vec![Event::Output; CHANNEL_CAPACITY];
+        let mut expected = vec![Event::Output; CHANNEL_CAPACITY - 1];
         expected.push(Event::Exit);
         assert_eq!(*captured_events.lock().unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn has_exited_returns_true_after_exit() {
+        let task = make_task("ls", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
+        task.wait().await;
+        assert!(task.has_exited());
+        task.join().await;
     }
 }
