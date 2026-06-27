@@ -10,6 +10,7 @@ use crate::tasks::{
     TaskEventsSubscriber,
     finished_task::FinishedTask,
     recent_finished_tasks::RecentFinishedTasks,
+    task::TaskReadingGate,
     task_builder::TaskBuilder,
     task_error::TaskError,
     tracker::{PanicHandler, WrappedTaskTracker},
@@ -58,7 +59,7 @@ impl<'a> TaskCreationHandle<'a> {
         self
     }
 
-    pub fn submit(self) -> Result<(), TaskError> {
+    pub fn submit(self) -> Result<TaskReadingGate, TaskError> {
         self.manager.submit(self.builder, self.task_id)
     }
 
@@ -91,18 +92,22 @@ impl TaskManager {
         }
     }
 
-    fn submit(self: &Arc<Self>, builder: TaskBuilder, task_id: TaskId) -> Result<(), TaskError> {
+    fn submit(
+        self: &Arc<Self>,
+        builder: TaskBuilder,
+        task_id: TaskId,
+    ) -> Result<TaskReadingGate, TaskError> {
         let lock = self.completion_coroutines.lock().unwrap();
         let completion_coroutines = lock.as_ref().ok_or(TaskError::AlreadyExited)?;
 
-        let task = builder.start_task()?;
+        let (task, reading_gate) = builder.start_task()?;
         let task = Arc::new(task);
         self.spawn_task_completion(completion_coroutines, task.clone(), task_id);
         self.tasks
             .write()
             .expect("RwLock is poisoned")
             .insert(task_id, task);
-        Ok(())
+        Ok(reading_gate)
     }
 
     pub fn get_task(&self, id: TaskId) -> Option<Arc<Task>> {

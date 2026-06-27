@@ -3,7 +3,7 @@ use tracing::warn;
 use crate::{
     api::{Request, RequestBody, Response, ResponseResult, TaskSendSignalParams, TaskStartParams},
     application::subscriber::Subscriber,
-    tasks::{TaskError, TaskManager},
+    tasks::{TaskError, TaskManager, TaskReadingGate},
     transport::ConnectionWriter,
 };
 
@@ -26,18 +26,26 @@ impl Handler {
     }
 
     pub(in crate::application) async fn handle_request(&self, request: Request) {
-        let response_body = match request.body {
-            RequestBody::TaskStart(params) => self.start_task(params),
-            RequestBody::TaskSendSignal(params) => self.send_signal(params),
+        let (response_body, _task_reading_gate) = match request.body {
+            RequestBody::TaskStart(params) => self
+                .start_task(params)
+                .map(|(response, guard)| (response.into(), Some(guard))),
+            RequestBody::TaskSendSignal(params) => {
+                self.send_signal(params).map(|r| (r.into(), None))
+            }
         }
-        .map_or_else(Into::into, Into::into);
+        .unwrap_or_else(|e| (e.into(), None));
+
         let response = Response::new(Some(request.id), response_body).to_json_string();
         if let Err(e) = self.connection_writer.write(&response).await {
             warn!("Error writing to connection: {e}")
         }
     }
 
-    fn start_task(&self, params: TaskStartParams) -> Result<ResponseResult, TaskError> {
+    fn start_task(
+        &self,
+        params: TaskStartParams,
+    ) -> Result<(ResponseResult, TaskReadingGate), TaskError> {
         let mut task_builder = self.task_manager.create_task(params.executable);
         if let Some(args) = params.args {
             task_builder.args(args);
@@ -52,9 +60,9 @@ impl Handler {
             params.subscribe_to_output,
         );
         task_builder.subscribe(subscriber);
-        task_builder
-            .submit()
-            .map(|_| ResponseResult::StartTaskResult { task_id })
+        let task_reading_gate = task_builder.submit()?;
+        let response_result = ResponseResult::StartTaskResult { task_id };
+        Ok((response_result, task_reading_gate))
     }
 
     fn send_signal(&self, params: TaskSendSignalParams) -> Result<ResponseResult, TaskError> {

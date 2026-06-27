@@ -4,7 +4,7 @@ use anyhow::Result;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
-    sync::{broadcast, watch},
+    sync::{broadcast, oneshot, watch},
     task::AbortHandle,
 };
 use tracing::{Instrument, Span, info, info_span, warn};
@@ -20,6 +20,9 @@ use crate::tasks::{
     task_error::TaskError,
     tracker::{PanicHandler, WrappedTaskTracker},
 };
+
+#[derive(Debug)]
+pub struct TaskReadingGate(oneshot::Sender<()>);
 
 /// Representation of a running child process.
 /// All the output of the child process is captured into [`OutputBuffer`].
@@ -44,7 +47,7 @@ impl Task {
         senders: TaskSender,
         events: TaskEvents,
         output_buffer_capacity: usize,
-    ) -> Result<Self, TaskError> {
+    ) -> Result<(Self, TaskReadingGate), TaskError> {
         let span = info_span!( "task",
                     executable = info.executable,
                     args = ?info.args);
@@ -74,8 +77,11 @@ impl Task {
             child_process_exit_future,
         );
 
+        let (read_guard_tx, read_guard_rx) = oneshot::channel();
+
         Self::spawn_output_reading(
             &internal_tasks,
+            read_guard_rx,
             pty_reader,
             senders.exit_tx.subscribe(),
             senders.events_tx,
@@ -100,7 +106,7 @@ impl Task {
             output_buffer,
         };
 
-        Ok(task)
+        Ok((task, TaskReadingGate(read_guard_tx)))
     }
 
     pub fn info(&self) -> Arc<TaskInfo> {
@@ -206,6 +212,7 @@ impl Task {
 
     fn spawn_output_reading(
         internal_tasks: &WrappedTaskTracker,
+        read_guard_rx: oneshot::Receiver<()>,
         pty_reader: PtyReader,
         mut on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
         events_tx: broadcast::Sender<TaskEvent>,
@@ -215,6 +222,7 @@ impl Task {
         internal_tasks
             .spawn({
                 async move {
+                    let _ = read_guard_rx.await;
                     let mut stdout = BufReader::new(pty_reader);
                     loop {
                         let mut buf = String::new();
@@ -321,7 +329,7 @@ mod tests {
             args: args.iter().map(|&s| String::from(s)).collect(),
             working_dir: working_dir.into(),
         };
-        Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY)
+        Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY).map(|t| t.0)
     }
 
     #[tokio::test]
@@ -616,7 +624,7 @@ mod tests {
             args: vec![tmp_file.path().as_str().unwrap().into()],
             working_dir: current_dir().unwrap(),
         };
-        let task = Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY).unwrap();
+        let (task, _) = Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY).unwrap();
         task.join().await;
         let mut expected = vec![Event::Output; CHANNEL_CAPACITY - 1];
         expected.push(Event::Exit);
@@ -629,5 +637,37 @@ mod tests {
         task.wait().await;
         assert!(task.has_exited());
         task.join().await;
+    }
+
+    #[tokio::test]
+    async fn task_reading_gate_gates_events_sending() {
+        let subscriber = CapturingSubscriber::default();
+        let captured_output = subscriber.captured_output.clone();
+        let captured_exit_codes = subscriber.captured_exit_codes.clone();
+
+        let sender = TaskSender::new();
+        let events = TaskEvents::new(&sender);
+        events.subscribe(subscriber).unwrap();
+        let info = TaskInfo {
+            executable: "echo".into(),
+            args: vec!["hello".into()],
+            working_dir: current_dir().unwrap(),
+        };
+        let (task, gate) = Task::new(info, sender, events, OUTPUT_BUFFER_CAPACITY).unwrap();
+        let handle = tokio::spawn(async move {
+            task.join().await;
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!handle.is_finished());
+        assert!(captured_output.lock().unwrap().is_empty());
+        assert!(captured_exit_codes.lock().unwrap().is_empty());
+
+        drop(gate);
+        handle.await.unwrap();
+        assert_eq!(captured_output.lock().unwrap().len(), 1);
+        assert_eq!(*captured_output.lock().unwrap()[0], "hello\r\n");
+        assert_eq!(captured_exit_codes.lock().unwrap().len(), 1);
+        assert_eq!(captured_exit_codes.lock().unwrap()[0].code().unwrap(), 0);
     }
 }
