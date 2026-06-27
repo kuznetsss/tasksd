@@ -292,7 +292,7 @@ impl Drop for Task {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use rustix::path::Arg;
+    use rustix::{path::Arg, process::Signal};
 
     use crate::tasks::{
         sender::CHANNEL_CAPACITY,
@@ -430,6 +430,26 @@ mod tests {
         let err = task.subscribe(NoopSubscriber {}).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
         task.join().await;
+    }
+
+    #[tokio::test]
+    async fn subscribe_when_task_is_running_subscribes() {
+        let task = make_task("cat", &[], current_dir().unwrap(), NoopSubscriber {}).unwrap();
+        tokio::task::yield_now().await;
+
+        let subscriber = CapturingSubscriber::default();
+        let captured_exit_codes = subscriber.captured_exit_codes.clone();
+        task.subscribe(subscriber).unwrap();
+
+        task.send_signal(Signal::KILL).unwrap();
+        task.join().await;
+
+        let captured_exit_codes = captured_exit_codes.lock().unwrap();
+        assert_eq!(captured_exit_codes.len(), 1);
+        assert_eq!(
+            captured_exit_codes[0].signal().unwrap(),
+            Signal::KILL.as_raw()
+        );
     }
 
     #[tokio::test]

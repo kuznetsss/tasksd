@@ -56,6 +56,7 @@ API is documented in [docs/API.md](docs/API.md).
 ## Roadmap
 
 `0.2.0`:
+- [ ] Encode output lines with base64
 - [ ] Add line number to output notification
 - [ ] Add notifications about missed output
 - [ ] Query task output buffer for line range

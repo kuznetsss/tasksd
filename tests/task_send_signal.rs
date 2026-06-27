@@ -39,3 +39,17 @@ async fn send_signal_to_non_existing_task() {
 
     ctx.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_signal_invalid_signal() {
+    let (ctx, mut client) = running_app().await;
+
+    client.send_signal(123, 9999999).await.unwrap();
+
+    let response: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, Some(client.last_id()));
+    assert_eq!(response.error.code, -32602);
+    assert!(response.error.data.unwrap().contains("signal"));
+
+    ctx.shutdown().await;
+}
