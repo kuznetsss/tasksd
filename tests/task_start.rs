@@ -4,9 +4,13 @@ use std::{collections::HashMap, io::Write};
 
 use rustix::path::Arg;
 use serde::Deserialize;
+use serde_json::json;
 
 use crate::common::{
-    api::{ErrorResponse, TaskExitNotification, TaskOutputNotification, TaskStartResponse},
+    api::{
+        ErrorResponse, TaskExitNotification, TaskOutputNotification, TaskStartResponse,
+        TaskStartResult,
+    },
     running_app,
 };
 
@@ -73,6 +77,111 @@ async fn start_task_output_exit_notifications() {
     assert_eq!(exit.params.task_id, task_id);
     assert_eq!(exit.params.exit_code, Some(0));
     assert_eq!(exit.params.signal, None);
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_task_string_request_id() {
+    let (ctx, mut client) = running_app().await;
+
+    let id = "some_id";
+    let request = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "task.start",
+            "params": {
+                "executable": "echo",
+                "args": ["hi"],
+                "subscribe_to_output": true
+            }
+    });
+    client.send_json(&request).await.unwrap();
+
+    #[derive(Deserialize)]
+    struct TaskStartResponseStringId {
+        pub id: String,
+        pub result: TaskStartResult,
+    }
+
+    let response: TaskStartResponseStringId = client.read_struct().await.unwrap();
+    assert_eq!(response.id, id);
+    let task_id = response.result.task_id;
+
+    let line: TaskOutputNotification = client.read_struct().await.unwrap();
+    assert_eq!(line.params.task_id, task_id);
+    assert_eq!(line.params.line, "hi\r\n");
+
+    let exit: TaskExitNotification = client.read_struct().await.unwrap();
+    assert_eq!(exit.params.task_id, task_id);
+    assert_eq!(exit.params.exit_code, Some(0));
+    assert_eq!(exit.params.signal, None);
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_task_custom_working_dir() {
+    let (ctx, mut client) = running_app().await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = std::fs::canonicalize(tmp.path())
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let id = 123;
+    let request = json!({
+            "jsonrpc": "2.0",
+            "id": 123,
+            "method": "task.start",
+            "params": {
+                "executable": "pwd",
+                "args": [],
+                "working_dir": dir,
+                "subscribe_to_output": true
+            }
+    });
+    client.send_json(&request).await.unwrap();
+
+    let response: TaskStartResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, id);
+    let task_id = response.result.task_id;
+
+    let line: TaskOutputNotification = client.read_struct().await.unwrap();
+    assert_eq!(line.params.task_id, task_id);
+    assert_eq!(line.params.line, format!("{dir}\r\n"));
+
+    let exit: TaskExitNotification = client.read_struct().await.unwrap();
+    assert_eq!(exit.params.task_id, task_id);
+    assert_eq!(exit.params.exit_code, Some(0));
+    assert_eq!(exit.params.signal, None);
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_task_invalid_working_dir() {
+    let (ctx, mut client) = running_app().await;
+
+    let id = 123;
+    let request = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "task.start",
+            "params": {
+                "executable": "ls",
+                "args": [],
+                "working_dir": "/invalid/working/dir",
+                "subscribe_to_output": true
+            }
+    });
+    client.send_json(&request).await.unwrap();
+
+    let response: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id.unwrap(), id);
+    assert_eq!(response.error.code, 3);
 
     ctx.shutdown().await;
 }

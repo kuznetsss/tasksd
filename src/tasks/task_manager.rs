@@ -180,7 +180,7 @@ mod tests {
     };
 
     use futures::task::noop_waker;
-    use rustix::process::Signal;
+    use rustix::{path::Arg, process::Signal};
 
     use crate::tasks::test_subscribers::CapturingSubscriber;
 
@@ -239,6 +239,28 @@ mod tests {
         tm.join().await;
         let err = tm.create_task("ls").submit().unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
+    }
+
+    #[tokio::test]
+    async fn create_task_custom_working_dir() {
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let dir = std::fs::canonicalize(tmp_dir.path())
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let subscriber = CapturingSubscriber::default();
+        let captured_output = subscriber.captured_output.clone();
+        let mut builder = tm.create_task("pwd");
+        builder.working_dir(&dir).subscribe(subscriber);
+        builder.submit().unwrap();
+
+        tm.join().await;
+        let captured_output = captured_output.lock().unwrap();
+        assert_eq!(captured_output.len(), 1);
+        assert_eq!(*captured_output[0], format!("{dir}\r\n"));
     }
 
     #[tokio::test]

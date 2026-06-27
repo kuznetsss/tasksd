@@ -74,6 +74,27 @@ async fn invalid_json() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_jsonrpc_version() {
+    let (ctx, mut client) = running_app().await;
+
+    let invalid_request = json!({ // id is missing
+        "jsonrpc":"1.0",
+        "method":"task.start",
+        "id": 123,
+        "params":{
+            "executable": "ls"
+        }
+    });
+    client.send_json(&invalid_request).await.unwrap();
+    let response: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, None);
+    assert_eq!(response.error.code, -32600);
+    assert!(response.error.data.unwrap().contains("jsonrpc"));
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn invalid_request() {
     let (ctx, mut client) = running_app().await;
 
@@ -88,6 +109,7 @@ async fn invalid_request() {
     let response: ErrorResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, None);
     assert_eq!(response.error.code, -32600);
+    assert!(response.error.data.unwrap().contains("id"));
 
     ctx.shutdown().await;
 }

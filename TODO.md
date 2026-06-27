@@ -123,7 +123,16 @@
     - [x] Fix tasks::task::tests::exit_notification_is_after_output
             captured_events could be 15 output + 1 exit or 16 output + 1 exit
 - [x] Exclude tests from code coverage
-- [ ] Check missing code coverage
+- [x] Check missing code coverage
+    - [x] Integration: start task with id as a string
+    - [x] Integration: start task in a custom dir
+    - [x] Integration: invalid signal number
+    - [-] Integration: reproducing errors invalid directory
+    - [-] Unit: setup_logger
+    - [x] Unit: task.rs subscribe after task started
+    - [x] Unit: task manager working_dir
+    - [-] Unit: background_writer stop
+    - [x] Exclude main
 - [ ] Remove anyhow where possible
 - [ ] Use json!() macro in tests instead of plain text
 - [ ] Verify shutdown and cancellation paths

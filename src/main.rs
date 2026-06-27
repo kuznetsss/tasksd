@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+#![cfg_attr(coverage_nightly, coverage(off))]
 use std::sync::Arc;
 
 use tasksd::application::{Application, CliOptions, setup_logger};

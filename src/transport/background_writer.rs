@@ -71,12 +71,6 @@ impl BackgroundWriter {
         self.write_handle.clone()
     }
 
-    /// Stops the writer as soon as possible
-    pub(in crate::transport) async fn stop(self) {
-        self.cancellation_token.cancel();
-        self.join_handle.await.unwrap();
-    }
-
     /// Writes everything queued and then stops
     /// NOTE: this method may hung if there are other senders
     async fn finish(self) {
