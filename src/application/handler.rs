@@ -26,7 +26,7 @@ impl Handler {
     }
 
     pub(in crate::application) async fn handle_request(&self, request: Request) {
-        let (response_body, _task_reading_gate) = match request.body {
+        let (response_body, task_reading_gate) = match request.body {
             RequestBody::TaskStart(params) => self
                 .start_task(params)
                 .map(|(response, guard)| (response.into(), Some(guard))),
@@ -40,6 +40,9 @@ impl Handler {
         if let Err(e) = self.connection_writer.write(&response).await {
             warn!("Error writing to connection: {e}")
         }
+        // Dropping after sending response to keep the order of messages:
+        // response then task events
+        drop(task_reading_gate);
     }
 
     fn start_task(

@@ -133,7 +133,7 @@
     - [x] Unit: task manager working_dir
     - [-] Unit: background_writer stop
     - [x] Exclude main
-- [ ] Task::new() should return an output reading gate
+- [x] Task::new() should return an output reading gate
       This will help to prevent the case that task output is received before task start response
 - [ ] Remove anyhow where possible
 - [ ] Use json!() macro in tests instead of plain text

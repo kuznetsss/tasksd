@@ -21,7 +21,10 @@ use crate::tasks::{
     tracker::{PanicHandler, WrappedTaskTracker},
 };
 
+/// Gate of task event reading.
+/// Dropping gate allows task to begin reading from PTY.
 #[derive(Debug)]
+#[must_use]
 pub struct TaskReadingGate(oneshot::Sender<()>);
 
 /// Representation of a running child process.
