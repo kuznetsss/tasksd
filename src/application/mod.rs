@@ -24,6 +24,7 @@ use session::Session;
 #[derive(Debug)]
 pub struct Application {
     root_cancellation: CancellationToken,
+    accepting_cancellation: CancellationToken,
     server: UnixSocketServer,
     task_manager: Arc<TaskManager>,
     shutdown_complete: AtomicBool,
@@ -31,7 +32,7 @@ pub struct Application {
 }
 
 impl Application {
-    pub fn new(root_cancellation: CancellationToken, cli_args: CliOptions) -> Result<Self> {
+    pub fn new(cli_args: CliOptions) -> Result<Self> {
         info!(
             "Opening unix socket: {}",
             &cli_args
@@ -40,8 +41,11 @@ impl Application {
                 .unwrap_or("<not displayable>")
         );
         let server = UnixSocketServer::new_unix_socket(&cli_args.unix_socket_path)?;
+        let root_cancellation = CancellationToken::new();
+        let accepting_cancellation = root_cancellation.child_token();
         Ok(Self {
             root_cancellation,
+            accepting_cancellation,
             server,
             task_manager: TaskManager::new(cli_args.process_buffer_size),
             shutdown_complete: AtomicBool::new(false),
@@ -53,7 +57,7 @@ impl Application {
         info!("Listening for incoming connection");
         let mut client_id = 0_usize;
         while let Some(connection) = self
-            .root_cancellation
+            .accepting_cancellation
             .run_until_cancelled(self.server.wait_for_connection())
             .await
         {
@@ -95,6 +99,8 @@ impl Application {
         {
             return;
         }
+
+        self.accepting_cancellation.cancel();
 
         info!("Shutdown, sending SIGTERM to all running tasks");
 

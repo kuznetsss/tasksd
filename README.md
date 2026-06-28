@@ -56,6 +56,7 @@ API is documented in [docs/API.md](docs/API.md).
 ## Roadmap
 
 `0.2.0`:
+- [ ] transport::Connection refactoring: Connection should have it's internal cancellation token and method stop()
 - [ ] Encode output lines with base64
 - [ ] Add line number to output notification
 - [ ] Add notifications about missed output
