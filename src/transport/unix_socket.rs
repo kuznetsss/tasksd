@@ -17,8 +17,7 @@ pub struct UnixSocketServerImpl {
 }
 
 impl UnixSocketServerImpl {
-    pub fn new(path: &Path) -> Result<Self, TransportError> {
-        // TODO: if file already exist provide more verbose error or add some logic
+    pub fn new(path: &Path) -> Result<Self> {
         Ok(Self {
             listener: UnixListener::bind(path)
                 .map_err(|e| TransportError::UnixSocketError(e, path.to_path_buf()))?,

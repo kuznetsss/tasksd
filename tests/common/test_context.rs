@@ -6,7 +6,6 @@ use std::{
 use anyhow::Result;
 use tasksd::application::{Application, CliOptions};
 use tempfile::TempDir;
-use tokio_util::sync::CancellationToken;
 
 use crate::common::Client;
 
@@ -67,13 +66,12 @@ impl TestContextBuilder {
     pub fn build(mut self) -> Result<TestContext> {
         let tmp_dir = tempfile::tempdir().unwrap();
         let mut socket_path = tmp_dir.path().join("t.sock");
-        let root_cancellation = CancellationToken::new();
         if self.cli_args.unix_socket_path == PathBuf::default() {
             self.cli_args.unix_socket_path = socket_path.clone();
         } else {
             socket_path = self.cli_args.unix_socket_path.clone();
         }
-        let app = Application::new(root_cancellation.clone(), self.cli_args)?;
+        let app = Application::new(self.cli_args)?;
         Ok(TestContext {
             _tmp_dir: tmp_dir,
             socket_path,

@@ -1,5 +1,6 @@
 use std::{io::IsTerminal, path::PathBuf};
 
+use anyhow::Context;
 use tracing::{Subscriber, level_filters::LevelFilter};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -8,10 +9,7 @@ pub struct Guard {
     inner: Option<tracing_appender::non_blocking::WorkerGuard>,
 }
 
-pub fn setup_logger(
-    log_file: Option<&PathBuf>,
-    log_to_console: bool,
-) -> Result<Guard, std::io::Error> {
+pub fn setup_logger(log_file: Option<&PathBuf>, log_to_console: bool) -> anyhow::Result<Guard> {
     let (subscriber, guard) = build_subscriber(log_file, log_to_console)?;
     subscriber.init();
     Ok(guard)
@@ -20,16 +18,17 @@ pub fn setup_logger(
 fn build_subscriber(
     log_file: Option<&PathBuf>,
     log_to_console: bool,
-) -> Result<(impl Subscriber, Guard), std::io::Error> {
+) -> anyhow::Result<(impl Subscriber, Guard)> {
     let mut guard = Guard::default();
     let registry = tracing_subscriber::registry();
 
     let file_layer = log_file
-        .map(|log_file| -> Result<_, std::io::Error> {
+        .map(|log_file| -> anyhow::Result<_> {
             let file = std::fs::OpenOptions::new()
                 .append(true)
                 .create(true)
-                .open(log_file)?;
+                .open(log_file)
+                .context(format!("opening log file: {log_file:?}"))?;
             let (appender, g) = tracing_appender::non_blocking(file);
             guard.inner = Some(g);
             Ok(tracing_subscriber::fmt::layer()
@@ -75,6 +74,7 @@ mod tests {
         let err = build_subscriber(Some(&path), false);
         assert!(err.is_err());
         let err = unsafe { err.unwrap_err_unchecked() };
+        let err = err.downcast::<std::io::Error>().unwrap();
         assert_matches!(err.kind(), std::io::ErrorKind::NotFound);
     }
 

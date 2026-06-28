@@ -6,7 +6,6 @@ use tasksd::application::{Application, CliOptions, setup_logger};
 
 use clap::Parser;
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 fn main() -> anyhow::Result<()> {
@@ -24,27 +23,33 @@ fn main() -> anyhow::Result<()> {
         .build()
         .unwrap()
         .block_on(async move {
-            let root_cancellation = CancellationToken::new();
-            let application = Arc::new(Application::new(root_cancellation.clone(), cli_args)?);
-            let mut jobs = JoinSet::new();
-            jobs.spawn(ctrl_c_handler(root_cancellation.clone()));
-            jobs.spawn({
+            let application = Arc::new(Application::new(cli_args)?);
+            let app_run = tokio::spawn({
                 let application = application.clone();
-                async move { application.run().await }
+                async move {
+                    application.run().await;
+                }
             });
-            jobs.join_next().await;
-            application.shutdown().await;
+            ctrl_c_handler(application.clone()).await;
+            app_run.abort();
             info!("Exit");
             Ok(())
         })
 }
 
-async fn ctrl_c_handler(root_cancellation: CancellationToken) {
+async fn ctrl_c_handler(application: Arc<Application>) {
     tokio::signal::ctrl_c()
         .await
         .expect("Failed to listen for Ctrl-C");
     info!("Got Ctrl-C, shutting down");
-    root_cancellation.cancel();
-    tokio::signal::ctrl_c().await.unwrap();
-    info!("Force exit on the second Ctrl-C");
+
+    let mut jobs = JoinSet::new();
+    jobs.spawn(async move {
+        application.shutdown().await;
+    });
+    jobs.spawn(async {
+        tokio::signal::ctrl_c().await.unwrap();
+        info!("Force exit on the second Ctrl-C");
+    });
+    jobs.join_next().await;
 }
