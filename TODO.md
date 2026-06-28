@@ -138,5 +138,5 @@
 - [x] Remove anyhow where possible
 - [x] Use json!() macro in tests instead of plain text
 - [x] Verify shutdown and cancellation paths
-- [ ] Fix TODOs comments
+- [x] Fix TODOs comments
 - [ ] Documentation
