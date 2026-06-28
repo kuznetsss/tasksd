@@ -1,0 +1,210 @@
+name: Release
+
+# Triggered either by pushing a semver tag (e.g. `0.1.0`) or manually via the
+# "Run workflow" button, where the version is supplied as an input.
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (semver, e.g. 0.1.0)"
+        required: true
+        type: string
+
+# Release builds must be reproducible from a clean tree: never reuse a cache.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+# Cancel an in-flight release for the same ref if a newer one starts.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # 1. Resolve and validate the version up front so a bad tag fails fast,
+  #    before we spend minutes building binaries.
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: ${version}"
+
+      - name: Validate semver
+        run: |
+          version="${{ steps.resolve.outputs.version }}"
+          # MAJOR.MINOR.PATCH with optional -prerelease and +build metadata.
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          if ! echo "$version" | grep -Eq "$semver"; then
+            echo "::error::'$version' is not valid semver (expected e.g. 0.1.0)"
+            exit 1
+          fi
+
+      - name: Version must match Cargo.toml
+        run: |
+          version="${{ steps.resolve.outputs.version }}"
+          crate=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          if [ "$version" != "$crate" ]; then
+            echo "::error::Tag version '$version' != Cargo.toml version '$crate'"
+            exit 1
+          fi
+
+  # 2. Tests gate the release. If they fail we never publish anything.
+  test:
+    name: Test (${{ matrix.os }})
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --locked --release
+
+  # 3. Audit dependencies for known vulnerabilities. A vulnerable dependency
+  #    blocks the release, just like a failing test.
+  audit:
+    name: Audit
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit
+
+  # 4. Build fully static Linux binaries. musl targets are statically linked by
+  #    default (`+crt-static`) and link a self-contained libc, so the result
+  #    runs on any kernel regardless of the host's glibc version. Each arch is
+  #    built on its native runner — no cross toolchain, no QEMU.
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [validate, test, audit]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write # keyless signing via Sigstore OIDC
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Verify the binary is fully static
+        run: |
+          bin="target/${{ matrix.target }}/release/tasksd"
+          file "$bin"
+          if file "$bin" | grep -q "dynamically linked"; then
+            echo "::error::binary is not statically linked"
+            exit 1
+          fi
+
+      - name: Package
+        id: package
+        run: |
+          version="${{ needs.validate.outputs.version }}"
+          target="${{ matrix.target }}"
+          name="tasksd-${version}-${target}"
+          mkdir -p "dist/${name}"
+          cp "target/${target}/release/tasksd" "dist/${name}/"
+          cp README.md LICENSE* "dist/${name}/" 2>/dev/null || true
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          ( cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256" )
+          echo "archive=dist/${name}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign archive (keyless)
+        run: |
+          archive="${{ steps.package.outputs.archive }}"
+          # Keyless signing: identity is the workflow's OIDC token, the
+          # signature is logged to the public Rekor transparency log and the
+          # verifiable bundle is published alongside the artifact. No secrets.
+          cosign sign-blob --yes \
+            --bundle "${archive}.cosign.bundle" \
+            "${archive}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/*.cosign.bundle
+          if-no-files-found: error
+          retention-days: 7
+
+  # 5. Generate the changelog and publish a DRAFT release. Draft means a human
+  #    reviews the notes and assets before anything goes public.
+  release:
+    name: Draft release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and tag
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # git-cliff needs full history + tags
+
+      - name: Generate changelog
+        uses: orhun/git-cliff-action@v4
+        id: cliff
+        with:
+          config: cliff.toml
+          args: --latest --strip header --tag ${{ needs.validate.outputs.version }}
+        env:
+          OUTPUT: CHANGELOG.md
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Aggregate checksums
+        run: cat dist/*.sha256 > dist/SHA256SUMS
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ needs.validate.outputs.version }}
+          name: tasksd ${{ needs.validate.outputs.version }}
+          body: ${{ steps.cliff.outputs.content }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/*.cosign.bundle
+            dist/SHA256SUMS
