@@ -1,7 +1,11 @@
 use std::{env::current_dir, path::PathBuf};
 
 use crate::tasks::{
-    TaskEventsSubscriber, events::TaskEvents, info::TaskInfo, sender::TaskSender, task::Task,
+    TaskEventsSubscriber,
+    events::TaskEvents,
+    info::TaskInfo,
+    sender::TaskSender,
+    task::{Task, TaskReadingGate},
     task_error::TaskError,
 };
 
@@ -57,7 +61,7 @@ impl TaskBuilder {
         self
     }
 
-    pub fn start_task(self) -> Result<Task, TaskError> {
+    pub fn start_task(self) -> Result<(Task, TaskReadingGate), TaskError> {
         let working_dir = self
             .working_dir
             .unwrap_or(current_dir().map_err(|_| TaskError::InvalidDirectory)?);
@@ -176,7 +180,7 @@ mod tests {
 
     #[tokio::test]
     async fn output_buffer_capacity_passed_to_task() {
-        let task = TaskBuilder::new("ls", OUTPUT_BUFFER_CAPACITY)
+        let (task, _) = TaskBuilder::new("ls", OUTPUT_BUFFER_CAPACITY)
             .start_task()
             .unwrap();
         assert_eq!(task.output_buffer().capacity(), OUTPUT_BUFFER_CAPACITY);

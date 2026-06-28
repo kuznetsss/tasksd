@@ -16,5 +16,6 @@ mod tracker;
 mod test_subscribers;
 
 pub use events::{TaskEventsSubscriber, TaskSubscriberError};
+pub use task::TaskReadingGate;
 pub use task_error::TaskError;
 pub use task_manager::{TaskId, TaskManager};

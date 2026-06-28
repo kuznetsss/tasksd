@@ -10,6 +10,7 @@ use crate::tasks::{
     TaskEventsSubscriber,
     finished_task::FinishedTask,
     recent_finished_tasks::RecentFinishedTasks,
+    task::TaskReadingGate,
     task_builder::TaskBuilder,
     task_error::TaskError,
     tracker::{PanicHandler, WrappedTaskTracker},
@@ -58,7 +59,7 @@ impl<'a> TaskCreationHandle<'a> {
         self
     }
 
-    pub fn submit(self) -> Result<(), TaskError> {
+    pub fn submit(self) -> Result<TaskReadingGate, TaskError> {
         self.manager.submit(self.builder, self.task_id)
     }
 
@@ -91,18 +92,22 @@ impl TaskManager {
         }
     }
 
-    fn submit(self: &Arc<Self>, builder: TaskBuilder, task_id: TaskId) -> Result<(), TaskError> {
+    fn submit(
+        self: &Arc<Self>,
+        builder: TaskBuilder,
+        task_id: TaskId,
+    ) -> Result<TaskReadingGate, TaskError> {
         let lock = self.completion_coroutines.lock().unwrap();
         let completion_coroutines = lock.as_ref().ok_or(TaskError::AlreadyExited)?;
 
-        let task = builder.start_task()?;
+        let (task, reading_gate) = builder.start_task()?;
         let task = Arc::new(task);
         self.spawn_task_completion(completion_coroutines, task.clone(), task_id);
         self.tasks
             .write()
             .expect("RwLock is poisoned")
             .insert(task_id, task);
-        Ok(())
+        Ok(reading_gate)
     }
 
     pub fn get_task(&self, id: TaskId) -> Option<Arc<Task>> {
@@ -207,7 +212,7 @@ mod tests {
                 captured_output: captured_output.clone(),
                 ..Default::default()
             });
-        builder.submit().unwrap();
+        let _ = builder.submit().unwrap();
         tm.join().await;
         let captured_output = captured_output.lock().unwrap();
         assert_eq!(captured_output.len(), 2);
@@ -226,7 +231,7 @@ mod tests {
                 captured_exit_codes: captured_exit_codes.clone(),
                 ..Default::default()
             });
-        builder.submit().unwrap();
+        let _ = builder.submit().unwrap();
         tm.join().await;
         let captured_output = captured_exit_codes.lock().unwrap();
         assert_eq!(captured_output.len(), 1);
@@ -255,7 +260,7 @@ mod tests {
         let captured_output = subscriber.captured_output.clone();
         let mut builder = tm.create_task("pwd");
         builder.working_dir(&dir).subscribe(subscriber);
-        builder.submit().unwrap();
+        let _ = builder.submit().unwrap();
 
         tm.join().await;
         let captured_output = captured_output.lock().unwrap();
@@ -270,7 +275,7 @@ mod tests {
         for _ in 0..3 {
             let builder = tm.create_task("ls");
             let id = builder.task_id();
-            builder.submit().unwrap();
+            let _ = builder.submit().unwrap();
             assert!(task_ids.insert(id));
         }
         tokio::time::timeout(Duration::from_secs(1), tm.join())
@@ -287,7 +292,7 @@ mod tests {
         let executable = "cat";
         let builder = tm.create_task(executable);
         let task_id = builder.task_id();
-        builder.submit().unwrap();
+        let _ = builder.submit().unwrap();
 
         let task = tm.get_task(task_id).unwrap();
         assert!(tm.get_finished_task(task_id).is_none());
@@ -315,7 +320,7 @@ mod tests {
     #[tokio::test]
     async fn join_called_multiple_times_is_ok() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        tm.create_task("ls").submit().unwrap();
+        let _ = tm.create_task("ls").submit().unwrap();
         tm.join().await;
 
         let waker = noop_waker();
@@ -342,7 +347,7 @@ mod tests {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let builder = tm.create_task("cat");
         let task_id = builder.task_id();
-        builder.submit().unwrap();
+        let _ = builder.submit().unwrap();
         let task = tm.get_task(task_id).unwrap();
         assert_eq!(task.output_buffer().capacity(), TASK_OUTPUT_BUFFER_CAPACITY);
         task.send_signal(Signal::TERM).unwrap();
