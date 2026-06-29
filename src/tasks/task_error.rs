@@ -8,6 +8,7 @@ pub enum TaskError {
     WriteError(String),
     AlreadyExited,
     SendSignalError(String),
+    NotFound,
 }
 
 impl TaskError {
@@ -33,15 +34,16 @@ impl Display for TaskError {
         match self {
             TaskError::InvalidDirectory => write!(
                 f,
-                "Current working directory doesn't exist or there is not enough permissions to use it"
+                "current working directory doesn't exist or there is not enough permissions to use it"
             ),
-            TaskError::PtyCreationError(details) => write!(f, "Error creating pty: {details}"),
+            TaskError::PtyCreationError(details) => write!(f, "error creating pty: {details}"),
             TaskError::StartingChildProcessError(details) => {
-                write!(f, "Error starting child process: {details}")
+                write!(f, "error starting child process: {details}")
             }
-            TaskError::WriteError(details) => write!(f, "Error writing message: {details}"),
-            TaskError::AlreadyExited => write!(f, "Error: the task has already finished"),
-            TaskError::SendSignalError(details) => write!(f, "Error sending signal: {details}"),
+            TaskError::WriteError(details) => write!(f, "error writing message: {details}"),
+            TaskError::AlreadyExited => write!(f, "error: the task has already exited"),
+            TaskError::SendSignalError(details) => write!(f, "error sending signal: {details}"),
+            TaskError::NotFound => write!(f, "error: the task not found"),
         }
     }
 }

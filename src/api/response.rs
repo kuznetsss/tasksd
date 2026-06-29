@@ -38,13 +38,28 @@ pub enum ResponseBody {
     Error(ResponseError),
 }
 
-impl ResponseBody {
-    const INVALID_DIRECTORY_CODE: i32 = 1;
-    const PTY_CREATION_ERROR_CODE: i32 = 2;
-    const STARTING_CHILD_PROCESS_ERROR_CODE: i32 = 3;
-    const WRITE_ERROR_CODE: i32 = 4;
-    const ALREADY_EXITED_CODE: i32 = 5;
-    const SEND_SIGNAL_ERROR_CODE: i32 = 6;
+#[derive(Debug, Serialize, PartialEq, Eq, Clone, Copy)]
+pub enum ErrorCode {
+    ParseError = -32700,
+    InvalidRequest = -32600,
+    MethodNotFound = -32601,
+    InvalidParams = -32602,
+    InternalError = -32603,
+
+    InvalidDirectory = 1,
+    PtyCreationError = 2,
+    StartingChildProcessError = 3,
+    WriteError = 4,
+    AlreadyExited = 5,
+    SendSignalError = 6,
+    NotFoundError = 7,
+}
+
+fn error_code_serializer<S>(code: &ErrorCode, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_i32(*code as i32)
 }
 
 impl From<ResponseResult> for ResponseBody {
@@ -57,34 +72,39 @@ impl From<TaskError> for ResponseBody {
     fn from(value: TaskError) -> Self {
         match value {
             TaskError::InvalidDirectory => ResponseBody::Error(ResponseError {
-                code: Self::INVALID_DIRECTORY_CODE,
+                code: ErrorCode::InvalidDirectory,
                 message: "Invalid working directory",
                 data: None,
             }),
             TaskError::PtyCreationError(e) => ResponseBody::Error(ResponseError {
-                code: Self::PTY_CREATION_ERROR_CODE,
+                code: ErrorCode::PtyCreationError,
                 message: "Error creating a new pty",
                 data: Some(e),
             }),
             TaskError::StartingChildProcessError(e) => ResponseBody::Error(ResponseError {
-                code: Self::STARTING_CHILD_PROCESS_ERROR_CODE,
+                code: ErrorCode::StartingChildProcessError,
                 message: "Error starting child process",
                 data: Some(e),
             }),
             TaskError::WriteError(e) => ResponseBody::Error(ResponseError {
-                code: Self::WRITE_ERROR_CODE,
+                code: ErrorCode::WriteError,
                 message: "Error writing to process",
                 data: Some(e),
             }),
             TaskError::AlreadyExited => ResponseBody::Error(ResponseError {
-                code: Self::ALREADY_EXITED_CODE,
+                code: ErrorCode::AlreadyExited,
                 message: "The task has already exited",
                 data: None,
             }),
             TaskError::SendSignalError(e) => ResponseBody::Error(ResponseError {
-                code: Self::SEND_SIGNAL_ERROR_CODE,
+                code: ErrorCode::SendSignalError,
                 message: "Error sending signal to the task",
                 data: Some(e),
+            }),
+            TaskError::NotFound => ResponseBody::Error(ResponseError {
+                code: ErrorCode::NotFoundError,
+                message: "Task not found",
+                data: None,
             }),
         }
     }
@@ -99,21 +119,16 @@ pub enum ResponseResult {
 
 #[derive(Debug, Serialize)]
 pub struct ResponseError {
-    pub code: i32,
+    #[serde(serialize_with = "error_code_serializer")]
+    pub code: ErrorCode,
     pub message: &'static str,
     pub data: Option<String>,
 }
 
 impl ResponseError {
-    pub const PARSE_ERROR_CODE: i32 = -32700;
-    pub const INVALID_REQUEST_CODE: i32 = -32600;
-    pub const METHOD_NOT_FOUND_CODE: i32 = -32601;
-    pub const INVALID_PARAMS_CODE: i32 = -32602;
-    pub const INTERNAL_ERROR_CODE: i32 = -32603;
-
     pub fn parse_error(error: &impl fmt::Display) -> Self {
         Self {
-            code: Self::PARSE_ERROR_CODE,
+            code: ErrorCode::ParseError,
             message: "Invalid JSON",
             data: Some(format!("Error parsing request: {error}")),
         }
@@ -121,7 +136,7 @@ impl ResponseError {
 
     pub fn invalid_request(request: &str, reason: &impl fmt::Display) -> Self {
         Self {
-            code: Self::INVALID_REQUEST_CODE,
+            code: ErrorCode::InvalidRequest,
             message: "Invalid Request",
             data: Some(format!("Request '{request}' is invalid: {reason}")),
         }
@@ -129,7 +144,7 @@ impl ResponseError {
 
     pub fn method_not_found(method: &str) -> Self {
         Self {
-            code: Self::METHOD_NOT_FOUND_CODE,
+            code: ErrorCode::MethodNotFound,
             message: "Method not found",
             data: Some(format!("No such method: '{method}'")),
         }
@@ -137,7 +152,7 @@ impl ResponseError {
 
     pub fn invalid_params(method: &str, error: &impl fmt::Display) -> Self {
         Self {
-            code: Self::INVALID_PARAMS_CODE,
+            code: ErrorCode::InvalidParams,
             message: "Invalid params",
             data: Some(format!("Invalid params for method '{method}': {error}")),
         }
@@ -145,7 +160,7 @@ impl ResponseError {
 
     pub fn internal_error(details: &impl fmt::Display) -> Self {
         Self {
-            code: Self::INTERNAL_ERROR_CODE,
+            code: ErrorCode::InternalError,
             message: "Internal error",
             data: Some(details.to_string()),
         }

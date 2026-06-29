@@ -35,6 +35,28 @@ async fn send_signal_to_non_existing_task() {
 
     let response: ErrorResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, Some(client.last_id()));
+    assert_eq!(response.error.code, 7);
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_signal_to_already_exited_task() {
+    let (ctx, mut client) = running_app().await;
+
+    client.task_start("ls", &[], false).await.unwrap();
+    let response: TaskStartResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+    let task_id = response.result.task_id;
+
+    let exit_notification: TaskExitNotification = client.read_struct().await.unwrap();
+    assert_eq!(exit_notification.params.task_id, task_id);
+    assert_eq!(exit_notification.params.exit_code, Some(0));
+    assert_eq!(exit_notification.params.signal, None);
+
+    client.send_signal(task_id, 9).await.unwrap();
+    let response: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id.unwrap(), client.last_id());
     assert_eq!(response.error.code, 5);
 
     ctx.shutdown().await;

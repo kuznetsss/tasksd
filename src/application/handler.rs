@@ -69,12 +69,17 @@ impl Handler {
     }
 
     fn send_signal(&self, params: TaskSendSignalParams) -> Result<ResponseResult, TaskError> {
-        let task = match self.task_manager.get_task(params.task_id) {
-            Some(t) => t,
-            // TODO: return not found here
-            None => return Err(TaskError::AlreadyExited),
-        };
-        task.send_signal(params.signal)
-            .map(|_| ResponseResult::SendSignalResult {})
+        if let Some(task) = self.task_manager.get_task(params.task_id) {
+            task.send_signal(params.signal)
+                .map(|_| ResponseResult::SendSignalResult {})
+        } else if self
+            .task_manager
+            .get_finished_task(params.task_id)
+            .is_some()
+        {
+            Err(TaskError::AlreadyExited)
+        } else {
+            Err(TaskError::NotFound)
+        }
     }
 }
