@@ -56,7 +56,7 @@ API is documented in [docs/API.md](docs/API.md).
 ## Roadmap
 
 `0.2.0`:
-- [ ] Separate task not found and task already exited errors
+- [x] Separate task not found and task already exited errors
 - [ ] transport::Connection refactoring: Connection should have it's internal cancellation token and method stop()
 - [ ] Encode output lines with base64
 - [ ] Add line number to output notification
@@ -68,6 +68,7 @@ API is documented in [docs/API.md](docs/API.md).
 - [ ] Shutdown API method
 - [ ] Limit log file size
 - [ ] Support graceful shutdown by `SIGTERM`
+- [ ] Add a parameter to adjust RecentFinishedTasks size
 
 Future ideas:
 - Add suggestion module (history, runnables, tasks.json)

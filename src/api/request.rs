@@ -111,7 +111,7 @@ where
 mod tests {
     use serde_json::json;
 
-    use crate::api::response::ResponseBody;
+    use crate::api::response::{ErrorCode, ResponseBody};
 
     use super::*;
 
@@ -124,7 +124,7 @@ mod tests {
             ResponseBody::Error(b) => b,
             b => panic!("Unexpected response body {b:?}"),
         };
-        assert_eq!(body.code, ResponseError::PARSE_ERROR_CODE);
+        assert_eq!(body.code, ErrorCode::ParseError);
     }
 
     #[test]
@@ -136,7 +136,7 @@ mod tests {
             ResponseBody::Error(b) => b,
             b => panic!("Unexpected response body {b:?}"),
         };
-        assert_eq!(body.code, ResponseError::INVALID_REQUEST_CODE);
+        assert_eq!(body.code, ErrorCode::InvalidRequest);
     }
 
     #[test]
@@ -149,7 +149,7 @@ mod tests {
             ResponseBody::Error(b) => b,
             b => panic!("Unexpected response body {b:?}"),
         };
-        assert_eq!(body.code, ResponseError::METHOD_NOT_FOUND_CODE);
+        assert_eq!(body.code, ErrorCode::MethodNotFound);
     }
 
     #[test]
@@ -161,7 +161,7 @@ mod tests {
             ResponseBody::Error(b) => b,
             b => panic!("Unexpected response body {b:?}"),
         };
-        assert_eq!(body.code, ResponseError::INVALID_PARAMS_CODE);
+        assert_eq!(body.code, ErrorCode::InvalidParams);
     }
 
     #[test]

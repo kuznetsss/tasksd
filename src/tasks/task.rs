@@ -140,6 +140,9 @@ impl Task {
     }
 
     pub fn send_signal(&self, signal: rustix::process::Signal) -> Result<(), TaskError> {
+        if self.has_exited() {
+            return Err(TaskError::AlreadyExited);
+        }
         let pid: rustix::process::RawPid =
             self.pid.try_into().map_err(TaskError::send_signal_error)?;
         let pid = rustix::process::Pid::from_raw(pid).expect("Pid should be valid here");
