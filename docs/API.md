@@ -187,5 +187,6 @@ Application-defined errors returned by task methods:
 | `2`  | Error creating a new pty         | The server failed to allocate a PTY.          |
 | `3`  | Error starting child process     | The executable could not be spawned.          |
 | `4`  | Error writing to process         | Writing to the task's stdin failed.           |
-| `5`  | The task has already exited      | The target task has finished (or is unknown). |
+| `5`  | The task has already exited      | The target task has finished.                 |
 | `6`  | Error sending signal to the task | The signal could not be delivered.            |
+| `7`  | Task not found                   | No task exists with the given `task_id`.      |
