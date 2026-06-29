@@ -38,7 +38,7 @@ pub enum ResponseBody {
     Error(ResponseError),
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ErrorCode {
     ParseError = -32700,
     InvalidRequest = -32600,
