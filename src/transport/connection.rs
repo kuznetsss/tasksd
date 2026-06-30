@@ -1,5 +1,3 @@
-use tokio_util::sync::CancellationToken;
-
 use crate::transport::{
     WriterImpl,
     background_writer::{BackgroundWriter, WriteHandle},
@@ -16,18 +14,14 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub(in crate::transport) fn new<R, W>(
-        read_half: R,
-        write_half: W,
-        cancellation_token: CancellationToken,
-    ) -> Self
+    pub(in crate::transport) fn new<R, W>(read_half: R, write_half: W) -> Self
     where
         R: ReaderImpl,
         W: WriterImpl,
     {
         Self {
             reader: Reader::new(Box::new(read_half)),
-            writer: BackgroundWriter::spawn(write_half, cancellation_token),
+            writer: BackgroundWriter::spawn(write_half),
         }
     }
 
@@ -56,6 +50,12 @@ impl Connection {
         ConnectionWriter {
             inner: self.writer.handle(),
         }
+    }
+
+    /// Wait for all the scheduled writes to finish
+    /// NOTE: this will hang while other instances of ConnectionWriter are alive
+    pub async fn join(self) {
+        self.writer.join().await;
     }
 }
 
@@ -97,7 +97,7 @@ mod tests {
                 )+
                 let reader_mock = reader_mock.build();
                 let writer_mock = Builder::new().build();
-                let mut connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
+                let mut connection = Connection::new(reader_mock, writer_mock);
                 let err = connection.read_message().await.unwrap_err();
                 assert!(matches!(err, $error_type));
             }
@@ -150,7 +150,7 @@ mod tests {
         let reader_mock = reader_mock.build();
         let writer_mock = Builder::new().build();
 
-        let mut connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
+        let mut connection = Connection::new(reader_mock, writer_mock);
         let read_msg = connection.read_message().await.unwrap();
         assert_eq!(read_msg, msg)
     }
@@ -169,7 +169,7 @@ mod tests {
         let reader_mock = reader_mock.build();
         let writer_mock = Builder::new().build();
 
-        let mut connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
+        let mut connection = Connection::new(reader_mock, writer_mock);
         for m in msgs {
             let read_msg = connection.read_message().await.unwrap();
             assert_eq!(read_msg, m);
@@ -180,7 +180,7 @@ mod tests {
     async fn write_message_error_after_connection_dropped() {
         let reader_mock = Builder::new().build();
         let writer_mock = Builder::new().build();
-        let connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
+        let connection = Connection::new(reader_mock, writer_mock);
         let writer = connection.writer();
         drop(connection);
         tokio::task::yield_now().await;
@@ -202,22 +202,8 @@ mod tests {
                 .as_bytes(),
             )
             .build();
-        let connection = Connection::new(reader_mock, writer_mock, CancellationToken::new());
+        let connection = Connection::new(reader_mock, writer_mock);
         let writer = connection.writer();
         writer.write(msg).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn write_message_error_after_token_is_cancelled() {
-        let reader_mock = Builder::new().build();
-        let writer_mock = Builder::new().build();
-        let token = CancellationToken::new();
-        let connection = Connection::new(reader_mock, writer_mock, token.clone());
-        let writer = connection.writer();
-        token.cancel();
-        tokio::task::yield_now().await;
-        let err = writer.write("some message").await.unwrap_err();
-        assert!(matches!(err, TransportError::WriteError(_)));
-        assert!(dbg!(err.to_string()).contains("closed"));
     }
 }

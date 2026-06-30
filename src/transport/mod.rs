@@ -7,7 +7,6 @@ mod unix_socket;
 use std::path::Path;
 
 use anyhow::Result;
-use tokio_util::sync::CancellationToken;
 
 use crate::transport::{background_writer::WriterImpl, reader::ReaderImpl};
 
@@ -31,29 +30,9 @@ pub struct Server<I> {
 }
 
 impl<I: ServerImpl> Server<I> {
-    pub async fn wait_for_connection(
-        &self,
-    ) -> Result<AcceptedConnection<I::ReaderHalf, I::WriterHalf>> {
+    pub async fn wait_for_connection(&self) -> Result<Connection> {
         let (read_half, write_half) = self.inner.wait_for_connection().await?;
-        Ok(AcceptedConnection {
-            read_half,
-            write_half,
-        })
-    }
-}
-
-pub struct AcceptedConnection<R, W> {
-    read_half: R,
-    write_half: W,
-}
-
-impl<R, W> AcceptedConnection<R, W>
-where
-    R: ReaderImpl,
-    W: WriterImpl,
-{
-    pub fn into_connection(self, token: CancellationToken) -> Connection {
-        Connection::new(self.read_half, self.write_half, token)
+        Ok(Connection::new(read_half, write_half))
     }
 }
 
