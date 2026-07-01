@@ -57,15 +57,17 @@ API is documented in [docs/API.md](docs/API.md).
 
 `0.2.0`:
 - [x] Separate task not found and task already exited errors
-- [ ] transport::Connection refactoring: Connection should have it's internal cancellation token and method stop()
+- [x] transport::Connection refactoring: Connection should have it's internal cancellation token and method stop()
 - [ ] Encode output lines with base64
 - [ ] Add line number to output notification
 - [ ] Add notifications about missed output
 - [ ] Query task output buffer for line range
 - [ ] Subscription control (subscribe on output/exit, unsubscribe)
+- [ ] Shutdown API method
+
+`0.3.0`:
 - [ ] Broadcast shutdown notification to all connections
 - [ ] Tasks chains
-- [ ] Shutdown API method
 - [ ] Limit log file size
 - [ ] Support graceful shutdown by `SIGTERM`
 - [ ] Add a parameter to adjust RecentFinishedTasks size

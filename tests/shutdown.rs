@@ -1,5 +1,7 @@
 mod common;
 
+use std::time::Duration;
+
 use crate::common::{
     TestContextBuilder,
     api::{TaskExitNotification, TaskOutputNotification, TaskStartResponse},
@@ -15,7 +17,9 @@ async fn shutdown_sends_sigterm_to_running_tasks() {
     assert_eq!(response.id, client.last_id());
     let task_id = response.result.task_id;
 
-    ctx.shutdown().await;
+    tokio::time::timeout(Duration::from_secs(1), ctx.shutdown())
+        .await
+        .unwrap();
 
     let exit_notification: TaskExitNotification = client.read_struct().await.unwrap();
     assert_eq!(exit_notification.params.task_id, task_id);
@@ -57,7 +61,9 @@ async fn shutdown_sends_sigkill_after_ignoring_sigterm() {
     assert_eq!(notification.params.task_id, task_id);
     assert_eq!(notification.params.line, "ready\r\n");
 
-    ctx.shutdown().await;
+    tokio::time::timeout(Duration::from_secs(1), ctx.shutdown())
+        .await
+        .unwrap();
 
     let exit_notification: TaskExitNotification = client.read_struct().await.unwrap();
     assert_eq!(exit_notification.params.task_id, task_id);

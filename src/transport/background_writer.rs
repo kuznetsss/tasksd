@@ -17,7 +17,7 @@ pub(in crate::transport) struct BackgroundWriter {
     write_handle: WriteHandle,
     cancellation_token: CancellationToken,
     join_handle: JoinHandle<()>,
-    drop_guard: tokio_util::sync::DropGuard,
+    _drop_guard: tokio_util::sync::DropGuard,
 }
 
 #[derive(Debug, Clone)]
@@ -37,11 +37,12 @@ impl WriteHandle {
 impl BackgroundWriter {
     const CHANNEL_BUFFER_SIZE: usize = 16;
 
-    pub(in crate::transport) fn spawn<D>(mut dst: D, cancellation_token: CancellationToken) -> Self
+    pub(in crate::transport) fn spawn<D>(mut dst: D) -> Self
     where
         D: WriterImpl,
     {
         let (sender, mut receiver) = channel::<String>(Self::CHANNEL_BUFFER_SIZE);
+        let cancellation_token = CancellationToken::new();
 
         let handle = tokio::spawn({
             let cancellation_token = cancellation_token.clone();
@@ -63,7 +64,7 @@ impl BackgroundWriter {
             write_handle: WriteHandle { inner: sender },
             cancellation_token,
             join_handle: handle,
-            drop_guard,
+            _drop_guard: drop_guard,
         }
     }
 
@@ -73,7 +74,7 @@ impl BackgroundWriter {
 
     /// Writes everything queued and then stops
     /// NOTE: this method may hung if there are other senders
-    async fn finish(self) {
+    pub(in crate::transport) async fn join(self) {
         drop(self.write_handle);
         self.join_handle.await.unwrap();
     }
@@ -82,71 +83,92 @@ impl BackgroundWriter {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::{
+        assert_matches,
+        sync::{Arc, atomic::AtomicBool},
+        time::Duration,
+    };
+
     use super::*;
 
     use tokio_test::io::Builder;
 
-    struct BackgroundWriterTestCtx {
-        writer: BackgroundWriter,
-        token: CancellationToken,
-    }
-
-    impl BackgroundWriterTestCtx {
-        fn new(expected_messages: &[&str]) -> Self {
-            let mut builder = Builder::new();
-            expected_messages.iter().for_each(|s| {
-                builder.write(s.as_bytes());
-            });
-            Self::from_builder(builder)
-        }
-
-        fn from_builder(mut builder: Builder) -> Self {
-            let token = CancellationToken::new();
-            Self {
-                writer: BackgroundWriter::spawn(builder.build(), token.clone()),
-                token,
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn background_writer_write_test() {
-        let msg = "test";
-        let ctx = BackgroundWriterTestCtx::new(&[msg]);
-        ctx.writer.handle().write(msg).await.unwrap();
-        ctx.writer.finish().await;
-    }
-
-    #[tokio::test]
-    async fn background_writer_doesnt_write_when_cancelled() {
-        let ctx = BackgroundWriterTestCtx::new(&[]);
-        ctx.token.cancel();
-        // It's not deterministic if there will be an error here
-        let _ = ctx.writer.handle().write("msg").await;
-        ctx.writer.finish().await;
-    }
-
-    #[tokio::test]
-    async fn background_writer_cancels_token_when_write_error() {
-        use std::io::{Error, ErrorKind};
+    fn new_expecting_writes(expected_messages: &[&str]) -> BackgroundWriter {
         let mut builder = Builder::new();
-        builder.write_error(Error::from(ErrorKind::PermissionDenied));
-        let ctx = BackgroundWriterTestCtx::from_builder(builder);
-        ctx.writer.handle().write("msg".to_string()).await.unwrap();
-        ctx.writer.finish().await;
-        assert!(ctx.token.is_cancelled());
+        expected_messages.iter().for_each(|s| {
+            builder.write(s.as_bytes());
+        });
+        BackgroundWriter::spawn(builder.build())
     }
 
     #[tokio::test]
-    async fn write_handle_write_error_when_background_writer_is_dropped() {
-        let builder = Builder::new();
-        let ctx = BackgroundWriterTestCtx::from_builder(builder);
-        let write_handle = ctx.writer.handle();
-        drop(ctx.writer);
-        assert!(ctx.token.is_cancelled());
+    async fn write_handle_writes() {
+        let msg = "test";
+        let writer = new_expecting_writes(&[msg]);
+        writer.handle().write(msg).await.unwrap();
+        writer.join().await;
+    }
+
+    #[tokio::test]
+    async fn write_error_stops_writer() {
+        let io_mock = Builder::new()
+            .write_error(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "some error",
+            ))
+            .build();
+        let writer = BackgroundWriter::spawn(io_mock);
+        let token = writer.cancellation_token.clone();
+        assert!(!token.is_cancelled());
+        writer.handle().write("some message").await.unwrap();
         tokio::task::yield_now().await;
-        let err = write_handle.write("some message").await.unwrap_err();
-        assert!(matches!(err, TransportError::WriteError(_)));
-        assert!(dbg!(err.to_string()).contains("closed"));
+        assert!(token.is_cancelled());
+        let err = writer.handle().write("another message").await.unwrap_err();
+        assert_matches!(err, TransportError::WriteError(_));
+    }
+
+    #[tokio::test]
+    async fn internal_cancellation_token_is_cancelled_after_drop() {
+        let writer = BackgroundWriter::spawn(Builder::new().build());
+        let token = writer.cancellation_token.clone();
+        assert!(!token.is_cancelled());
+        drop(writer);
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn join_waits_for_all_write_handles_to_be_dropped() {
+        let writer = BackgroundWriter::spawn(Builder::new().build());
+        let handle = writer.handle();
+        let join_finished = Arc::new(AtomicBool::new(false));
+
+        tokio::spawn({
+            let join_finished = join_finished.clone();
+            async move {
+                writer.join().await;
+                join_finished.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!join_finished.load(std::sync::atomic::Ordering::Relaxed));
+
+        drop(handle);
+
+        tokio::task::yield_now().await;
+        assert!(join_finished.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn join_waits_for_all_messages_to_be_written() {
+        let msgs = ["some message 1", "some message 2", "some message 2"];
+        let writer = new_expecting_writes(&msgs);
+        let handle = writer.handle();
+        for m in msgs {
+            handle.write(m).await.unwrap();
+        }
+        drop(handle);
+        tokio::time::timeout(Duration::from_secs(1), writer.join())
+            .await
+            .unwrap();
     }
 }
