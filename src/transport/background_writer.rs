@@ -84,6 +84,7 @@ impl BackgroundWriter {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{
+        assert_matches,
         sync::{Arc, atomic::AtomicBool},
         time::Duration,
     };
@@ -106,6 +107,24 @@ mod tests {
         let writer = new_expecting_writes(&[msg]);
         writer.handle().write(msg).await.unwrap();
         writer.join().await;
+    }
+
+    #[tokio::test]
+    async fn write_error_stops_writer() {
+        let io_mock = Builder::new()
+            .write_error(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "some error",
+            ))
+            .build();
+        let writer = BackgroundWriter::spawn(io_mock);
+        let token = writer.cancellation_token.clone();
+        assert!(!token.is_cancelled());
+        writer.handle().write("some message").await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(token.is_cancelled());
+        let err = writer.handle().write("another message").await.unwrap_err();
+        assert_matches!(err, TransportError::WriteError(_));
     }
 
     #[tokio::test]
