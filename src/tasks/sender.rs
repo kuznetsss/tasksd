@@ -35,3 +35,5 @@ impl TaskSender {
         Self { events_tx, exit_tx }
     }
 }
+
+pub type TaskEventsStream = broadcast::Receiver<TaskEvent>;

@@ -5,12 +5,11 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
     sync::{broadcast, oneshot, watch},
-    task::AbortHandle,
 };
 use tracing::{Instrument, Span, info, info_span, warn};
 
 use crate::tasks::{
-    events::{TaskEvents, TaskEventsSubscriber},
+    TaskEventsStream,
     finished_task::FinishedTask,
     info::TaskInfo,
     output_buffer::OutputBuffer,
@@ -38,17 +37,16 @@ pub struct Task {
     info: Arc<TaskInfo>,
     stdin: tokio::sync::Mutex<PtyWritePart>,
     pid: u32,
-    events: TaskEvents,
     exit_rx: watch::Receiver<Option<ExitStatus>>,
     internal_tasks: WrappedTaskTracker,
     output_buffer: Arc<OutputBuffer>,
+    events_stream: TaskEventsStream,
 }
 
 impl Task {
     pub(in crate::tasks) fn new(
         info: TaskInfo,
         senders: TaskSender,
-        events: TaskEvents,
         output_buffer_capacity: usize,
     ) -> Result<(Self, TaskReadingGate), TaskError> {
         let span = info_span!( "task",
@@ -82,6 +80,7 @@ impl Task {
 
         let (read_guard_tx, read_guard_rx) = oneshot::channel();
 
+        let events_stream = senders.events_tx.subscribe();
         Self::spawn_output_reading(
             &internal_tasks,
             read_guard_rx,
@@ -103,10 +102,10 @@ impl Task {
             info,
             stdin: tokio::sync::Mutex::new(pty_write),
             pid,
-            events,
             exit_rx,
             internal_tasks,
             output_buffer,
+            events_stream,
         };
 
         Ok((task, TaskReadingGate(read_guard_tx)))
@@ -129,14 +128,11 @@ impl Task {
         }
     }
 
-    pub fn subscribe<S>(&self, s: S) -> Result<AbortHandle, TaskError>
-    where
-        S: TaskEventsSubscriber,
-    {
+    pub fn events_stream(&self) -> Result<TaskEventsStream, TaskError> {
         if self.has_exited() {
             return Err(TaskError::AlreadyExited);
         }
-        self.events.subscribe(s)
+        Ok(self.events_stream.resubscribe())
     }
 
     pub fn send_signal(&self, signal: rustix::process::Signal) -> Result<(), TaskError> {
@@ -177,7 +173,6 @@ impl Task {
 
     pub async fn join(&self) -> FinishedTask {
         self.internal_tasks.join().await;
-        self.events.join_all().await;
         FinishedTask {
             info: self.info.clone(),
             exit_status: self.exit_status().await,

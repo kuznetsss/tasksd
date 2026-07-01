@@ -58,6 +58,13 @@ API is documented in [docs/API.md](docs/API.md).
 `0.2.0`:
 - [x] Separate task not found and task already exited errors
 - [x] transport::Connection refactoring: Connection should have it's internal cancellation token and method stop()
+- [ ] **BUG**: pty output couldn't be divided into chunks:
+    - [ ] Move task subscribers into session
+    - [ ] In the current task piped (tokio's native stdout/stderr) outputs instead of pty
+    - [ ] Optional: implement different task type PtyTask:
+          - It should render screen from stream of bytes from pty using (libghostty-vt or vt100)
+          - Share screen state via watch channel
+          - Each subscriber calculates diff and sends it to the client
 - [ ] Encode output lines with base64
 - [ ] Add line number to output notification
 - [ ] Add notifications about missed output

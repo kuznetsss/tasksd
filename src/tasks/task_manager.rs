@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::tasks::{
-    TaskEventsSubscriber,
+    TaskEventsStream,
     finished_task::FinishedTask,
     recent_finished_tasks::RecentFinishedTasks,
     task::TaskReadingGate,
@@ -53,9 +53,8 @@ impl<'a> TaskCreationHandle<'a> {
         self
     }
 
-    pub fn subscribe(&mut self, s: impl TaskEventsSubscriber) -> &mut Self {
-        self.builder.subscribe(s);
-        self
+    pub fn events_stream(&mut self) -> TaskEventsStream {
+        self.builder.events_stream()
     }
 
     pub fn submit(self) -> Result<TaskReadingGate, TaskError> {

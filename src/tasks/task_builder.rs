@@ -1,8 +1,7 @@
 use std::{env::current_dir, path::PathBuf};
 
 use crate::tasks::{
-    TaskEventsSubscriber,
-    events::TaskEvents,
+    TaskEventsStream,
     info::TaskInfo,
     sender::TaskSender,
     task::{Task, TaskReadingGate},
@@ -15,19 +14,16 @@ pub struct TaskBuilder {
     working_dir: Option<PathBuf>,
 
     sender: TaskSender,
-    events: TaskEvents,
     output_buffer_capacity: usize,
 }
 
 impl TaskBuilder {
     pub fn new(executable: impl Into<String>, output_buffer_capacity: usize) -> Self {
         let sender = TaskSender::new();
-        let events = TaskEvents::new(&sender);
         Self {
             executable: executable.into(),
             args: None,
             working_dir: None,
-            events,
             sender,
             output_buffer_capacity,
         }
@@ -51,14 +47,8 @@ impl TaskBuilder {
         self
     }
 
-    pub fn subscribe<S>(&mut self, s: S) -> &mut Self
-    where
-        S: TaskEventsSubscriber,
-    {
-        self.events
-            .subscribe(s)
-            .expect("Task can't exit in builder");
-        self
+    pub fn events_stream(&self) -> TaskEventsStream {
+        self.sender.events_tx.subscribe()
     }
 
     pub fn start_task(self) -> Result<(Task, TaskReadingGate), TaskError> {
@@ -71,7 +61,7 @@ impl TaskBuilder {
             working_dir,
         };
 
-        Task::new(info, self.sender, self.events, self.output_buffer_capacity)
+        Task::new(info, self.sender, self.output_buffer_capacity)
     }
 }
 

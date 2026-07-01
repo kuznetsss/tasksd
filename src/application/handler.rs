@@ -57,12 +57,8 @@ impl Handler {
             task_builder.working_dir(working_dir);
         }
         let task_id = task_builder.task_id();
-        let subscriber = Subscriber::new(
-            self.connection_writer.clone(),
-            task_id,
-            params.subscribe_to_output,
-        );
-        task_builder.subscribe(subscriber);
+        let _task_events_stream = task_builder.events_stream();
+        todo!("spawn subscriber here");
         let task_reading_gate = task_builder.submit()?;
         let response_result = ResponseResult::StartTaskResult { task_id };
         Ok((response_result, task_reading_gate))
