@@ -4,52 +4,47 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use tokio::sync::Notify;
+use tokio::{sync::Notify, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 
-use crate::tasks::{TaskEventsSubscriber, TaskSubscriberError};
-
-#[derive(Debug)]
-pub struct NoopSubscriber {}
-
-impl TaskEventsSubscriber for NoopSubscriber {
-    #[allow(clippy::manual_async_fn)]
-    fn on_output(
-        &mut self,
-        _: Arc<String>,
-    ) -> impl Future<Output = std::result::Result<(), crate::tasks::events::TaskSubscriberError>> + Send
-    {
-        async { Ok(()) }
-    }
-
-    #[allow(clippy::manual_async_fn)]
-    fn on_exit(&mut self, _: ExitStatus) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-}
+use crate::tasks::{TaskEventsStream, sender::TaskEvent};
 
 #[derive(Default)]
 pub struct CapturingSubscriber {
     pub captured_output: Arc<Mutex<Vec<Arc<String>>>>,
     pub captured_exit_codes: Arc<Mutex<Vec<ExitStatus>>>,
     pub got_output: Arc<Notify>,
+    pub cancel: CancellationToken,
+    pub join_handle: JoinHandle<()>,
 }
 
-impl TaskEventsSubscriber for CapturingSubscriber {
-    fn on_output(
-        &mut self,
-        line: Arc<String>,
-    ) -> impl Future<Output = Result<(), TaskSubscriberError>> + Send {
-        self.captured_output.lock().unwrap().push(line);
-        self.got_output.notify_waiters();
-        async { Ok(()) }
-    }
-
-    fn on_exit(&mut self, status: ExitStatus) -> impl Future<Output = ()> + Send {
-        self.captured_exit_codes.lock().unwrap().push(status);
-        async {}
+impl CapturingSubscriber {
+    fn spawn(stream: TaskEventsStream) -> Self {
+        let mut s = CapturingSubscriber::default();
+        s.join_handle = tokio::spawn({
+            let captured_output = s.captured_output.clone();
+            let captured_exit_codes = s.captured_exit_codes.clone();
+            let got_output = s.got_output.clone();
+            let cancel = s.cancel.clone();
+            async move {
+                while let Some(Ok(event)) = cancel.run_until_cancelled(stream.recv()).await {
+                    match event {
+                        TaskEvent::Output(o) => {
+                            captured_output.lock().unwrap().push(o);
+                            got_output.notify_one();
+                        }
+                        TaskEvent::Exit(e) => {
+                            captured_exit_codes.lock().unwrap().push(e);
+                        }
+                    };
+                }
+            }
+        });
+        s
     }
 }
 
+/*
 #[derive(Debug, PartialEq, Clone)]
 pub enum Event {
     Output,
@@ -74,3 +69,4 @@ impl TaskEventsSubscriber for EventsCapturingSubscriber {
         async {}
     }
 }
+*/
