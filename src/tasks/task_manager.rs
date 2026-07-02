@@ -1,16 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    env::current_dir,
     path::PathBuf,
     sync::{Arc, Mutex, RwLock, atomic::AtomicUsize},
 };
 
 use crate::tasks::{
-    TaskEventsStream,
     finished_task::FinishedTask,
+    info::TaskInfo,
     recent_finished_tasks::RecentFinishedTasks,
     task::TaskReadingGate,
-    task_builder::TaskBuilder,
     task_error::TaskError,
     tracker::{PanicHandler, WrappedTaskTracker},
 };
@@ -35,37 +35,6 @@ pub struct TaskManager {
     completion_coroutines: Mutex<Option<WrappedTaskTracker>>,
 }
 
-#[must_use = "TaskCreationHandle must be submitted with .submit() to register the task"]
-pub struct TaskCreationHandle<'a> {
-    manager: &'a Arc<TaskManager>,
-    builder: TaskBuilder,
-    task_id: TaskId,
-}
-
-impl<'a> TaskCreationHandle<'a> {
-    pub fn args(&mut self, args: impl IntoIterator<Item = impl Into<String>>) -> &mut Self {
-        self.builder.args(args);
-        self
-    }
-
-    pub fn working_dir(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
-        self.builder.working_dir(dir);
-        self
-    }
-
-    pub fn events_stream(&mut self) -> TaskEventsStream {
-        self.builder.events_stream()
-    }
-
-    pub fn submit(self) -> Result<TaskReadingGate, TaskError> {
-        self.manager.submit(self.builder, self.task_id)
-    }
-
-    pub fn task_id(&self) -> TaskId {
-        self.task_id
-    }
-}
-
 impl TaskManager {
     pub fn new(task_output_buffer_capacity: usize) -> Arc<Self> {
         Arc::new(Self {
@@ -79,33 +48,32 @@ impl TaskManager {
         })
     }
 
-    pub fn create_task(self: &Arc<Self>, executable: impl Into<String>) -> TaskCreationHandle<'_> {
-        let task_id = self
-            .next_id
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        TaskCreationHandle {
-            manager: self,
-            builder: TaskBuilder::new(executable.into(), self.task_output_buffer_capacity),
-            task_id: TaskId(task_id),
-        }
-    }
-
-    fn submit(
+    fn create_task(
         self: &Arc<Self>,
-        builder: TaskBuilder,
-        task_id: TaskId,
-    ) -> Result<TaskReadingGate, TaskError> {
+        executable: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        working_dir: Option<String>,
+    ) -> Result<(Arc<Task>, TaskId, TaskReadingGate), TaskError> {
         let lock = self.completion_coroutines.lock().unwrap();
         let completion_coroutines = lock.as_ref().ok_or(TaskError::AlreadyExited)?;
 
-        let (task, reading_gate) = builder.start_task()?;
+        let task_id = TaskId(
+            self.next_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
+        let task_info = TaskInfo {
+            executable: executable.into(),
+            args: args.into_iter().map(Into::into).collect(),
+            working_dir: working_dir.map(PathBuf::from).unwrap_or(current_dir()?),
+        };
+        let (task, reading_gate) = Task::new(task_info, self.task_output_buffer_capacity)?;
         let task = Arc::new(task);
         self.spawn_task_completion(completion_coroutines, task.clone(), task_id);
         self.tasks
             .write()
             .expect("RwLock is poisoned")
             .insert(task_id, task);
-        Ok(reading_gate)
+        Ok((task, task_id, reading_gate))
     }
 
     pub fn get_task(&self, id: TaskId) -> Option<Arc<Task>> {
@@ -178,14 +146,14 @@ impl Drop for TaskManager {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{
-        collections::HashSet, env::current_dir, os::unix::process::ExitStatusExt, pin::pin,
-        task::Poll, time::Duration,
+        assert_matches, collections::HashSet, env::current_dir, os::unix::process::ExitStatusExt,
+        pin::pin, task::Poll, time::Duration,
     };
 
     use futures::task::noop_waker;
     use rustix::{path::Arg, process::Signal};
 
-    use crate::tasks::test_subscribers::CapturingSubscriber;
+    use crate::tasks::sender::TaskEvent;
 
     use super::*;
 
@@ -194,53 +162,35 @@ mod tests {
     #[tokio::test]
     async fn create_task_fails_if_task_couldnt_be_started() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let err = tm.create_task("non_existing").submit().unwrap_err();
+        let err = tm.create_task("non_existing", &[], None).unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
         tm.join().await;
     }
 
     #[tokio::test]
-    async fn create_task_output_callback_catches_output() {
+    async fn create_task_success() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let captured_output = Arc::new(Mutex::new(Vec::new()));
-        let mut builder = tm.create_task("echo");
-        builder
-            .args(["-n", "hello\nworld"])
-            .subscribe(CapturingSubscriber {
-                captured_output: captured_output.clone(),
-                ..Default::default()
-            });
-        let _ = builder.submit().unwrap();
+        let (task, _, gate) = tm
+            .create_task("echo", &["-n", "hello\nworld"], None)
+            .unwrap();
+        let events = task.events_stream().unwrap();
+        drop(gate);
         tm.join().await;
-        let captured_output = captured_output.lock().unwrap();
-        assert_eq!(captured_output.len(), 2);
-        assert_eq!(*captured_output[0], "hello\r\n");
-        assert_eq!(*captured_output[1], "world");
-    }
 
-    #[tokio::test]
-    async fn create_task_exit_callback_catches_exit_code() {
-        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let captured_exit_codes = Arc::new(Mutex::new(Vec::new()));
-        let mut builder = tm.create_task("sh");
-        builder
-            .args(["-c", "exit 123"])
-            .subscribe(CapturingSubscriber {
-                captured_exit_codes: captured_exit_codes.clone(),
-                ..Default::default()
-            });
-        let _ = builder.submit().unwrap();
-        tm.join().await;
-        let captured_output = captured_exit_codes.lock().unwrap();
-        assert_eq!(captured_output.len(), 1);
-        assert_eq!(captured_output[0].code().unwrap(), 123);
+        let events: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        assert_eq!(events.len(), 3);
+        let expected = Arc::new("hello\r\n".to_string());
+        assert_matches!(events[0], TaskEvent::Output(expected));
+        let expected = Arc::new("world".to_string());
+        assert_matches!(events[1], TaskEvent::Output(expected));
+        assert_matches!(events[2], TaskEvent::Exit(_));
     }
 
     #[tokio::test]
     async fn create_task_after_join_returns_error() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         tm.join().await;
-        let err = tm.create_task("ls").submit().unwrap_err();
+        let err = tm.create_task("ls", &[], None).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
     }
 
@@ -254,16 +204,14 @@ mod tests {
             .unwrap()
             .to_owned();
 
-        let subscriber = CapturingSubscriber::default();
-        let captured_output = subscriber.captured_output.clone();
-        let mut builder = tm.create_task("pwd");
-        builder.working_dir(&dir).subscribe(subscriber);
-        let _ = builder.submit().unwrap();
+        let (task, _, gate) = tm.create_task("pwd", &[], Some(dir)).unwrap();
+        let events = task.events_stream().unwrap();
+        drop(gate);
 
         tm.join().await;
-        let captured_output = captured_output.lock().unwrap();
-        assert_eq!(captured_output.len(), 1);
-        assert_eq!(*captured_output[0], format!("{dir}\r\n"));
+        let event = events.recv().await.unwrap();
+        let expected = Arc::new(format!("{dir}\r\n"));
+        assert_matches!(event, TaskEvent::Output(expected));
     }
 
     #[tokio::test]
@@ -271,10 +219,8 @@ mod tests {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let mut task_ids = HashSet::new();
         for _ in 0..3 {
-            let builder = tm.create_task("ls");
-            let id = builder.task_id();
-            let _ = builder.submit().unwrap();
-            assert!(task_ids.insert(id));
+            let (_, task_id, _) = tm.create_task("ls", &[], None).unwrap();
+            assert!(task_ids.insert(task_id));
         }
         tokio::time::timeout(Duration::from_secs(1), tm.join())
             .await
@@ -288,11 +234,9 @@ mod tests {
     async fn get_methods_return_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let executable = "cat";
-        let builder = tm.create_task(executable);
-        let task_id = builder.task_id();
-        let _ = builder.submit().unwrap();
+        let (task, task_id, _) = tm.create_task(executable, &[], None).unwrap();
 
-        let task = tm.get_task(task_id).unwrap();
+        assert!(Arc::ptr_eq(&task, &tm.get_task(task_id).unwrap()));
         assert!(tm.get_finished_task(task_id).is_none());
 
         let non_existing_id = TaskId(task_id.0 + 123);
@@ -318,7 +262,7 @@ mod tests {
     #[tokio::test]
     async fn join_called_multiple_times_is_ok() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let _ = tm.create_task("ls").submit().unwrap();
+        let _ = tm.create_task("ls", &[], None).unwrap();
         tm.join().await;
 
         let waker = noop_waker();
@@ -343,9 +287,7 @@ mod tests {
     #[tokio::test]
     async fn output_buffer_capacity_passed_to_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let builder = tm.create_task("cat");
-        let task_id = builder.task_id();
-        let _ = builder.submit().unwrap();
+        let (_, task_id, _) = tm.create_task("cat", &[], None).unwrap();
         let task = tm.get_task(task_id).unwrap();
         assert_eq!(task.output_buffer().capacity(), TASK_OUTPUT_BUFFER_CAPACITY);
         task.send_signal(Signal::TERM).unwrap();

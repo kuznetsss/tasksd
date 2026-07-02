@@ -6,7 +6,6 @@ mod pty_reader;
 mod recent_finished_tasks;
 mod sender;
 mod task;
-mod task_builder;
 mod task_error;
 mod task_manager;
 mod tracker;

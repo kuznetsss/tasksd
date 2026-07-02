@@ -46,13 +46,14 @@ pub struct Task {
 impl Task {
     pub(in crate::tasks) fn new(
         info: TaskInfo,
-        senders: TaskSender,
         output_buffer_capacity: usize,
     ) -> Result<(Self, TaskReadingGate), TaskError> {
         let span = info_span!( "task",
                     executable = info.executable,
                     args = ?info.args);
         let _entered = span.enter();
+
+        let sender = TaskSender::new();
 
         let (pty, child_pty) = create_pty_pair().map_err(TaskError::pty_creation_error)?;
         let (pty_read, pty_write) = pty
@@ -65,7 +66,7 @@ impl Task {
         let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
 
         let child_process_exit_future = Box::pin({
-            let mut on_exit_internal_receiver = senders.exit_tx.subscribe();
+            let mut on_exit_internal_receiver = sender.exit_tx.subscribe();
             async move {
                 let _ = on_exit_internal_receiver.changed().await;
             }
@@ -80,13 +81,13 @@ impl Task {
 
         let (read_guard_tx, read_guard_rx) = oneshot::channel();
 
-        let events_stream = senders.events_tx.subscribe();
+        let events_stream = sender.events_tx.subscribe();
         Self::spawn_output_reading(
             &internal_tasks,
             read_guard_rx,
             pty_reader,
-            senders.exit_tx.subscribe(),
-            senders.events_tx,
+            sender.exit_tx.subscribe(),
+            sender.events_tx,
             output_buffer.clone(),
             span.clone(),
         );
@@ -95,8 +96,8 @@ impl Task {
             .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
         let pid = child.id().expect("pid");
         info!(pid, "Spawned a process");
-        let exit_rx = senders.exit_tx.subscribe();
-        Self::spawn_waiting_for_exit(&internal_tasks, senders.exit_tx, child, span.clone());
+        let exit_rx = sender.exit_tx.subscribe();
+        Self::spawn_waiting_for_exit(&internal_tasks, sender.exit_tx, child, span.clone());
 
         let task = Self {
             info,
@@ -318,13 +319,12 @@ mod tests {
         args: &[&str],
         working_dir: impl Into<PathBuf>,
     ) -> Result<(Task, TaskReadingGate), TaskError> {
-        let sender = TaskSender::new();
         let info = TaskInfo {
             executable: executable.into(),
             args: args.iter().map(|&s| String::from(s)).collect(),
             working_dir: working_dir.into(),
         };
-        Task::new(info, sender, OUTPUT_BUFFER_CAPACITY)
+        Task::new(info, OUTPUT_BUFFER_CAPACITY)
     }
 
     fn collect_events(mut events: TaskEventsStream) -> Vec<TaskEvent> {
