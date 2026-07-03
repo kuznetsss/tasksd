@@ -129,8 +129,6 @@ impl Application {
             let task_manager = self.task_manager.clone();
             let root_cancellation = self.root_cancellation.clone();
             async move {
-                // Order here is critical: root_cancellation.cancel() will shutdown
-                // all the sessions and it requires all tasks to be finished
                 task_manager.join().await;
                 root_cancellation.cancel();
                 Event::Finish

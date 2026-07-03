@@ -4,7 +4,7 @@ use anyhow::Result;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
-    sync::{broadcast, oneshot, watch},
+    sync::{broadcast, watch},
 };
 use tracing::{Instrument, Span, info, info_span, warn};
 
@@ -26,7 +26,13 @@ use crate::{
 /// Dropping gate allows task to begin reading from PTY.
 #[derive(Debug)]
 #[must_use]
-pub struct TaskReadingGate(oneshot::Sender<()>);
+pub struct TaskReadingGate(watch::Sender<Option<()>>);
+
+impl Drop for TaskReadingGate {
+    fn drop(&mut self) {
+        self.0.send(Some(())).expect("Gate shouldn't outlive Task");
+    }
+}
 
 /// Representation of a running child process.
 /// All the output of the child process is captured into [`OutputBuffer`].
@@ -81,7 +87,7 @@ impl Task {
             child_process_exit_future,
         );
 
-        let (read_guard_tx, read_guard_rx) = oneshot::channel();
+        let (read_guard_tx, read_guard_rx) = watch::channel(None);
 
         let events_stream = sender.events_tx.subscribe();
         Self::spawn_output_reading(
@@ -99,7 +105,13 @@ impl Task {
         let pid = child.id().expect("pid");
         info!(pid, "Spawned a process");
         let exit_rx = sender.exit_tx.subscribe();
-        Self::spawn_waiting_for_exit(&internal_tasks, sender.exit_tx, child, span.clone());
+        Self::spawn_waiting_for_exit(
+            &internal_tasks,
+            sender.exit_tx,
+            read_guard_tx.subscribe(),
+            child,
+            span.clone(),
+        );
 
         let task = Self {
             info,
@@ -216,7 +228,7 @@ impl Task {
 
     fn spawn_output_reading(
         internal_tasks: &WrappedTaskTracker,
-        read_guard_rx: oneshot::Receiver<()>,
+        mut read_guard_rx: watch::Receiver<Option<()>>,
         pty_reader: PtyReader,
         mut on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
         events_tx: broadcast::Sender<TaskEvent>,
@@ -226,7 +238,7 @@ impl Task {
         internal_tasks
             .spawn({
                 async move {
-                    let _ = read_guard_rx.await;
+                    let _ = read_guard_rx.changed().await;
                     let mut stdout = BufReader::new(pty_reader);
                     loop {
                         let mut buf = String::new();
@@ -266,12 +278,14 @@ impl Task {
     fn spawn_waiting_for_exit(
         internal_tasks: &WrappedTaskTracker,
         internal_on_exit_sender: watch::Sender<Option<ExitStatus>>,
+        mut guard_rx: watch::Receiver<Option<()>>,
         mut child: Child,
         span: Span,
     ) {
         internal_tasks
             .spawn(
                 async move {
+                    let _ = guard_rx.changed().await;
                     let exit_status = child
                         .wait()
                         .await

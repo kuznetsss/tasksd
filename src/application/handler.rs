@@ -68,7 +68,8 @@ impl Handler {
             task_events_stream,
         );
         self.internal_coroutines
-            .spawn(async move { subscriber.run().await })?;
+            .spawn(async move { subscriber.run().await })
+            .map_err(|_| ApplicationError::Shutdown)?;
         let response_result = ResponseResult::StartTaskResult { task_id };
         Ok((response_result, gate))
     }

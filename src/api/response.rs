@@ -73,13 +73,11 @@ impl From<ResponseResult> for ResponseBody {
 impl From<ApplicationError> for ResponseBody {
     fn from(value: ApplicationError) -> Self {
         match value {
-            ApplicationError::Shutdown => {
-                return ResponseBody::Error(ResponseError {
-                    code: ErrorCode::Shutdown,
-                    message: "Tasksd is shutting down",
-                    data: None,
-                });
-            }
+            ApplicationError::Shutdown => ResponseBody::Error(ResponseError {
+                code: ErrorCode::Shutdown,
+                message: "Tasksd is shutting down",
+                data: None,
+            }),
             ApplicationError::TaskError(task_error) => task_error.into(),
         }
     }

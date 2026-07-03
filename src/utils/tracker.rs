@@ -8,8 +8,6 @@ use tokio_util::{
 };
 use tracing::error;
 
-use crate::application::ApplicationError;
-
 #[derive(Clone)]
 pub enum PanicHandler {
     Logging,
@@ -93,14 +91,14 @@ impl WrappedTaskTracker {
         }
     }
 
-    pub fn spawn<F>(&self, f: F) -> Result<AbortHandle, ApplicationError>
+    pub fn spawn<F>(&self, f: F) -> Result<AbortHandle, ()>
     where
         F: Future<Output = ()> + Send + 'static,
     {
         // NOTE: There is data race between is_closed() and spawn() here.
         // Worst case a task will be spawned but never joined
         if self.inner.is_closed() {
-            Err(ApplicationError::Shutdown)
+            Err(())
         } else {
             Ok(self
                 .inner
@@ -208,8 +206,7 @@ mod tests {
     async fn spawn_after_join_returns_error() {
         let t = WrappedTaskTracker::new(PanicHandler::new_aborting());
         t.join().await;
-        let e = t.spawn(async {}).unwrap_err();
-        assert!(matches!(e, ApplicationError::Shutdown));
+        t.spawn(async {}).unwrap_err();
     }
 
     #[tokio::test]

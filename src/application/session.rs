@@ -66,8 +66,6 @@ impl Session {
     async fn shutdown(self) {
         self.internal_coroutines.shutdown();
         self.internal_coroutines.join().await;
-        // All tasks should be finished at this point, so subscribers are dead.
-        // Currently this is guaranteed by the order in Application::shutdown()
         self.connection.join().await;
     }
 
@@ -108,19 +106,16 @@ impl Session {
         self.handle_spawn_result(spawn_result, None);
     }
 
-    fn handle_spawn_result(
-        &self,
-        result: Result<AbortHandle, ApplicationError>,
-        request_id: Option<RequestId>,
-    ) {
-        if let Err(e) = result {
-            let writer = self.connection.writer();
-            tokio::spawn(async move {
-                let response = Response::new(request_id, e.into());
-                if let Err(e) = writer.write(&response.to_json_string()).await {
-                    warn!("Error writing to connection: {e}")
-                }
-            });
+    fn handle_spawn_result(&self, result: Result<AbortHandle, ()>, request_id: Option<RequestId>) {
+        if result.is_ok() {
+            return;
         }
+        let writer = self.connection.writer();
+        tokio::spawn(async move {
+            let response = Response::new(request_id, ApplicationError::Shutdown.into());
+            if let Err(e) = writer.write(&response.to_json_string()).await {
+                warn!("Error writing to connection: {e}")
+            }
+        });
     }
 }

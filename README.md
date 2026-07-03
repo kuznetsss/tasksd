@@ -59,7 +59,7 @@ API is documented in [docs/API.md](docs/API.md).
 - [x] Separate task not found and task already exited errors
 - [x] transport::Connection refactoring: Connection should have it's internal cancellation token and method stop()
 - [ ] **BUG**: pty output couldn't be divided into chunks:
-    - [ ] Move task subscribers into session
+    - [x] Move task subscribers into session
         - Use joinset in task.rs
         - Remove unused modules
         - Think if WrappedTaskTracker needs a trait so handler can only spawn
