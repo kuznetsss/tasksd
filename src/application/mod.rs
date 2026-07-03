@@ -1,10 +1,12 @@
 mod cli_options;
+mod error;
 mod handler;
 mod logger;
 mod session;
 mod subscriber;
 
 pub use cli_options::CliOptions;
+pub use error::ApplicationError;
 pub use logger::setup_logger;
 
 use std::{

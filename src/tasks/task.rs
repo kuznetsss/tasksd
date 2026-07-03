@@ -8,16 +8,18 @@ use tokio::{
 };
 use tracing::{Instrument, Span, info, info_span, warn};
 
-use crate::tasks::{
-    TaskEventsStream,
-    finished_task::FinishedTask,
-    info::TaskInfo,
-    output_buffer::OutputBuffer,
-    pty::{PtyChild, PtyWritePart, create_pty_pair},
-    pty_reader::PtyReader,
-    sender::{TaskEvent, TaskSender},
-    task_error::TaskError,
-    tracker::{PanicHandler, WrappedTaskTracker},
+use crate::{
+    tasks::{
+        TaskEventsStream,
+        finished_task::FinishedTask,
+        info::TaskInfo,
+        output_buffer::OutputBuffer,
+        pty::{PtyChild, PtyWritePart, create_pty_pair},
+        pty_reader::PtyReader,
+        sender::{TaskEvent, TaskSender},
+        task_error::TaskError,
+    },
+    utils::tracker::{PanicHandler, WrappedTaskTracker},
 };
 
 /// Gate of task event reading.
@@ -391,14 +393,8 @@ mod tests {
         task.join().await;
         let events = collect_events(events);
         assert_eq!(events.len(), 2);
-        let TaskEvent::Output(output) = events[0] else {
-            panic!("Expected output");
-        };
-        assert_eq!(*output, msg);
-        let TaskEvent::Exit(exit) = events[1] else {
-            panic!("Expected exit");
-        };
-        assert_eq!(exit.code().unwrap(), 0);
+        assert_matches!(&events[0], TaskEvent::Output(o) if o.as_str() == format!("{msg}\r\n"));
+        assert_matches!(events[1], TaskEvent::Exit(e) if e.code().unwrap() == 0);
     }
 
     #[tokio::test]
@@ -425,8 +421,8 @@ mod tests {
         task.join().await;
         let captured_output = collect_output(events);
         assert_eq!(captured_output.len(), 2);
-        assert_eq!(*captured_output[0], "onetwo\r\n");
-        assert_eq!(*captured_output[1], "three");
+        assert_eq!(captured_output[0].as_str(), "onetwo\r\n");
+        assert_eq!(captured_output[1].as_str(), "three");
     }
 
     #[tokio::test]
@@ -469,6 +465,7 @@ mod tests {
         // This test checks that events_stream() will return error after Exit event was published
         let (task, guard) = make_task("echo", &["-n", "hello"], current_dir().unwrap()).unwrap();
         let mut events = task.events_stream().unwrap();
+        drop(guard);
         let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
             .await
             .unwrap()
@@ -526,7 +523,7 @@ mod tests {
         .unwrap();
 
         let subscriber_handle = tokio::spawn({
-            let events = task.events_stream().unwrap();
+            let mut events = task.events_stream().unwrap();
             let captured_output = captured_output.clone();
             async move {
                 while let Ok(e) = events.recv().await {
@@ -541,6 +538,7 @@ mod tests {
         task.join().await;
         tokio::time::timeout(Duration::from_secs(1), subscriber_handle)
             .await
+            .unwrap()
             .unwrap();
         assert!(captured_output.lock().unwrap().len() <= REPEAT_COUNT);
         assert_eq!(output_buffer.line_range().end, REPEAT_COUNT);
@@ -619,7 +617,7 @@ mod tests {
 
         let captured_events = Arc::new(Mutex::new(Vec::new()));
         let subscriber_handle = tokio::spawn({
-            let events = task.events_stream().unwrap();
+            let mut events = task.events_stream().unwrap();
             let captured_events = captured_events.clone();
             async move {
                 while let Ok(e) = events.recv().await {
@@ -629,6 +627,10 @@ mod tests {
         });
         drop(gate);
         task.join().await;
+        tokio::time::timeout(Duration::from_secs(1), subscriber_handle)
+            .await
+            .unwrap()
+            .unwrap();
 
         let captured_events = captured_events.lock().unwrap().to_owned();
         assert_eq!(captured_events.len(), CHANNEL_CAPACITY);
@@ -651,7 +653,7 @@ mod tests {
     #[tokio::test]
     async fn task_reading_gate_gates_events_sending() {
         let (task, gate) = make_task("echo", &["hello"], current_dir().unwrap()).unwrap();
-        let events = task.events_stream().unwrap();
+        let mut events = task.events_stream().unwrap();
         let handle = tokio::spawn(async move {
             task.join().await;
         });

@@ -1,19 +1,20 @@
 use std::sync::Arc;
 
-use tokio::task::JoinSet;
+use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, info_span, warn};
 
 use crate::{
-    api::{Request, Response},
-    application::handler::Handler,
+    api::{Request, RequestId, Response},
+    application::{ApplicationError, handler::Handler},
     tasks::TaskManager,
     transport::{self},
+    utils::tracker::{PanicHandler, WrappedTaskTracker},
 };
 
 pub(in crate::application) struct Session {
     cancellation_token: CancellationToken,
-    running_handlers: JoinSet<()>,
+    internal_coroutines: Arc<WrappedTaskTracker>,
     connection: transport::Connection,
     task_manager: Arc<TaskManager>,
 }
@@ -26,7 +27,7 @@ impl Session {
     ) -> Self {
         Self {
             cancellation_token,
-            running_handlers: JoinSet::new(),
+            internal_coroutines: Arc::new(WrappedTaskTracker::new(PanicHandler::new_aborting())),
             connection,
             task_manager,
         }
@@ -51,7 +52,7 @@ impl Session {
                 Err(e) => {
                     info!("Error reading from client: {e}");
                     // Client connection is broken, disconnect
-                    self.running_handlers.abort_all();
+                    self.internal_coroutines.shutdown();
                     return;
                 }
             };
@@ -62,8 +63,9 @@ impl Session {
         }
     }
 
-    async fn shutdown(mut self) {
-        while self.running_handlers.join_next().await.is_some() {}
+    async fn shutdown(self) {
+        self.internal_coroutines.shutdown();
+        self.internal_coroutines.join().await;
         // All tasks should be finished at this point, so subscribers are dead.
         // Currently this is guaranteed by the order in Application::shutdown()
         self.connection.join().await;
@@ -71,18 +73,21 @@ impl Session {
 
     fn handle_request(&mut self, request: Request) {
         let span = info_span!("request", id = %request.id, method = %request.method);
+        let request_id = request.id.clone();
         let task_manager = self.task_manager.clone();
         let connection_writer = self.connection.writer();
-        self.running_handlers.spawn(
+        let internal_coroutines = self.internal_coroutines.clone();
+        let spawn_result = self.internal_coroutines.spawn(
             async move {
-                let handler = Handler::new(connection_writer, task_manager);
+                let handler = Handler::new(connection_writer, task_manager, internal_coroutines);
                 handler.handle_request(request).await;
             }
             .instrument(span),
         );
+        self.handle_spawn_result(spawn_result, Some(request_id));
     }
 
-    fn handle_parse_error(&mut self, response: Response) {
+    fn handle_parse_error(&self, response: Response) {
         let id = response
             .id
             .as_ref()
@@ -90,7 +95,7 @@ impl Session {
             .unwrap_or_else(|| "null".to_string());
         let span = info_span!("parse_error", id);
         let connection_writer = self.connection.writer();
-        self.running_handlers.spawn(
+        let spawn_result = self.internal_coroutines.spawn(
             async move {
                 let response =
                     serde_json::to_string(&response).expect("Serialization shouldn't fail");
@@ -100,5 +105,22 @@ impl Session {
             }
             .instrument(span),
         );
+        self.handle_spawn_result(spawn_result, None);
+    }
+
+    fn handle_spawn_result(
+        &self,
+        result: Result<AbortHandle, ApplicationError>,
+        request_id: Option<RequestId>,
+    ) {
+        if let Err(e) = result {
+            let writer = self.connection.writer();
+            tokio::spawn(async move {
+                let response = Response::new(request_id, e.into());
+                if let Err(e) = writer.write(&response.to_json_string()).await {
+                    warn!("Error writing to connection: {e}")
+                }
+            });
+        }
     }
 }

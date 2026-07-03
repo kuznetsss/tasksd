@@ -8,9 +8,8 @@ mod sender;
 mod task;
 mod task_error;
 mod task_manager;
-mod tracker;
 
-pub use sender::TaskEventsStream;
+pub use sender::{TaskEvent, TaskEventsStream};
 pub use task::TaskReadingGate;
 pub use task_error::TaskError;
 pub use task_manager::{TaskId, TaskManager};

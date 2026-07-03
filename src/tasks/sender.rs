@@ -5,10 +5,12 @@ use tokio::sync::{broadcast, watch};
 pub const CHANNEL_CAPACITY: usize = 16;
 
 #[derive(Debug, Clone)]
-pub(in crate::tasks) enum TaskEvent {
+pub enum TaskEvent {
     Output(Arc<String>),
     Exit(ExitStatus),
 }
+
+pub type TaskEventsStream = broadcast::Receiver<TaskEvent>;
 
 impl From<String> for TaskEvent {
     fn from(value: String) -> Self {
@@ -35,5 +37,3 @@ impl TaskSender {
         Self { events_tx, exit_tx }
     }
 }
-
-pub type TaskEventsStream = broadcast::Receiver<TaskEvent>;

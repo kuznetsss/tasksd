@@ -11,8 +11,6 @@ use anyhow::Result;
 use crate::transport::{background_writer::WriterImpl, reader::ReaderImpl};
 
 pub use connection::{Connection, ConnectionWriter};
-
-#[cfg(test)]
 pub use error::TransportError;
 
 pub trait ServerImpl: std::fmt::Debug {

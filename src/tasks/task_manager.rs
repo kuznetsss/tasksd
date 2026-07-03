@@ -7,13 +7,10 @@ use std::{
 };
 
 use crate::tasks::{
-    finished_task::FinishedTask,
-    info::TaskInfo,
-    recent_finished_tasks::RecentFinishedTasks,
-    task::TaskReadingGate,
-    task_error::TaskError,
-    tracker::{PanicHandler, WrappedTaskTracker},
+    finished_task::FinishedTask, info::TaskInfo, recent_finished_tasks::RecentFinishedTasks,
+    task::TaskReadingGate, task_error::TaskError,
 };
+use crate::utils::tracker::{PanicHandler, WrappedTaskTracker};
 
 use super::task::Task;
 
@@ -48,10 +45,10 @@ impl TaskManager {
         })
     }
 
-    fn create_task(
+    pub fn create_task(
         self: &Arc<Self>,
         executable: impl Into<String>,
-        args: impl IntoIterator<Item = impl Into<String>>,
+        args: Vec<String>,
         working_dir: Option<String>,
     ) -> Result<(Arc<Task>, TaskId, TaskReadingGate), TaskError> {
         let lock = self.completion_coroutines.lock().unwrap();
@@ -63,8 +60,10 @@ impl TaskManager {
         );
         let task_info = TaskInfo {
             executable: executable.into(),
-            args: args.into_iter().map(Into::into).collect(),
-            working_dir: working_dir.map(PathBuf::from).unwrap_or(current_dir()?),
+            args,
+            working_dir: working_dir
+                .map(PathBuf::from)
+                .unwrap_or(current_dir().map_err(|_| TaskError::InvalidDirectory)?),
         };
         let (task, reading_gate) = Task::new(task_info, self.task_output_buffer_capacity)?;
         let task = Arc::new(task);
@@ -72,7 +71,7 @@ impl TaskManager {
         self.tasks
             .write()
             .expect("RwLock is poisoned")
-            .insert(task_id, task);
+            .insert(task_id, task.clone());
         Ok((task, task_id, reading_gate))
     }
 
@@ -159,10 +158,25 @@ mod tests {
 
     const TASK_OUTPUT_BUFFER_CAPACITY: usize = 10;
 
+    impl TaskManager {
+        fn spawn(
+            self: &Arc<Self>,
+            exe: &str,
+            args: &[&str],
+            working_dir: Option<String>,
+        ) -> Result<(Arc<Task>, TaskId, TaskReadingGate), TaskError> {
+            self.create_task(
+                exe,
+                args.iter().map(|s| s.to_string()).collect(),
+                working_dir,
+            )
+        }
+    }
+
     #[tokio::test]
     async fn create_task_fails_if_task_couldnt_be_started() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let err = tm.create_task("non_existing", &[], None).unwrap_err();
+        let err = tm.spawn("non_existing", &[], None).unwrap_err();
         assert!(matches!(err, TaskError::StartingChildProcessError(_)));
         tm.join().await;
     }
@@ -170,27 +184,23 @@ mod tests {
     #[tokio::test]
     async fn create_task_success() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let (task, _, gate) = tm
-            .create_task("echo", &["-n", "hello\nworld"], None)
-            .unwrap();
-        let events = task.events_stream().unwrap();
+        let (task, _, gate) = tm.spawn("echo", &["-n", "hello\nworld"], None).unwrap();
+        let mut events = task.events_stream().unwrap();
         drop(gate);
         tm.join().await;
 
         let events: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
         assert_eq!(events.len(), 3);
-        let expected = Arc::new("hello\r\n".to_string());
-        assert_matches!(events[0], TaskEvent::Output(expected));
-        let expected = Arc::new("world".to_string());
-        assert_matches!(events[1], TaskEvent::Output(expected));
-        assert_matches!(events[2], TaskEvent::Exit(_));
+        assert_matches!(&events[0], TaskEvent::Output(s) if s.as_str() == "hello\r\n");
+        assert_matches!(&events[1], TaskEvent::Output(s) if s.as_str() == "world");
+        assert_matches!(&events[2], TaskEvent::Exit(e) if e.code().unwrap() == 0);
     }
 
     #[tokio::test]
     async fn create_task_after_join_returns_error() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         tm.join().await;
-        let err = tm.create_task("ls", &[], None).unwrap_err();
+        let err = tm.spawn("ls", &[], None).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
     }
 
@@ -204,14 +214,13 @@ mod tests {
             .unwrap()
             .to_owned();
 
-        let (task, _, gate) = tm.create_task("pwd", &[], Some(dir)).unwrap();
-        let events = task.events_stream().unwrap();
+        let (task, _, gate) = tm.spawn("pwd", &[], Some(dir.clone())).unwrap();
+        let mut events = task.events_stream().unwrap();
         drop(gate);
 
         tm.join().await;
         let event = events.recv().await.unwrap();
-        let expected = Arc::new(format!("{dir}\r\n"));
-        assert_matches!(event, TaskEvent::Output(expected));
+        assert_matches!(event, TaskEvent::Output(s) if s.as_str() == format!("{dir}\r\n"));
     }
 
     #[tokio::test]
@@ -219,7 +228,7 @@ mod tests {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let mut task_ids = HashSet::new();
         for _ in 0..3 {
-            let (_, task_id, _) = tm.create_task("ls", &[], None).unwrap();
+            let (_, task_id, _) = tm.spawn("ls", &[], None).unwrap();
             assert!(task_ids.insert(task_id));
         }
         tokio::time::timeout(Duration::from_secs(1), tm.join())
@@ -234,7 +243,7 @@ mod tests {
     async fn get_methods_return_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let executable = "cat";
-        let (task, task_id, _) = tm.create_task(executable, &[], None).unwrap();
+        let (task, task_id, _) = tm.spawn(executable, &[], None).unwrap();
 
         assert!(Arc::ptr_eq(&task, &tm.get_task(task_id).unwrap()));
         assert!(tm.get_finished_task(task_id).is_none());
@@ -262,7 +271,7 @@ mod tests {
     #[tokio::test]
     async fn join_called_multiple_times_is_ok() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let _ = tm.create_task("ls", &[], None).unwrap();
+        let _ = tm.spawn("ls", &[], None).unwrap();
         tm.join().await;
 
         let waker = noop_waker();
@@ -287,7 +296,7 @@ mod tests {
     #[tokio::test]
     async fn output_buffer_capacity_passed_to_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let (_, task_id, _) = tm.create_task("cat", &[], None).unwrap();
+        let (_, task_id, _) = tm.spawn("cat", &[], None).unwrap();
         let task = tm.get_task(task_id).unwrap();
         assert_eq!(task.output_buffer().capacity(), TASK_OUTPUT_BUFFER_CAPACITY);
         task.send_signal(Signal::TERM).unwrap();
