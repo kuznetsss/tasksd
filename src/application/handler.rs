@@ -2,9 +2,10 @@ use tracing::warn;
 
 use crate::{
     api::{Request, RequestBody, Response, ResponseResult, TaskSendSignalParams, TaskStartParams},
-    application::subscriber::Subscriber,
+    application::{error::ApplicationError, subscriber::Subscriber},
     tasks::{TaskError, TaskManager, TaskReadingGate},
     transport::ConnectionWriter,
+    utils::tracker::SpawnerHandle,
 };
 
 use std::sync::Arc;
@@ -12,16 +13,19 @@ use std::sync::Arc;
 pub(in crate::application) struct Handler {
     connection_writer: ConnectionWriter,
     task_manager: Arc<TaskManager>,
+    spawner: SpawnerHandle,
 }
 
 impl Handler {
     pub(in crate::application) fn new(
         connection_writer: ConnectionWriter,
         task_manager: Arc<TaskManager>,
+        spawner: SpawnerHandle,
     ) -> Self {
         Self {
             connection_writer,
             task_manager,
+            spawner,
         }
     }
 
@@ -48,38 +52,44 @@ impl Handler {
     fn start_task(
         &self,
         params: TaskStartParams,
-    ) -> Result<(ResponseResult, TaskReadingGate), TaskError> {
-        let mut task_builder = self.task_manager.create_task(params.executable);
-        if let Some(args) = params.args {
-            task_builder.args(args);
-        }
-        if let Some(working_dir) = params.working_dir {
-            task_builder.working_dir(working_dir);
-        }
-        let task_id = task_builder.task_id();
+    ) -> Result<(ResponseResult, TaskReadingGate), ApplicationError> {
+        let (task, task_id, gate) = self.task_manager.create_task(
+            params.executable,
+            params.args.unwrap_or_default(),
+            params.working_dir,
+        )?;
+        let task_events_stream = task
+            .events_stream()
+            .expect("Task couldn't exit while its gate is not dropped");
         let subscriber = Subscriber::new(
             self.connection_writer.clone(),
             task_id,
             params.subscribe_to_output,
+            task_events_stream,
         );
-        task_builder.subscribe(subscriber);
-        let task_reading_gate = task_builder.submit()?;
+        self.spawner
+            .spawn(async move { subscriber.run().await })
+            .map_err(|_| ApplicationError::Shutdown)?;
         let response_result = ResponseResult::StartTaskResult { task_id };
-        Ok((response_result, task_reading_gate))
+        Ok((response_result, gate))
     }
 
-    fn send_signal(&self, params: TaskSendSignalParams) -> Result<ResponseResult, TaskError> {
+    fn send_signal(
+        &self,
+        params: TaskSendSignalParams,
+    ) -> Result<ResponseResult, ApplicationError> {
         if let Some(task) = self.task_manager.get_task(params.task_id) {
-            task.send_signal(params.signal)
-                .map(|_| ResponseResult::SendSignalResult {})
+            Ok(task
+                .send_signal(params.signal)
+                .map(|_| ResponseResult::SendSignalResult {})?)
         } else if self
             .task_manager
             .get_finished_task(params.task_id)
             .is_some()
         {
-            Err(TaskError::AlreadyExited)
+            Err(TaskError::AlreadyExited.into())
         } else {
-            Err(TaskError::NotFound)
+            Err(TaskError::NotFound.into())
         }
     }
 }

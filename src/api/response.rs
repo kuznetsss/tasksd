@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::{
     api::common::{JsonRpcVersion, RequestId},
+    application::ApplicationError,
     tasks::{TaskError, TaskId},
 };
 
@@ -53,6 +54,7 @@ pub enum ErrorCode {
     AlreadyExited = 5,
     SendSignalError = 6,
     NotFoundError = 7,
+    Shutdown = 8,
 }
 
 fn error_code_serializer<S>(code: &ErrorCode, serializer: S) -> Result<S::Ok, S::Error>
@@ -65,6 +67,19 @@ where
 impl From<ResponseResult> for ResponseBody {
     fn from(value: ResponseResult) -> Self {
         Self::Result(value)
+    }
+}
+
+impl From<ApplicationError> for ResponseBody {
+    fn from(value: ApplicationError) -> Self {
+        match value {
+            ApplicationError::Shutdown => ResponseBody::Error(ResponseError {
+                code: ErrorCode::Shutdown,
+                message: "Tasksd is shutting down",
+                data: None,
+            }),
+            ApplicationError::TaskError(task_error) => task_error.into(),
+        }
     }
 }
 
@@ -192,7 +207,7 @@ mod tests {
 
     #[test]
     fn response_error_serialization() {
-        let error = TaskError::PtyCreationError("some error".to_string());
+        let error: ApplicationError = TaskError::PtyCreationError("some error".to_string()).into();
         let request_id = Some(RequestId::String("some id".to_string()));
         let response = Response::new(request_id, error.into());
         let json_str = serde_json::to_string(&response).unwrap();
