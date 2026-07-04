@@ -5,7 +5,7 @@ use crate::{
     application::{error::ApplicationError, subscriber::Subscriber},
     tasks::{TaskError, TaskManager, TaskReadingGate},
     transport::ConnectionWriter,
-    utils::tracker::WrappedTaskTracker,
+    utils::tracker::SpawnerHandle,
 };
 
 use std::sync::Arc;
@@ -13,19 +13,19 @@ use std::sync::Arc;
 pub(in crate::application) struct Handler {
     connection_writer: ConnectionWriter,
     task_manager: Arc<TaskManager>,
-    internal_coroutines: Arc<WrappedTaskTracker>,
+    spawner: SpawnerHandle,
 }
 
 impl Handler {
     pub(in crate::application) fn new(
         connection_writer: ConnectionWriter,
         task_manager: Arc<TaskManager>,
-        internal_coroutines: Arc<WrappedTaskTracker>,
+        spawner: SpawnerHandle,
     ) -> Self {
         Self {
             connection_writer,
             task_manager,
-            internal_coroutines,
+            spawner,
         }
     }
 
@@ -67,7 +67,7 @@ impl Handler {
             params.subscribe_to_output,
             task_events_stream,
         );
-        self.internal_coroutines
+        self.spawner
             .spawn(async move { subscriber.run().await })
             .map_err(|_| ApplicationError::Shutdown)?;
         let response_result = ResponseResult::StartTaskResult { task_id };

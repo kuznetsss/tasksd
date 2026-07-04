@@ -60,9 +60,9 @@ API is documented in [docs/API.md](docs/API.md).
 - [x] transport::Connection refactoring: Connection should have it's internal cancellation token and method stop()
 - [ ] **BUG**: pty output couldn't be divided into chunks:
     - [x] Move task subscribers into session
-        - Use joinset in task.rs
-        - Remove unused modules
-        - Think if WrappedTaskTracker needs a trait so handler can only spawn
+        - [x] Remove unused modules
+        - [x] WrappedTaskTracker needs a new type Spawner so handler can only spawn
+        - [ ] Write tests for gate in tasks.rs
     - [ ] In the current task piped (tokio's native stdout/stderr) outputs instead of pty
     - [ ] Optional: implement different task type PtyTask:
           - It should render screen from stream of bytes from pty using (libghostty-vt or vt100)
@@ -76,6 +76,7 @@ API is documented in [docs/API.md](docs/API.md).
 - [ ] Shutdown API method
 
 `0.3.0`:
+- [ ] Use `thiserror` crate
 - [ ] Broadcast shutdown notification to all connections
 - [ ] Tasks chains
 - [ ] Limit log file size

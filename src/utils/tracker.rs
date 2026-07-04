@@ -132,6 +132,25 @@ impl WrappedTaskTracker {
         self.inner.close();
         self.cancellation_token.cancel();
     }
+
+    pub fn handle(self: &Arc<Self>) -> SpawnerHandle {
+        SpawnerHandle {
+            inner: self.clone(),
+        }
+    }
+}
+
+pub struct SpawnerHandle {
+    inner: Arc<WrappedTaskTracker>,
+}
+
+impl SpawnerHandle {
+    pub fn spawn<F>(&self, f: F) -> Result<AbortHandle, ()>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.inner.spawn(f)
+    }
 }
 
 #[cfg(test)]
@@ -165,6 +184,24 @@ mod tests {
             }
         })
         .unwrap();
+        t.join().await;
+        assert!(t.is_joined());
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn spawner_handle_spawns_a_task() {
+        let t = Arc::new(WrappedTaskTracker::new(PanicHandler::new_aborting()));
+        let call_count = Arc::new(AtomicI32::new(0));
+        let handle = t.handle();
+        handle
+            .spawn({
+                let call_count = call_count.clone();
+                async move {
+                    call_count.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+            .unwrap();
         t.join().await;
         assert!(t.is_joined());
         assert_eq!(call_count.load(Ordering::Relaxed), 1);

@@ -74,10 +74,10 @@ impl Session {
         let request_id = request.id.clone();
         let task_manager = self.task_manager.clone();
         let connection_writer = self.connection.writer();
-        let internal_coroutines = self.internal_coroutines.clone();
+        let spawner = self.internal_coroutines.handle();
         let spawn_result = self.internal_coroutines.spawn(
             async move {
-                let handler = Handler::new(connection_writer, task_manager, internal_coroutines);
+                let handler = Handler::new(connection_writer, task_manager, spawner);
                 handler.handle_request(request).await;
             }
             .instrument(span),
