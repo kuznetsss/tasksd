@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Gate of task event reading.
-/// Dropping gate allows task to begin reading from PTY.
+/// Dropping gate allows task to begin reading from PTY and waiting for exit.
 #[derive(Debug)]
 #[must_use]
 pub struct TaskReadingGate(watch::Sender<Option<()>>);
@@ -679,5 +679,49 @@ mod tests {
         drop(gate);
         handle.await.unwrap();
         assert!(events.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn task_doesnt_exit_while_gate_exists() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let tmp_file = tmp_dir.path().join("tmp_file");
+        let tmp_file_path = tmp_file.as_str().unwrap();
+        let (task, gate) = make_task("touch", &[tmp_file_path], current_dir().unwrap()).unwrap();
+        let task = Arc::new(task);
+        let handle = tokio::spawn({
+            let task = task.clone();
+            async move {
+                task.join().await;
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !tmp_file.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(!task.has_exited());
+        assert!(!handle.is_finished());
+        drop(gate);
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(task.has_exited());
+    }
+
+    #[tokio::test]
+    async fn dropping_task_reading_gate_sends() {
+        let (tx, mut rx) = watch::channel(None);
+        let gate = TaskReadingGate(tx);
+        assert!(!rx.has_changed().unwrap());
+        drop(gate);
+        tokio::time::timeout(Duration::from_secs(1), rx.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rx.borrow().unwrap(), ());
     }
 }
