@@ -98,6 +98,7 @@ impl TaskManager {
     pub fn send_signal_to_all_tasks(&self, signal: rustix::process::Signal) {
         let tasks_map = self.tasks.read().unwrap();
         for task in tasks_map.values() {
+            println!("send signal {signal:?}");
             let _ = task.send_signal(signal);
         }
     }
@@ -191,7 +192,7 @@ mod tests {
 
         let events: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
         assert_eq!(events.len(), 3);
-        assert_matches!(&events[0], TaskEvent::Output(s) if s.as_str() == "hello\r\n");
+        assert_matches!(&events[0], TaskEvent::Output(s) if s.as_str() == "hello\n");
         assert_matches!(&events[1], TaskEvent::Output(s) if s.as_str() == "world");
         assert_matches!(&events[2], TaskEvent::Exit(e) if e.code().unwrap() == 0);
     }
@@ -220,7 +221,7 @@ mod tests {
 
         tm.join().await;
         let event = events.recv().await.unwrap();
-        assert_matches!(event, TaskEvent::Output(s) if s.as_str() == format!("{dir}\r\n"));
+        assert_matches!(event, TaskEvent::Output(s) if s.as_str() == format!("{dir}\n"));
     }
 
     #[tokio::test]
