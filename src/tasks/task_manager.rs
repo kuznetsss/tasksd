@@ -98,7 +98,6 @@ impl TaskManager {
     pub fn send_signal_to_all_tasks(&self, signal: rustix::process::Signal) {
         let tasks_map = self.tasks.read().unwrap();
         for task in tasks_map.values() {
-            println!("send signal {signal:?}");
             let _ = task.send_signal(signal);
         }
     }
