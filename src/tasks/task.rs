@@ -152,7 +152,7 @@ impl Task {
         let pid: rustix::process::RawPid =
             self.pid.try_into().map_err(TaskError::send_signal_error)?;
         let pid = rustix::process::Pid::from_raw(pid).expect("Pid should be valid here");
-        rustix::process::kill_process(pid, signal).map_err(|e| {
+        rustix::process::kill_process_group(pid, signal).map_err(|e| {
             if e == rustix::io::Errno::SRCH {
                 TaskError::AlreadyExited
             } else {
@@ -603,6 +603,21 @@ mod tests {
         let err = task.send_signal(rustix::process::Signal::TERM).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
         task.join().await;
+    }
+
+    #[tokio::test]
+    async fn send_signal_kills_process_group() {
+        let (task, _) = make_task("sh", &["-c", "cat"], current_dir().unwrap()).unwrap();
+        tokio::task::yield_now().await;
+        task.send_signal(rustix::process::Signal::TERM).unwrap();
+        let exit_status = tokio::time::timeout(Duration::from_secs(1), task.join())
+            .await
+            .unwrap()
+            .exit_status;
+        assert_eq!(
+            exit_status.signal().unwrap(),
+            rustix::process::Signal::TERM.as_raw()
+        );
     }
 
     #[tokio::test]

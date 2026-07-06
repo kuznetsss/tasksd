@@ -61,8 +61,8 @@ API is documented in [docs/API.md](docs/API.md).
 - [ ] **BUG**: pty output couldn't be divided into chunks:
     - [x] Move task subscribers into session
     - [ ] In the current task piped (tokio's native stdout/stderr) outputs instead of pty
-        - Send signal to the process group instead of single process to affect children of the task
-        - On child process exit reading should drain buffers and finish, same as in pty_reader
+        - [x] Send signal to the process group instead of single process to affect children of the task
+        - [ ] On child process exit reading should drain buffers and finish, same as in pty_reader
     - [ ] Optional: implement different task type PtyTask:
           - It should render screen from stream of bytes from pty using (libghostty-vt or vt100)
           - Share screen state via watch channel
