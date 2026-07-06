@@ -62,11 +62,16 @@ API is documented in [docs/API.md](docs/API.md).
     - [x] Move task subscribers into session
     - [x] In the current task piped (tokio's native stdout/stderr) outputs instead of pty
         - [x] Send signal to the process group instead of single process to affect children of the task
-- [ ] Add line number to output notification
+- [x] Add line number to output notification
 - [ ] Add notifications about missed output
 - [ ] Query task output buffer for line range
 - [ ] Subscription control (subscribe on output/exit, unsubscribe)
 - [ ] Shutdown API method
+- [ ] Broadcast shutdown notification to all connections
+- [ ] CI release improvements:
+    - No sha file
+    - Build in old ubuntu instead of musl
+    - No code signing
 
 `0.3.0` or later:
 - [ ] Switch output stream to Vec<u8>
@@ -80,7 +85,6 @@ API is documented in [docs/API.md](docs/API.md).
       but it will stop capturing detached process' output
 - [ ] Separate stdout and stderr in output notifications and in `OutputBuffer`
 - [ ] Use `thiserror` crate
-- [ ] Broadcast shutdown notification to all connections
 - [ ] Tasks chains
 - [ ] Limit log file size
 - [ ] Support graceful shutdown by `SIGTERM`

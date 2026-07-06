@@ -13,7 +13,7 @@ use tracing::{Instrument, Span, info, info_span, warn};
 
 use crate::{
     tasks::{
-        TaskEventsStream,
+        OutputLine, TaskEventsStream,
         finished_task::FinishedTask,
         info::TaskInfo,
         output_buffer::OutputBuffer,
@@ -249,9 +249,14 @@ impl Task {
             .spawn(
                 async move {
                     let _ = read_guard_rx.changed().await;
+                    let mut line_number = 0;
 
                     while let Some(line) = line_stream_rx.recv().await {
-                        let line = Arc::new(line);
+                        let line = Arc::new(OutputLine {
+                            content: line,
+                            line_number,
+                        });
+                        line_number += 1;
                         output_buffer.insert_line(line.clone());
                         if let Err(e) = events_tx.send(TaskEvent::Output(line)) {
                             warn!("Error sending output line to subscribers: {e}");
@@ -367,11 +372,11 @@ mod tests {
         std::iter::from_fn(|| events.try_recv().ok()).collect()
     }
 
-    fn collect_output(mut events: TaskEventsStream) -> Vec<String> {
+    fn collect_output(mut events: TaskEventsStream) -> Vec<OutputLine> {
         std::iter::from_fn(|| events.try_recv().ok())
             .filter(|e| matches!(e, TaskEvent::Output(_)))
             .map(|e| match e {
-                TaskEvent::Output(o) => String::clone(&o),
+                TaskEvent::Output(o) => OutputLine::clone(&o),
                 other => panic!("Unexpected task event {other:?}"),
             })
             .collect()
@@ -427,7 +432,7 @@ mod tests {
         task.join().await;
         let events = collect_events(events);
         assert_eq!(events.len(), 2);
-        assert_matches!(&events[0], TaskEvent::Output(o) if o.as_str() == format!("{msg}\n"));
+        assert_matches!(&events[0], TaskEvent::Output(o) if o.content == format!("{msg}\n"));
         assert_matches!(events[1], TaskEvent::Exit(e) if e.code().unwrap() == 0);
     }
 
@@ -461,8 +466,8 @@ mod tests {
         task.join().await;
         let captured_output = collect_output(events);
         assert_eq!(captured_output.len(), 2);
-        assert_eq!(captured_output[0].as_str(), "onetwo\n");
-        assert_eq!(captured_output[1].as_str(), "three");
+        assert_eq!(captured_output[0].content, "onetwo\n");
+        assert_eq!(captured_output[1].content, "three");
     }
 
     #[tokio::test]
@@ -532,7 +537,7 @@ mod tests {
             task.output_buffer()
                 .get_line_range(range)
                 .into_iter()
-                .map(|s| String::clone(s.as_ref()))
+                .map(|s| s.content.clone())
                 .collect::<Vec<_>>(),
             ["line1\n", "line2"]
         );

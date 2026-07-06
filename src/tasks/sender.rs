@@ -2,18 +2,20 @@ use std::{process::ExitStatus, sync::Arc};
 
 use tokio::sync::{broadcast, watch};
 
+use crate::tasks::OutputLine;
+
 pub const CHANNEL_CAPACITY: usize = 16;
 
 #[derive(Debug, Clone)]
 pub enum TaskEvent {
-    Output(Arc<String>),
+    Output(Arc<OutputLine>),
     Exit(ExitStatus),
 }
 
 pub type TaskEventsStream = broadcast::Receiver<TaskEvent>;
 
-impl From<String> for TaskEvent {
-    fn from(value: String) -> Self {
+impl From<OutputLine> for TaskEvent {
+    fn from(value: OutputLine) -> Self {
         TaskEvent::Output(Arc::new(value))
     }
 }

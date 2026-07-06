@@ -1,6 +1,7 @@
 mod finished_task;
 mod info;
 mod output_buffer;
+mod output_line;
 // TODO bring back when pty task is added
 //mod pty;
 //mod pty_reader;
@@ -10,6 +11,7 @@ mod task;
 mod task_error;
 mod task_manager;
 
+pub use output_line::OutputLine;
 pub use sender::{TaskEvent, TaskEventsStream};
 pub use task::TaskReadingGate;
 pub use task_error::TaskError;

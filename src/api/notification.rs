@@ -2,7 +2,10 @@ use std::{os::unix::process::ExitStatusExt, process::ExitStatus, sync::Arc};
 
 use serde::Serialize;
 
-use crate::{api::common::JsonRpcVersion, tasks::TaskId};
+use crate::{
+    api::common::JsonRpcVersion,
+    tasks::{OutputLine, TaskId},
+};
 
 #[derive(Debug, Serialize)]
 pub struct Notification {
@@ -38,8 +41,11 @@ pub enum NotificationBody {
 }
 
 impl NotificationBody {
-    pub fn task_output(task_id: TaskId, line: Arc<String>) -> Self {
-        Self::TaskOutput(TaskOutputParams { task_id, line })
+    pub fn task_output(task_id: TaskId, line: Arc<OutputLine>) -> Self {
+        Self::TaskOutput(TaskOutputParams {
+            task_id,
+            content: line,
+        })
     }
 
     pub fn task_exit(task_id: TaskId, exit_status: ExitStatus) -> Self {
@@ -54,8 +60,8 @@ impl NotificationBody {
 #[derive(Debug, Serialize)]
 pub struct TaskOutputParams {
     task_id: TaskId,
-    // pub line_number: usize, // TODO: add line number when tasks are ready for that
-    line: Arc<String>,
+    #[serde(flatten)]
+    content: Arc<OutputLine>,
 }
 
 #[derive(Debug, Serialize)]
@@ -75,17 +81,21 @@ mod tests {
         let task_id = TaskId(123);
         //let line_number = 456;
         let line = "some_line";
+        let line_number = 456;
         let notification: Notification = NotificationBody::task_output(
             task_id,
             //line_number,
-            Arc::new(line.to_string()),
+            Arc::new(OutputLine {
+                content: line.to_string(),
+                line_number,
+            }),
         )
         .into();
         let json_str = serde_json::to_string(&notification).unwrap();
         assert_eq!(
             json_str,
             format!(
-                r#"{{"jsonrpc":"2.0","method":"task.output","params":{{"task_id":{task_id},"line":"{line}"}}}}"#
+                r#"{{"jsonrpc":"2.0","method":"task.output","params":{{"task_id":{task_id},"line":"{line}","line_number":{line_number}}}}}"#
             )
         )
     }
