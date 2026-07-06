@@ -8,7 +8,6 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command},
     sync::{broadcast, mpsc, watch},
-    task::JoinSet,
 };
 use tracing::{Instrument, Span, info, info_span, warn};
 
@@ -54,6 +53,8 @@ pub struct Task {
 }
 
 impl Task {
+    const OUTPUT_LINE_CHANNEL_SIZE: usize = 16;
+
     pub(in crate::tasks) fn new(
         info: TaskInfo,
         output_buffer_capacity: usize,
@@ -82,11 +83,19 @@ impl Task {
         let stdin = child.stdin.take().expect("Child should have stdin");
 
         let events_stream = sender.events_tx.subscribe();
+        let (line_stream_tx, line_stream_rx) = mpsc::channel(Self::OUTPUT_LINE_CHANNEL_SIZE);
         Self::spawn_output_reading(
             &internal_tasks,
-            read_guard_rx,
             stdout,
             stderr,
+            line_stream_tx,
+            span.clone(),
+        );
+
+        Self::spawn_output_sending(
+            &internal_tasks,
+            line_stream_rx,
+            read_guard_rx,
             sender.exit_tx.subscribe(),
             sender.events_tx,
             output_buffer.clone(),
@@ -199,42 +208,55 @@ impl Task {
         Ok(child)
     }
 
-    // TODO: split into 2 functions: reading output and reading lines from channel
     fn spawn_output_reading(
         internal_tasks: &WrappedTaskTracker,
-        mut read_guard_rx: watch::Receiver<Option<()>>,
         stdout: ChildStdout,
         stderr: ChildStderr,
+        line_stream_tx: mpsc::Sender<String>,
+        span: Span,
+    ) {
+        internal_tasks
+            .spawn({
+                let tx = line_stream_tx.clone();
+                async move {
+                    Self::read_loop(stdout, tx).await;
+                }
+                .instrument(span.clone())
+            })
+            .expect("Internal tasks should not be joined yet");
+        internal_tasks
+            .spawn(
+                {
+                    async move {
+                        Self::read_loop(stderr, line_stream_tx).await;
+                    }
+                }
+                .instrument(span),
+            )
+            .expect("Internal tasks should not be joined yet");
+    }
+
+    fn spawn_output_sending(
+        internal_tasks: &WrappedTaskTracker,
+        mut line_stream_rx: mpsc::Receiver<String>,
+        mut read_guard_rx: watch::Receiver<Option<()>>,
         mut on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
         events_tx: broadcast::Sender<TaskEvent>,
         output_buffer: Arc<OutputBuffer>,
         span: Span,
     ) {
         internal_tasks
-            .spawn({
+            .spawn(
                 async move {
                     let _ = read_guard_rx.changed().await;
-                    let (tx, mut rx) = mpsc::channel(16);
-                    let mut reading_tasks = JoinSet::new();
-                    reading_tasks.spawn({
-                        let tx = tx.clone();
-                        async move {
-                            Self::read_loop(stdout, tx).await;
-                        }
-                    });
-                    reading_tasks.spawn({
-                        async move {
-                            Self::read_loop(stderr, tx).await;
-                        }
-                    });
-                    while let Some(line) = rx.recv().await {
+
+                    while let Some(line) = line_stream_rx.recv().await {
                         let line = Arc::new(line);
                         output_buffer.insert_line(line.clone());
                         if let Err(e) = events_tx.send(TaskEvent::Output(line)) {
                             warn!("Error sending output line to subscribers: {e}");
                         }
                     }
-                    reading_tasks.join_all().await; // panics if inner task has panic which should never happen
                     if on_exit_receiver.changed().await.is_ok() {
                         let exit_status = on_exit_receiver
                             .borrow()
@@ -245,9 +267,9 @@ impl Task {
                             .expect("One receiver in events should be alive");
                     }
                 }
-                .instrument(span)
-            })
-            .expect("Internal tasks should not be joined yet");
+                .instrument(span),
+            )
+            .expect("Internal task should not be joined yet");
     }
 
     async fn read_loop<R: AsyncRead + Unpin>(stream: R, sender: mpsc::Sender<String>) {
