@@ -1,8 +1,9 @@
 mod finished_task;
 mod info;
 mod output_buffer;
-mod pty;
-mod pty_reader;
+// TODO bring back when pty task is added
+//mod pty;
+//mod pty_reader;
 mod recent_finished_tasks;
 mod sender;
 mod task;

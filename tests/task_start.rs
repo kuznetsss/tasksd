@@ -67,7 +67,7 @@ async fn start_task_output_exit_notifications() {
 
     let line: TaskOutputNotification = client.read_struct().await.unwrap();
     assert_eq!(line.params.task_id, task_id);
-    assert_eq!(line.params.line, "line 1\r\n");
+    assert_eq!(line.params.line, "line 1\n");
 
     let line: TaskOutputNotification = client.read_struct().await.unwrap();
     assert_eq!(line.params.task_id, task_id);
@@ -110,7 +110,7 @@ async fn start_task_string_request_id() {
 
     let line: TaskOutputNotification = client.read_struct().await.unwrap();
     assert_eq!(line.params.task_id, task_id);
-    assert_eq!(line.params.line, "hi\r\n");
+    assert_eq!(line.params.line, "hi\n");
 
     let exit: TaskExitNotification = client.read_struct().await.unwrap();
     assert_eq!(exit.params.task_id, task_id);
@@ -151,7 +151,7 @@ async fn start_task_custom_working_dir() {
 
     let line: TaskOutputNotification = client.read_struct().await.unwrap();
     assert_eq!(line.params.task_id, task_id);
-    assert_eq!(line.params.line, format!("{dir}\r\n"));
+    assert_eq!(line.params.line, format!("{dir}\n"));
 
     let exit: TaskExitNotification = client.read_struct().await.unwrap();
     assert_eq!(exit.params.task_id, task_id);

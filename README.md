@@ -4,7 +4,7 @@
 [![Crates audit](https://github.com/kuznetsss/tasksd/actions/workflows/audit.yml/badge.svg)](https://github.com/kuznetsss/tasksd/actions/workflows/audit.yml)
 [![Test coverage](https://codecov.io/gh/kuznetsss/tasksd/graph/badge.svg?token=NBUAOGLWUH)](https://codecov.io/gh/kuznetsss/tasksd)
 
-Tasksd is a daemon allowing to spawn shell commands via JSON-RPC API.
+Tasksd is a daemon allowing to spawn processes via JSON-RPC API.
 As a daemon it detaches execution from the client allowing the spawned process to run even if the client is down.
 
 > [!WARNING]
@@ -45,7 +45,7 @@ Use `--help` flag to see all the available options.
 ## Features
 
 - tasksd is a daemon - tasks keep running after client disconnects
-- PTY is allocated for each task - spawned command sees a real terminal
+- (Not implemented yet) PTY is allocated for each task - spawned command sees a real terminal
 - output capture - each task output is captured into a ring buffer (by default tasksd keeps last 10 000 lines)
 - streaming JSON-RPC API - clients subscribe to live output and exit notifications over a unix socket
 
@@ -57,22 +57,28 @@ API is documented in [docs/API.md](docs/API.md).
 
 `0.2.0`:
 - [x] Separate task not found and task already exited errors
-- [x] transport::Connection refactoring: Connection should have it's internal cancellation token and method stop()
-- [ ] **BUG**: pty output couldn't be divided into chunks:
+- [x] transport::Connection refactoring: Connection should have its internal cancellation token and method stop()
+- [x] **BUG**: pty output couldn't be divided into chunks:
     - [x] Move task subscribers into session
-    - [ ] In the current task piped (tokio's native stdout/stderr) outputs instead of pty
-    - [ ] Optional: implement different task type PtyTask:
-          - It should render screen from stream of bytes from pty using (libghostty-vt or vt100)
-          - Share screen state via watch channel
-          - Each subscriber calculates diff and sends it to the client
-- [ ] Encode output lines with base64
+    - [x] In the current task piped (tokio's native stdout/stderr) outputs instead of pty
+        - [x] Send signal to the process group instead of single process to affect children of the task
 - [ ] Add line number to output notification
 - [ ] Add notifications about missed output
 - [ ] Query task output buffer for line range
 - [ ] Subscription control (subscribe on output/exit, unsubscribe)
 - [ ] Shutdown API method
 
-`0.3.0`:
+`0.3.0` or later:
+- [ ] Switch output stream to Vec<u8>
+- [ ] Implement different task type PtyTask:
+      - It should render screen from stream of bytes from pty using (libghostty-vt or vt100)
+      - Share screen state via watch channel
+      - Each subscriber calculates diff and sends it to the client
+- [ ] For piped task reading should be similar to pty_reader:
+      after child process finished drain buffers until got blocking and exit.
+      This will prevent tasksd from hanging on detached grand child processes
+      but it will stop capturing detached process' output
+- [ ] Separate stdout and stderr in output notifications and in `OutputBuffer`
 - [ ] Use `thiserror` crate
 - [ ] Broadcast shutdown notification to all connections
 - [ ] Tasks chains

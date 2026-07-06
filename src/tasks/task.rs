@@ -1,10 +1,13 @@
-use std::{process::ExitStatus, sync::Arc};
+use std::{
+    process::{ExitStatus, Stdio},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, Command},
-    sync::{broadcast, watch},
+    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command},
+    sync::{broadcast, mpsc, watch},
 };
 use tracing::{Instrument, Span, info, info_span, warn};
 
@@ -14,8 +17,6 @@ use crate::{
         finished_task::FinishedTask,
         info::TaskInfo,
         output_buffer::OutputBuffer,
-        pty::{PtyChild, PtyWritePart, create_pty_pair},
-        pty_reader::PtyReader,
         sender::{TaskEvent, TaskSender},
         task_error::TaskError,
     },
@@ -43,7 +44,7 @@ impl Drop for TaskReadingGate {
 #[derive(Debug)]
 pub struct Task {
     info: Arc<TaskInfo>,
-    stdin: tokio::sync::Mutex<PtyWritePart>,
+    stdin: tokio::sync::Mutex<ChildStdin>,
     pid: u32,
     exit_rx: watch::Receiver<Option<ExitStatus>>,
     internal_tasks: WrappedTaskTracker,
@@ -52,6 +53,8 @@ pub struct Task {
 }
 
 impl Task {
+    const OUTPUT_LINE_CHANNEL_SIZE: usize = 16;
+
     pub(in crate::tasks) fn new(
         info: TaskInfo,
         output_buffer_capacity: usize,
@@ -63,47 +66,42 @@ impl Task {
 
         let sender = TaskSender::new();
 
-        let (pty, child_pty) = create_pty_pair().map_err(TaskError::pty_creation_error)?;
-        let (pty_read, pty_write) = pty
-            .into_split()
-            .map_err(TaskError::pty_creation_error)
-            .inspect_err(|e| warn!("Error splitting pty: {e}"))?;
-
         let info = Arc::new(info);
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
         let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
 
-        let child_process_exit_future = Box::pin({
-            let mut on_exit_internal_receiver = sender.exit_tx.subscribe();
-            async move {
-                let _ = on_exit_internal_receiver.changed().await;
-            }
-        });
-        let pty_reader = PtyReader::new(
-            pty_read,
-            child_pty
-                .try_clone()
-                .map_err(TaskError::pty_creation_error)?,
-            child_process_exit_future,
-        );
-
         let (read_guard_tx, read_guard_rx) = watch::channel(None);
 
+        let mut child = Self::spawn_child_process(&info)
+            .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
+
+        let pid = child.id().expect("pid");
+        info!(pid, "Spawned a process");
+
+        let stdout = child.stdout.take().expect("Child should have stdout");
+        let stderr = child.stderr.take().expect("Child should have stderr");
+        let stdin = child.stdin.take().expect("Child should have stdin");
+
         let events_stream = sender.events_tx.subscribe();
+        let (line_stream_tx, line_stream_rx) = mpsc::channel(Self::OUTPUT_LINE_CHANNEL_SIZE);
         Self::spawn_output_reading(
             &internal_tasks,
+            stdout,
+            stderr,
+            line_stream_tx,
+            span.clone(),
+        );
+
+        Self::spawn_output_sending(
+            &internal_tasks,
+            line_stream_rx,
             read_guard_rx,
-            pty_reader,
             sender.exit_tx.subscribe(),
             sender.events_tx,
             output_buffer.clone(),
             span.clone(),
         );
 
-        let child = Self::spawn_child_process(&info, child_pty)
-            .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
-        let pid = child.id().expect("pid");
-        info!(pid, "Spawned a process");
         let exit_rx = sender.exit_tx.subscribe();
         Self::spawn_waiting_for_exit(
             &internal_tasks,
@@ -115,8 +113,8 @@ impl Task {
 
         let task = Self {
             info,
-            stdin: tokio::sync::Mutex::new(pty_write),
             pid,
+            stdin: tokio::sync::Mutex::new(stdin),
             exit_rx,
             internal_tasks,
             output_buffer,
@@ -134,12 +132,9 @@ impl Task {
         if self.has_exited() {
             Err(TaskError::AlreadyExited)
         } else {
-            self.stdin
-                .lock()
-                .await
-                .write_all(msg)
-                .await
-                .map_err(TaskError::write_error)
+            let mut stdin = self.stdin.lock().await;
+            stdin.write_all(msg).await.map_err(TaskError::write_error)?;
+            stdin.flush().await.map_err(TaskError::write_error)
         }
     }
 
@@ -157,7 +152,7 @@ impl Task {
         let pid: rustix::process::RawPid =
             self.pid.try_into().map_err(TaskError::send_signal_error)?;
         let pid = rustix::process::Pid::from_raw(pid).expect("Pid should be valid here");
-        rustix::process::kill_process(pid, signal).map_err(|e| {
+        rustix::process::kill_process_group(pid, signal).map_err(|e| {
             if e == rustix::io::Errno::SRCH {
                 TaskError::AlreadyExited
             } else {
@@ -194,30 +189,17 @@ impl Task {
         }
     }
 
-    fn spawn_child_process(info: &TaskInfo, child_pty: PtyChild) -> Result<Child, TaskError> {
+    fn spawn_child_process(info: &TaskInfo) -> Result<Child, TaskError> {
         // Using unsafe because pre_exec() is not safe since it is running in a process after fork
         let child = unsafe {
             Command::new(&info.executable)
                 .args(&info.args)
-                .stdin(
-                    child_pty
-                        .try_clone()
-                        .map_err(TaskError::pty_creation_error)?,
-                )
-                .stdout(
-                    child_pty
-                        .try_clone()
-                        .map_err(TaskError::pty_creation_error)?,
-                )
-                .stderr(
-                    child_pty
-                        .try_clone()
-                        .map_err(TaskError::pty_creation_error)?,
-                )
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .stdin(Stdio::piped())
                 .current_dir(&info.working_dir)
                 .pre_exec(move || {
                     rustix::process::setsid()?;
-                    rustix::process::ioctl_tiocsctty(&child_pty)?;
                     Ok(())
                 })
                 .spawn()
@@ -228,33 +210,48 @@ impl Task {
 
     fn spawn_output_reading(
         internal_tasks: &WrappedTaskTracker,
+        stdout: ChildStdout,
+        stderr: ChildStderr,
+        line_stream_tx: mpsc::Sender<String>,
+        span: Span,
+    ) {
+        internal_tasks
+            .spawn({
+                let tx = line_stream_tx.clone();
+                async move {
+                    Self::read_loop(stdout, tx).await;
+                }
+                .instrument(span.clone())
+            })
+            .expect("Internal tasks should not be joined yet");
+        internal_tasks
+            .spawn(
+                {
+                    async move {
+                        Self::read_loop(stderr, line_stream_tx).await;
+                    }
+                }
+                .instrument(span),
+            )
+            .expect("Internal tasks should not be joined yet");
+    }
+
+    fn spawn_output_sending(
+        internal_tasks: &WrappedTaskTracker,
+        mut line_stream_rx: mpsc::Receiver<String>,
         mut read_guard_rx: watch::Receiver<Option<()>>,
-        pty_reader: PtyReader,
         mut on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
         events_tx: broadcast::Sender<TaskEvent>,
         output_buffer: Arc<OutputBuffer>,
         span: Span,
     ) {
         internal_tasks
-            .spawn({
+            .spawn(
                 async move {
                     let _ = read_guard_rx.changed().await;
-                    let mut stdout = BufReader::new(pty_reader);
-                    loop {
-                        let mut buf = String::new();
-                        let read_bytes = stdout.read_line(&mut buf).await;
-                        match read_bytes {
-                            Ok(0) => {
-                                // EOF
-                                break;
-                            }
-                            Ok(_) => {}
-                            Err(e) => {
-                                warn!("Error reading output for the task: {e}");
-                                break;
-                            }
-                        };
-                        let line = Arc::new(buf);
+
+                    while let Some(line) = line_stream_rx.recv().await {
+                        let line = Arc::new(line);
                         output_buffer.insert_line(line.clone());
                         if let Err(e) = events_tx.send(TaskEvent::Output(line)) {
                             warn!("Error sending output line to subscribers: {e}");
@@ -270,9 +267,32 @@ impl Task {
                             .expect("One receiver in events should be alive");
                     }
                 }
-                .instrument(span)
-            })
-            .expect("Internal tasks should not be joined yet");
+                .instrument(span),
+            )
+            .expect("Internal task should not be joined yet");
+    }
+
+    async fn read_loop<R: AsyncRead + Unpin>(stream: R, sender: mpsc::Sender<String>) {
+        let mut stream = BufReader::new(stream);
+        loop {
+            // TODO: switch to bytes
+            // let mut buf = Vec::new();
+            // let read_bytes = stream.read_until(b'\n', &mut buf).await;
+            let mut buf = String::new();
+            match stream.read_line(&mut buf).await {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    sender
+                        .send(buf)
+                        .await
+                        .expect("Sending should be always fine");
+                }
+                Err(e) => {
+                    warn!("Error reading output: {e}");
+                    break;
+                }
+            };
+        }
     }
 
     fn spawn_waiting_for_exit(
@@ -407,7 +427,7 @@ mod tests {
         task.join().await;
         let events = collect_events(events);
         assert_eq!(events.len(), 2);
-        assert_matches!(&events[0], TaskEvent::Output(o) if o.as_str() == format!("{msg}\r\n"));
+        assert_matches!(&events[0], TaskEvent::Output(o) if o.as_str() == format!("{msg}\n"));
         assert_matches!(events[1], TaskEvent::Exit(e) if e.code().unwrap() == 0);
     }
 
@@ -426,16 +446,22 @@ mod tests {
 
     #[tokio::test]
     async fn write_to_stdin_success() {
-        let (task, _) = make_task("cat", &[], current_dir().unwrap()).unwrap();
+        let msgs = ["one", "two\n", "three"];
+        let total_bytes: usize = msgs.iter().map(|m| m.len()).sum();
+        let (task, _) = make_task(
+            "head",
+            &["-c", &total_bytes.to_string()],
+            current_dir().unwrap(),
+        )
+        .unwrap();
         let events = task.events_stream().unwrap();
-        for m in ["one", "two\n", "three"] {
+        for m in msgs {
             task.write_to_stdin(m.as_bytes()).await.unwrap();
         }
-        task.write_to_stdin(b"\x04\x04").await.unwrap(); // flush "three" then EOF
         task.join().await;
         let captured_output = collect_output(events);
         assert_eq!(captured_output.len(), 2);
-        assert_eq!(captured_output[0].as_str(), "onetwo\r\n");
+        assert_eq!(captured_output[0].as_str(), "onetwo\n");
         assert_eq!(captured_output[1].as_str(), "three");
     }
 
@@ -508,7 +534,7 @@ mod tests {
                 .into_iter()
                 .map(|s| String::clone(s.as_ref()))
                 .collect::<Vec<_>>(),
-            ["line1\r\n", "line2"]
+            ["line1\n", "line2"]
         );
     }
 
@@ -577,6 +603,21 @@ mod tests {
         let err = task.send_signal(rustix::process::Signal::TERM).unwrap_err();
         assert!(matches!(err, TaskError::AlreadyExited));
         task.join().await;
+    }
+
+    #[tokio::test]
+    async fn send_signal_kills_process_group() {
+        let (task, _) = make_task("sh", &["-c", "cat"], current_dir().unwrap()).unwrap();
+        tokio::task::yield_now().await;
+        task.send_signal(rustix::process::Signal::TERM).unwrap();
+        let exit_status = tokio::time::timeout(Duration::from_secs(1), task.join())
+            .await
+            .unwrap()
+            .exit_status;
+        assert_eq!(
+            exit_status.signal().unwrap(),
+            rustix::process::Signal::TERM.as_raw()
+        );
     }
 
     #[tokio::test]

@@ -59,7 +59,7 @@ async fn shutdown_sends_sigkill_after_ignoring_sigterm() {
     // Synchronize with the shell by waiting for the output
     let notification: TaskOutputNotification = client.read_struct().await.unwrap();
     assert_eq!(notification.params.task_id, task_id);
-    assert_eq!(notification.params.line, "ready\r\n");
+    assert_eq!(notification.params.line, "ready\n");
 
     tokio::time::timeout(Duration::from_secs(1), ctx.shutdown())
         .await
