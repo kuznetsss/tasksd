@@ -35,7 +35,7 @@ impl Subscriber {
         loop {
             match self.events.recv().await {
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    if let Err(e) = self.on_lag(n.try_into().unwrap()).await {
+                    if let Err(e) = self.on_lag(n as usize).await {
                         warn!("Error sending missed_output: {e}");
                         return;
                     }
@@ -61,6 +61,13 @@ impl Subscriber {
     }
 
     async fn on_output(&mut self, line: std::sync::Arc<OutputLine>) -> Result<(), TransportError> {
+        let expected = self.last_seen_line.map(|l| l + 1).unwrap_or(0);
+        debug_assert_eq!(
+            line.line_number, expected,
+            "output line numbers must be contiguous with lag accounting;
+            subscriber assumed to start at line 0"
+        );
+
         self.last_seen_line = Some(line.line_number);
         if !self.subscribe_to_output {
             return Ok(());
@@ -72,20 +79,27 @@ impl Subscriber {
     }
 
     async fn on_lag(&mut self, number_of_missed_lines: usize) -> Result<(), TransportError> {
+        let prev_last_seen_line = self.last_seen_line;
+
+        debug_assert_ne!(
+            number_of_missed_lines, 0,
+            "tokio should never provide Lagged(0)"
+        );
+        self.last_seen_line = self
+            .last_seen_line
+            .map(|l| l + number_of_missed_lines)
+            .or(Some(number_of_missed_lines - 1));
+
         if !self.subscribe_to_output {
             return Ok(());
         }
         let notification: Notification = NotificationBody::task_missed_output(
             self.task_id,
-            self.last_seen_line.map(|l| l + 1).unwrap_or(0),
+            prev_last_seen_line.map(|l| l + 1).unwrap_or(0),
             number_of_missed_lines,
         )
         .into();
 
-        self.last_seen_line = self
-            .last_seen_line
-            .map(|l| l + number_of_missed_lines)
-            .or(Some(number_of_missed_lines - 1));
         self.connection_writer
             .write(&notification.to_json_string())
             .await
