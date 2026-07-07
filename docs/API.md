@@ -119,16 +119,17 @@ Notifications are sent from the server to the client and have no `id`.
 
 Emitted for each line of output a subscribed task produces.
 
-| Field     | Type    | Description                    |
-| --------- | ------- | ------------------------------ |
-| `task_id` | integer | Task that produced the output. |
-| `line`    | string  | A single line of output.       |
+| Field         | Type    | Description                                          |
+| ------------- | ------- | ---------------------------------------------------- |
+| `task_id`     | integer | Task that produced the output.                       |
+| `line`        | string  | A single line of output.                             |
+| `line_number` | integer | Zero-based index of the line in the task's output.   |
 
 ```json
 {
   "jsonrpc": "2.0",
   "method": "task.output",
-  "params": { "task_id": 1, "line": "total 0" }
+  "params": { "task_id": 1, "line": "total 0", "line_number": 0 }
 }
 ```
 

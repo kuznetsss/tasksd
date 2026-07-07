@@ -3,7 +3,7 @@ use tracing::warn;
 
 use crate::{
     api::{Notification, NotificationBody},
-    tasks::{TaskEvent, TaskEventsStream, TaskId},
+    tasks::{OutputLine, TaskEvent, TaskEventsStream, TaskId},
     transport::{ConnectionWriter, TransportError},
 };
 
@@ -56,7 +56,7 @@ impl Subscriber {
         }
     }
 
-    async fn on_output(&mut self, line: std::sync::Arc<String>) -> Result<(), TransportError> {
+    async fn on_output(&mut self, line: std::sync::Arc<OutputLine>) -> Result<(), TransportError> {
         if !self.subscribe_to_output {
             return Ok(());
         }
