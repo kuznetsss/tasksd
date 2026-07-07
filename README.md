@@ -63,7 +63,7 @@ API is documented in [docs/API.md](docs/API.md).
     - [x] In the current task piped (tokio's native stdout/stderr) outputs instead of pty
         - [x] Send signal to the process group instead of single process to affect children of the task
 - [x] Add line number to output notification
-- [ ] Add notifications about missed output
+- [x] Add notifications about missed output
 - [ ] Query task output buffer for line range
 - [ ] Subscription control (subscribe on output/exit, unsubscribe)
 - [ ] Shutdown API method

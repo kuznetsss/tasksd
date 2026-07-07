@@ -36,6 +36,10 @@ impl From<NotificationBody> for Notification {
 pub enum NotificationBody {
     #[serde(rename = "task.output")]
     TaskOutput(TaskOutputParams),
+
+    #[serde(rename = "task.missed_output")]
+    TaskMissedOutput(TaskMissedOutputParams),
+
     #[serde(rename = "task.exit")]
     TaskExit(TaskExitParams),
 }
@@ -45,6 +49,14 @@ impl NotificationBody {
         Self::TaskOutput(TaskOutputParams {
             task_id,
             content: line,
+        })
+    }
+
+    pub fn task_missed_output(task_id: TaskId, from_line: usize, missed: usize) -> Self {
+        Self::TaskMissedOutput(TaskMissedOutputParams {
+            task_id,
+            from_line,
+            missed,
         })
     }
 
@@ -71,6 +83,13 @@ pub struct TaskExitParams {
     signal: Option<i32>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct TaskMissedOutputParams {
+    task_id: TaskId,
+    from_line: usize,
+    missed: usize,
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -79,25 +98,39 @@ mod tests {
     #[test]
     fn task_output_serialization() {
         let task_id = TaskId(123);
-        //let line_number = 456;
         let line = "some_line";
         let line_number = 456;
         let notification: Notification = NotificationBody::task_output(
             task_id,
-            //line_number,
             Arc::new(OutputLine {
                 content: line.to_string(),
                 line_number,
             }),
         )
         .into();
-        let json_str = serde_json::to_string(&notification).unwrap();
+        let json_str = notification.to_json_string();
         assert_eq!(
             json_str,
             format!(
                 r#"{{"jsonrpc":"2.0","method":"task.output","params":{{"task_id":{task_id},"line":"{line}","line_number":{line_number}}}}}"#
             )
         )
+    }
+
+    #[test]
+    fn task_missed_output_serialization() {
+        let task_id = TaskId(123);
+        let from_line = 456;
+        let number_of_missed_lines = 789;
+        let notification: Notification =
+            NotificationBody::task_missed_output(task_id, from_line, number_of_missed_lines).into();
+        let json_str = notification.to_json_string();
+        assert_eq!(
+            json_str,
+            format!(
+                r#"{{"jsonrpc":"2.0","method":"task.missed_output","params":{{"task_id":{task_id},"from_line":{from_line},"missed":{number_of_missed_lines}}}}}"#
+            )
+        );
     }
 
     #[test]

@@ -133,6 +133,27 @@ Emitted for each line of output a subscribed task produces.
 }
 ```
 
+### `task.missed_output`
+
+Emitted when a subscribed task produces output faster than the client consumes
+it and some lines are dropped. It reports the gap so the client knows its view
+of the output is incomplete. Like `task.output`, it is only sent when the task
+was started with `subscribe_to_output` set to `true`.
+
+| Field       | Type    | Description                                                    |
+| ----------- | ------- | ------------------------------------------------------------- |
+| `task_id`   | integer | Task whose output was dropped.                                |
+| `from_line` | integer | Zero-based index of the first dropped line.                   |
+| `missed`    | integer | Number of consecutive lines dropped starting at `from_line`.  |
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "task.missed_output",
+  "params": { "task_id": 1, "from_line": 512, "missed": 128 }
+}
+```
+
 ### `task.exit`
 
 Emitted once when a task terminates.
