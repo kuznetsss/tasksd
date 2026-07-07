@@ -1,10 +1,16 @@
 use std::{process::ExitStatus, sync::Arc};
 
+use serde::Serialize;
 use tokio::sync::{broadcast, watch};
 
-use crate::tasks::OutputLine;
-
 pub const CHANNEL_CAPACITY: usize = 16;
+
+#[derive(Debug, PartialEq, Clone, Serialize)]
+pub struct OutputLine {
+    #[serde(rename = "line")]
+    pub content: String,
+    pub line_number: usize,
+}
 
 #[derive(Debug, Clone)]
 pub enum TaskEvent {
@@ -13,18 +19,6 @@ pub enum TaskEvent {
 }
 
 pub type TaskEventsStream = broadcast::Receiver<TaskEvent>;
-
-impl From<OutputLine> for TaskEvent {
-    fn from(value: OutputLine) -> Self {
-        TaskEvent::Output(Arc::new(value))
-    }
-}
-
-impl From<ExitStatus> for TaskEvent {
-    fn from(value: ExitStatus) -> Self {
-        TaskEvent::Exit(value)
-    }
-}
 
 #[derive(Debug)]
 pub(in crate::tasks) struct TaskSender {

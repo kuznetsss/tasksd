@@ -437,6 +437,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn output_lines_are_contiguous() {
+        let (task, gate) = make_task("echo", &["line1\nline2"], current_dir().unwrap()).unwrap();
+        let events = task.events_stream().unwrap();
+        drop(gate);
+        task.join().await;
+        let output_lines = collect_output(events);
+        assert_eq!(output_lines.len(), 2);
+        assert_eq!(output_lines[0].line_number, 0);
+        assert_eq!(output_lines[1].line_number, 1);
+    }
+
+    #[tokio::test]
     async fn info() {
         let executable = "ls";
         let args = ["-la"];

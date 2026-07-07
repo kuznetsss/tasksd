@@ -126,6 +126,30 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
+    fn insert_starting_from_non_zero_panics() {
+        let ob = OutputBuffer::new(2);
+        ob.insert_line(Arc::new(OutputLine {
+            content: "".to_string(),
+            line_number: 1,
+        }));
+    }
+
+    #[test]
+    #[should_panic]
+    fn insert_non_contiguous_lines_panics() {
+        let ob = OutputBuffer::new(2);
+        ob.insert_line(Arc::new(OutputLine {
+            content: "".to_string(),
+            line_number: 0,
+        }));
+        ob.insert_line(Arc::new(OutputLine {
+            content: "".to_string(),
+            line_number: 2,
+        }));
+    }
+
+    #[test]
     fn line_range() {
         let ob = OutputBuffer::new(10);
         for i in 0..3 {
