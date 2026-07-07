@@ -10,7 +10,7 @@ mod task;
 mod task_error;
 mod task_manager;
 
-pub use sender::{OutputLine, TaskEvent, TaskEventsStream, CHANNEL_CAPACITY};
+pub use sender::{CHANNEL_CAPACITY, OutputLine, TaskEvent, TaskEventsStream};
 pub use task::TaskReadingGate;
 pub use task_error::TaskError;
 pub use task_manager::{TaskId, TaskManager};
