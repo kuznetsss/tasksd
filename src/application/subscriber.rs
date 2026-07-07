@@ -12,6 +12,7 @@ pub(in crate::application) struct Subscriber {
     task_id: TaskId,
     subscribe_to_output: bool,
     events: TaskEventsStream,
+    last_seen_line: Option<usize>,
 }
 
 impl Subscriber {
@@ -26,6 +27,7 @@ impl Subscriber {
             task_id,
             subscribe_to_output,
             events,
+            last_seen_line: None,
         }
     }
 
@@ -33,8 +35,10 @@ impl Subscriber {
         loop {
             match self.events.recv().await {
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("Output receiver is too slow. Have to skip {n} lines");
-                    continue;
+                    if let Err(e) = self.on_lag(n.try_into().unwrap()).await {
+                        warn!("Error sending missed_output: {e}");
+                        return;
+                    }
                 }
                 Err(broadcast::error::RecvError::Closed) => {
                     panic!(
@@ -57,10 +61,31 @@ impl Subscriber {
     }
 
     async fn on_output(&mut self, line: std::sync::Arc<OutputLine>) -> Result<(), TransportError> {
+        self.last_seen_line = Some(line.line_number);
         if !self.subscribe_to_output {
             return Ok(());
         }
         let notification: Notification = NotificationBody::task_output(self.task_id, line).into();
+        self.connection_writer
+            .write(&notification.to_json_string())
+            .await
+    }
+
+    async fn on_lag(&mut self, number_of_missed_lines: usize) -> Result<(), TransportError> {
+        if !self.subscribe_to_output {
+            return Ok(());
+        }
+        let notification: Notification = NotificationBody::task_missed_output(
+            self.task_id,
+            self.last_seen_line.map(|l| l + 1).unwrap_or(0),
+            number_of_missed_lines,
+        )
+        .into();
+
+        self.last_seen_line = self
+            .last_seen_line
+            .map(|l| l + number_of_missed_lines)
+            .or(Some(number_of_missed_lines - 1));
         self.connection_writer
             .write(&notification.to_json_string())
             .await

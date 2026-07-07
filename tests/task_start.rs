@@ -5,11 +5,12 @@ use std::{collections::HashMap, io::Write};
 use rustix::path::Arg;
 use serde::Deserialize;
 use serde_json::json;
+use tasksd::tasks::CHANNEL_CAPACITY;
 
 use crate::common::{
     api::{
-        ErrorResponse, TaskExitNotification, TaskOutputNotification, TaskStartResponse,
-        TaskStartResult,
+        ErrorResponse, TaskExitNotification, TaskMissedOutputNotification, TaskOutputNotification,
+        TaskStartResponse, TaskStartResult,
     },
     running_app,
 };
@@ -19,6 +20,7 @@ use crate::common::{
 enum ServerEvent {
     Started(TaskStartResponse),
     Output(TaskOutputNotification),
+    MissedOutput(TaskMissedOutputNotification),
     Exit(TaskExitNotification),
 }
 
@@ -26,6 +28,7 @@ enum ServerEvent {
 enum EventKind {
     Started,
     Output,
+    MissedOutput,
     Exit,
 }
 
@@ -34,6 +37,7 @@ impl ServerEvent {
         match self {
             ServerEvent::Started(t) => t.result.task_id,
             ServerEvent::Output(t) => t.params.task_id,
+            ServerEvent::MissedOutput(t) => t.params.task_id,
             ServerEvent::Exit(t) => t.params.task_id,
         }
     }
@@ -42,6 +46,7 @@ impl ServerEvent {
         match self {
             ServerEvent::Started(_) => EventKind::Started,
             ServerEvent::Output(_) => EventKind::Output,
+            ServerEvent::MissedOutput(_) => EventKind::MissedOutput,
             ServerEvent::Exit(_) => EventKind::Exit,
         }
     }
@@ -68,10 +73,12 @@ async fn start_task_output_exit_notifications() {
     let line: TaskOutputNotification = client.read_struct().await.unwrap();
     assert_eq!(line.params.task_id, task_id);
     assert_eq!(line.params.line, "line 1\n");
+    assert_eq!(line.params.line_number, 0);
 
     let line: TaskOutputNotification = client.read_struct().await.unwrap();
     assert_eq!(line.params.task_id, task_id);
     assert_eq!(line.params.line, "line 2");
+    assert_eq!(line.params.line_number, 1);
 
     let exit: TaskExitNotification = client.read_struct().await.unwrap();
     assert_eq!(exit.params.task_id, task_id);
@@ -221,13 +228,13 @@ async fn start_task_failed() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn start_task_skipped_output() {
-    // tasks::senders::CHANNEL_CAPACITY = 16 so in case of output burst
-    // only the last 16 lines will be sent as a notification
+async fn start_task_missed_output() {
     let (ctx, mut client) = running_app().await;
 
     let mut tmp_file = tempfile::NamedTempFile::new().unwrap();
-    let data: String = (1..=32).map(|i| format!("line {i}\n")).collect();
+    let data: String = (0..CHANNEL_CAPACITY * 2)
+        .map(|i| format!("line {i}\n"))
+        .collect();
     tmp_file.write_all(data.as_bytes()).unwrap();
     tmp_file.flush().unwrap();
 
@@ -240,12 +247,12 @@ async fn start_task_skipped_output() {
     assert_eq!(response.id, client.last_id());
     let task_id = response.result.task_id;
 
-    let mut last_line_num = None;
+    let mut last_seen_line = None;
     loop {
         match client.read_struct::<ServerEvent>().await.unwrap() {
             ServerEvent::Output(o) => {
                 assert_eq!(o.params.task_id, task_id);
-                let line_num: i32 = o
+                let line_num: usize = o
                     .params
                     .line
                     .trim_end()
@@ -253,21 +260,54 @@ async fn start_task_skipped_output() {
                     .unwrap()
                     .parse()
                     .unwrap();
-                assert!((1..=32).contains(&line_num));
-                if let Some(last_line_num) = last_line_num {
-                    assert!(line_num > last_line_num);
-                }
-                last_line_num = Some(line_num);
+                assert_eq!(o.params.line_number, line_num);
+                let expected = last_seen_line.map(|l| l + 1).unwrap_or(0);
+                assert_eq!(expected, line_num);
+                last_seen_line = Some(line_num);
+            }
+            ServerEvent::MissedOutput(m) => {
+                assert_eq!(m.params.task_id, task_id);
+                let expected = last_seen_line.map(|l| l + 1).unwrap_or(0);
+                assert_eq!(expected, m.params.from_line);
+                last_seen_line = Some(m.params.from_line + m.params.missed - 1);
             }
             ServerEvent::Exit(e) => {
                 assert_eq!(e.params.task_id, task_id);
                 assert_eq!(e.params.exit_code, Some(0));
+                assert_eq!(last_seen_line, Some(CHANNEL_CAPACITY * 2 - 1));
                 break;
             }
             ServerEvent::Started(_) => panic!("Unexpected second start"),
         }
     }
-    assert_eq!(last_line_num, Some(32));
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_task_missed_output_no_output_subscription() {
+    let (ctx, mut client) = running_app().await;
+
+    let mut tmp_file = tempfile::NamedTempFile::new().unwrap();
+    let data: String = (0..CHANNEL_CAPACITY * 2)
+        .map(|i| format!("line {i}\n"))
+        .collect();
+    tmp_file.write_all(data.as_bytes()).unwrap();
+    tmp_file.flush().unwrap();
+
+    client
+        .task_start("cat", &[tmp_file.path().as_str().unwrap()], false)
+        .await
+        .unwrap();
+
+    let response: TaskStartResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+    let task_id = response.result.task_id;
+
+    let exit: TaskExitNotification = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+    assert_eq!(exit.params.task_id, task_id);
+    assert_eq!(exit.params.exit_code, Some(0));
 
     ctx.shutdown().await;
 }
