@@ -1,11 +1,11 @@
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use serde::Serialize;
 
 use crate::{
     api::common::{JsonRpcVersion, RequestId},
     application::ApplicationError,
-    tasks::{TaskError, TaskId},
+    tasks::{OutputLine, TaskError, TaskId},
 };
 
 #[derive(Debug, Serialize)]
@@ -128,8 +128,14 @@ impl From<TaskError> for ResponseBody {
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum ResponseResult {
-    StartTaskResult { task_id: TaskId },
+    StartTaskResult {
+        task_id: TaskId,
+    },
     SendSignalResult {},
+    GetOutputResult {
+        task_id: TaskId,
+        lines: Vec<Arc<OutputLine>>,
+    },
 }
 
 #[derive(Debug, Serialize)]

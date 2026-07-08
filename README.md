@@ -65,7 +65,9 @@ API is documented in [docs/API.md](docs/API.md).
 - [x] Add line number to output notification
 - [x] Add notifications about missed output
 - [ ] Query task output buffer for line range
+    - we should search in both finished and running tasks
 - [ ] Subscription control (subscribe on output/exit, unsubscribe)
+- [ ] Client hello and server hello messages
 - [ ] Shutdown API method
 - [ ] Broadcast shutdown notification to all connections
 - [ ] CI release improvements:

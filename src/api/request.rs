@@ -40,6 +40,7 @@ impl RequestRaw {
         match self.method.as_str() {
             "task.start" => self.parse_params(RequestBody::TaskStart),
             "task.send_signal" => self.parse_params(RequestBody::TaskSendSignal),
+            "task.get_output" => self.parse_params(RequestBody::TaskGetOutput),
             unknown => Err(ResponseError::method_not_found(unknown).into_response(Some(self.id))),
         }
     }
@@ -63,6 +64,7 @@ impl RequestRaw {
 pub enum RequestBody {
     TaskStart(TaskStartParams),
     TaskSendSignal(TaskSendSignalParams),
+    TaskGetOutput(TaskGetOutputParams),
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +91,14 @@ pub struct TaskSendSignalParams {
 
     #[serde(deserialize_with = "deserialize_signal")]
     pub signal: Signal,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskGetOutputParams {
+    pub task_id: TaskId,
+    pub from_line: usize,
+    pub lines_number: usize,
 }
 
 fn deserialize_signal<'de, D>(d: D) -> Result<Signal, D::Error>
@@ -227,6 +237,29 @@ mod tests {
 
         let err = serde_json::from_str::<TaskSendSignalParams>(&json.to_string()).unwrap_err();
         assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn get_output_deserialize() {
+        let json = json![{
+            "jsonrpc":"2.0",
+            "id": 123,
+            "method": "task.get_output",
+            "params":{
+                "task_id": 456,
+                "from_line": 789,
+                "lines_number": 324
+            }
+        }];
+
+        let parsed = Request::parse(&json.to_string()).unwrap();
+        assert_eq!(parsed.id, RequestId::Number(123));
+        let RequestBody::TaskGetOutput(params) = parsed.body else {
+            panic!("Invalid request body");
+        };
+        assert_eq!(params.task_id.0, 456);
+        assert_eq!(params.from_line, 789);
+        assert_eq!(params.lines_number, 324);
     }
 
     #[test]

@@ -55,7 +55,7 @@ impl RecentFinishedTasks {
 mod tests {
     use std::{env::current_dir, process::ExitStatus};
 
-    use crate::tasks::info::TaskInfo;
+    use crate::tasks::{info::TaskInfo, output_buffer::OutputBuffer};
 
     use super::*;
 
@@ -67,6 +67,7 @@ mod tests {
         };
         let ft = FinishedTask {
             info: Arc::new(info),
+            output_buffer: Arc::new(OutputBuffer::new(1)),
             exit_status: ExitStatus::default(),
         };
         (TaskId(id), Arc::new(ft))
