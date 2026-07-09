@@ -92,25 +92,17 @@ impl Handler {
     }
 
     fn get_output(&self, params: TaskGetOutputParams) -> Result<ResponseResult, ApplicationError> {
-        let line_range = params.from_line..(params.from_line + params.lines_number);
-        let lines = self
-            .task_manager
-            .get_running_task(params.task_id)
-            .map({
-                let line_range = line_range.clone();
-                |t| t.output_buffer().get_line_range(line_range)
-            })
-            .or_else(|| {
-                self.task_manager
-                    .get_finished_task(params.task_id)
-                    .map(|t| t.output_buffer.get_line_range(line_range))
-            });
-        match lines {
-            Some(lines) => Ok(ResponseResult::GetOutputResult {
-                task_id: params.task_id,
-                lines,
-            }),
-            None => Err(TaskError::NotFound.into()),
-        }
+        let line_range = params.from_line..params.from_line.saturating_add(params.lines_number);
+        let lines = if let Some(task) = self.task_manager.get_running_task(params.task_id) {
+            task.output_buffer().get_line_range(line_range)
+        } else if let Some(task) = self.task_manager.get_finished_task(params.task_id) {
+            task.output_buffer.get_line_range(line_range)
+        } else {
+            return Err(TaskError::NotFound.into());
+        };
+        Ok(ResponseResult::GetOutputResult {
+            task_id: params.task_id,
+            lines,
+        })
     }
 }

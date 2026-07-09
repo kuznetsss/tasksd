@@ -64,8 +64,7 @@ API is documented in [docs/API.md](docs/API.md).
         - [x] Send signal to the process group instead of single process to affect children of the task
 - [x] Add line number to output notification
 - [x] Add notifications about missed output
-- [ ] Query task output buffer for line range
-    - we should search in both finished and running tasks
+- [x] Query task output buffer for line range
 - [ ] Subscription control (subscribe on output/exit, unsubscribe)
 - [ ] Client hello and server hello messages
 - [ ] Shutdown API method
