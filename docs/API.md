@@ -109,6 +109,69 @@ An empty object `{}`.
 { "jsonrpc": "2.0", "id": 2, "result": {} }
 ```
 
+### `task.get_output`
+
+Query a range of buffered output lines for a task. Works for both running and
+finished tasks, as long as the task still exists on the server.
+
+The server keeps only the most recent lines of each task's output in a bounded
+buffer, so older lines may no longer be available. The returned range is the
+half-open interval `[from_line, from_line + lines_number)`, intersected with the
+lines currently held in the buffer. Requesting a range that lies entirely
+outside the buffer (or `lines_number` of `0`) yields an empty `lines` array
+rather than an error.
+
+**Params**
+
+| Field          | Type    | Required | Description                                          |
+| -------------- | ------- | -------- | ---------------------------------------------------- |
+| `task_id`      | integer | yes      | Id of the task to read output from.                  |
+| `from_line`    | integer | yes      | Zero-based index of the first line to return.        |
+| `lines_number` | integer | yes      | Maximum number of lines to return from `from_line`.  |
+
+**Result**
+
+| Field     | Type      | Description                                  |
+| --------- | --------- | -------------------------------------------- |
+| `task_id` | integer   | Id of the queried task.                      |
+| `lines`   | object[]  | Output lines in the requested range.         |
+
+Each entry in `lines` has the same shape as a `task.output` notification's
+payload:
+
+| Field         | Type    | Description                                        |
+| ------------- | ------- | -------------------------------------------------- |
+| `line`        | string  | A single line of output.                           |
+| `line_number` | integer | Zero-based index of the line in the task's output. |
+
+Requesting a `task_id` that does not exist is rejected with
+[`7` Task not found](#task-errors).
+
+**Example**
+
+```json
+// → request
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "task.get_output",
+  "params": { "task_id": 1, "from_line": 1, "lines_number": 2 }
+}
+
+// ← response
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "task_id": 1,
+    "lines": [
+      { "line": "line 2\n", "line_number": 1 },
+      { "line": "line 3\n", "line_number": 2 }
+    ]
+  }
+}
+```
+
 ---
 
 ## Notifications

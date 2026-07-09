@@ -22,6 +22,24 @@ pub struct TaskSendSignalResponse {
 pub struct TaskSendSignalResponseResult {}
 
 #[derive(Debug, Deserialize)]
+pub struct TaskGetOutputResponse {
+    pub id: i64,
+    pub result: TaskGetOutputResponseParams,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OutputLine {
+    pub line: String,
+    pub line_number: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaskGetOutputResponseParams {
+    pub task_id: usize,
+    pub lines: Vec<OutputLine>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TaskOutputNotification {
     pub method: MustBe!("task.output"),
     pub params: TaskOutputNotificationParams,

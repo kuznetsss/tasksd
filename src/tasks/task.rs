@@ -185,6 +185,7 @@ impl Task {
         self.internal_tasks.join().await;
         FinishedTask {
             info: self.info.clone(),
+            output_buffer: self.output_buffer.clone(),
             exit_status: self.exit_status().await,
         }
     }
@@ -639,15 +640,20 @@ mod tests {
 
     #[tokio::test]
     async fn join_result() {
-        let executable = "ls";
-        let args = ["-la"];
-        let dir = current_dir().unwrap().join("../");
+        let executable = "echo";
+        let args = ["hello"];
+        let dir = current_dir().unwrap();
         let (task, _) = make_task(executable, &args, &dir).unwrap();
         let finished_task = task.join().await;
         assert_eq!(finished_task.info.executable, executable);
         assert_eq!(finished_task.info.args, &args);
         assert_eq!(finished_task.info.working_dir, dir);
         assert_eq!(finished_task.exit_status.code().unwrap(), 0);
+        assert_eq!(finished_task.output_buffer.line_range(), 0..1);
+        assert_eq!(
+            finished_task.output_buffer.get_line(0).unwrap().content,
+            "hello\n"
+        );
     }
 
     #[tokio::test]

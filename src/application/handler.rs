@@ -1,7 +1,10 @@
 use tracing::warn;
 
 use crate::{
-    api::{Request, RequestBody, Response, ResponseResult, TaskSendSignalParams, TaskStartParams},
+    api::{
+        Request, RequestBody, Response, ResponseResult, TaskGetOutputParams, TaskSendSignalParams,
+        TaskStartParams,
+    },
     application::{error::ApplicationError, subscriber::Subscriber},
     tasks::{TaskError, TaskManager, TaskReadingGate},
     transport::ConnectionWriter,
@@ -37,6 +40,7 @@ impl Handler {
             RequestBody::TaskSendSignal(params) => {
                 self.send_signal(params).map(|r| (r.into(), None))
             }
+            RequestBody::TaskGetOutput(params) => self.get_output(params).map(|r| (r.into(), None)),
         }
         .unwrap_or_else(|e| (e.into(), None));
 
@@ -78,18 +82,27 @@ impl Handler {
         &self,
         params: TaskSendSignalParams,
     ) -> Result<ResponseResult, ApplicationError> {
-        if let Some(task) = self.task_manager.get_task(params.task_id) {
-            Ok(task
-                .send_signal(params.signal)
-                .map(|_| ResponseResult::SendSignalResult {})?)
-        } else if self
-            .task_manager
-            .get_finished_task(params.task_id)
-            .is_some()
-        {
-            Err(TaskError::AlreadyExited.into())
+        self.task_manager
+            .get_task(params.task_id)
+            .and_then(|task| {
+                task.send_signal(params.signal)
+                    .map(|_| ResponseResult::SendSignalResult {})
+            })
+            .map_err(Into::into)
+    }
+
+    fn get_output(&self, params: TaskGetOutputParams) -> Result<ResponseResult, ApplicationError> {
+        let line_range = params.from_line..params.from_line.saturating_add(params.lines_number);
+        let lines = if let Some(task) = self.task_manager.get_running_task(params.task_id) {
+            task.output_buffer().get_line_range(line_range)
+        } else if let Some(task) = self.task_manager.get_finished_task(params.task_id) {
+            task.output_buffer.get_line_range(line_range)
         } else {
-            Err(TaskError::NotFound.into())
-        }
+            return Err(TaskError::NotFound.into());
+        };
+        Ok(ResponseResult::GetOutputResult {
+            task_id: params.task_id,
+            lines,
+        })
     }
 }

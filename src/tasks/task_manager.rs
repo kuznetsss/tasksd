@@ -75,7 +75,18 @@ impl TaskManager {
         Ok((task, task_id, reading_gate))
     }
 
-    pub fn get_task(&self, id: TaskId) -> Option<Arc<Task>> {
+    pub fn get_task(&self, id: TaskId) -> Result<Arc<Task>, TaskError> {
+        if let Some(t) = self.get_running_task(id) {
+            return Ok(t);
+        }
+        if self.finished_tasks.read().unwrap().get(id).is_some() {
+            Err(TaskError::AlreadyExited)
+        } else {
+            Err(TaskError::NotFound)
+        }
+    }
+
+    pub fn get_running_task(&self, id: TaskId) -> Option<Arc<Task>> {
         self.tasks
             .read()
             .expect("RwLock is poisoned")
@@ -245,11 +256,13 @@ mod tests {
         let executable = "cat";
         let (task, task_id, _) = tm.spawn(executable, &[], None).unwrap();
 
+        assert!(Arc::ptr_eq(&task, &tm.get_running_task(task_id).unwrap()));
         assert!(Arc::ptr_eq(&task, &tm.get_task(task_id).unwrap()));
         assert!(tm.get_finished_task(task_id).is_none());
 
         let non_existing_id = TaskId(task_id.0 + 123);
-        assert!(tm.get_task(non_existing_id).is_none());
+        assert_matches!(tm.get_task(non_existing_id), Err(TaskError::NotFound));
+        assert!(tm.get_running_task(non_existing_id).is_none());
         assert!(tm.get_finished_task(non_existing_id).is_none());
 
         let signal = Signal::TERM;
@@ -258,13 +271,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(tm.get_task(task_id).is_none());
+        assert_matches!(tm.get_task(task_id), Err(TaskError::AlreadyExited));
+        assert!(tm.get_running_task(task_id).is_none());
         let finished_task = tm.get_finished_task(task_id).unwrap();
         assert_eq!(&finished_task.info.executable, executable);
         assert_eq!(&finished_task.info.working_dir, &current_dir().unwrap());
         assert_eq!(finished_task.exit_status.signal().unwrap(), signal.as_raw());
 
-        assert!(tm.get_task(non_existing_id).is_none());
+        assert_matches!(tm.get_task(non_existing_id), Err(TaskError::NotFound));
         assert!(tm.get_finished_task(non_existing_id).is_none());
     }
 
