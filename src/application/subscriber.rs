@@ -1,3 +1,8 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
 use tokio::sync::broadcast;
 use tracing::warn;
 
@@ -10,7 +15,7 @@ use crate::{
 pub(in crate::application) struct Subscriber {
     connection_writer: ConnectionWriter,
     task_id: TaskId,
-    subscribe_to_output: bool,
+    subscribe_to_output: Arc<AtomicBool>,
     events: TaskEventsStream,
     last_seen_line: Option<usize>,
 }
@@ -25,9 +30,15 @@ impl Subscriber {
         Self {
             connection_writer,
             task_id,
-            subscribe_to_output,
+            subscribe_to_output: Arc::new(AtomicBool::new(subscribe_to_output)),
             events,
             last_seen_line: None,
+        }
+    }
+
+    pub fn handle(&self) -> SubscriberHandle {
+        SubscriberHandle {
+            subscribe_to_output: self.subscribe_to_output.clone(),
         }
     }
 
@@ -69,7 +80,7 @@ impl Subscriber {
         );
 
         self.last_seen_line = Some(line.line_number);
-        if !self.subscribe_to_output {
+        if !self.subscribe_to_output.load(Ordering::Relaxed) {
             return Ok(());
         }
         let notification: Notification = NotificationBody::task_output(self.task_id, line).into();
@@ -90,7 +101,7 @@ impl Subscriber {
             .map(|l| l + number_of_missed_lines)
             .or(Some(number_of_missed_lines - 1));
 
-        if !self.subscribe_to_output {
+        if !self.subscribe_to_output.load(Ordering::Relaxed) {
             return Ok(());
         }
         let notification: Notification = NotificationBody::task_missed_output(
@@ -114,5 +125,16 @@ impl Subscriber {
         {
             warn!("Error writing on_exit notification: {e}");
         }
+    }
+
+}
+
+pub(in crate::application) struct SubscriberHandle {
+    subscribe_to_output: Arc<AtomicBool>,
+}
+
+impl SubscriberHandle {
+    pub(in crate::application) fn set_subscribe_to_output(&self, v: bool) {
+        self.subscribe_to_output.store(v, Ordering::Relaxed);
     }
 }

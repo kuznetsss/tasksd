@@ -3,12 +3,14 @@ use tracing::warn;
 use crate::{
     api::{
         Request, RequestBody, Response, ResponseResult, TaskGetOutputParams, TaskSendSignalParams,
-        TaskStartParams,
+        TaskStartParams, TaskSubscribeParams,
     },
-    application::{error::ApplicationError, subscriber::Subscriber},
+    application::{
+        error::ApplicationError, subscriber::Subscriber,
+        subscription_registry::SubscriptionRegistry,
+    },
     tasks::{TaskError, TaskManager, TaskReadingGate},
     transport::ConnectionWriter,
-    utils::tracker::SpawnerHandle,
 };
 
 use std::sync::Arc;
@@ -16,19 +18,19 @@ use std::sync::Arc;
 pub(in crate::application) struct Handler {
     connection_writer: ConnectionWriter,
     task_manager: Arc<TaskManager>,
-    spawner: SpawnerHandle,
+    subscription_registry: SubscriptionRegistry,
 }
 
 impl Handler {
     pub(in crate::application) fn new(
         connection_writer: ConnectionWriter,
         task_manager: Arc<TaskManager>,
-        spawner: SpawnerHandle,
+        subscription_registry: SubscriptionRegistry,
     ) -> Self {
         Self {
             connection_writer,
             task_manager,
-            spawner,
+            subscription_registry,
         }
     }
 
@@ -41,6 +43,10 @@ impl Handler {
                 self.send_signal(params).map(|r| (r.into(), None))
             }
             RequestBody::TaskGetOutput(params) => self.get_output(params).map(|r| (r.into(), None)),
+            RequestBody::TaskSubscribe(params) => self.subscribe(params).map(|r| (r.into(), None)),
+            RequestBody::TaskUnsubscribe(params) => {
+                self.unsubscribe(params).map(|r| (r.into(), None))
+            }
         }
         .unwrap_or_else(|e| (e.into(), None));
 
@@ -71,8 +77,8 @@ impl Handler {
             params.subscribe_to_output,
             task_events_stream,
         );
-        self.spawner
-            .spawn(async move { subscriber.run().await })
+        self.subscription_registry
+            .spawn_subscriber(task_id, subscriber)
             .map_err(|_| ApplicationError::Shutdown)?;
         let response_result = ResponseResult::StartTaskResult { task_id };
         Ok((response_result, gate))
@@ -104,5 +110,17 @@ impl Handler {
             task_id: params.task_id,
             lines,
         })
+    }
+
+    fn subscribe(&self, params: TaskSubscribeParams) -> Result<ResponseResult, ApplicationError> {
+        self.subscription_registry
+            .set_subscribe_to_output(&params.task_id, true)
+            .map(|_| ResponseResult::SubscribeResult {})
+    }
+
+    fn unsubscribe(&self, params: TaskSubscribeParams) -> Result<ResponseResult, ApplicationError> {
+        self.subscription_registry
+            .set_subscribe_to_output(&params.task_id, false)
+            .map(|_| ResponseResult::UnsubscribeResult {})
     }
 }

@@ -41,6 +41,8 @@ impl RequestRaw {
             "task.start" => self.parse_params(RequestBody::TaskStart),
             "task.send_signal" => self.parse_params(RequestBody::TaskSendSignal),
             "task.get_output" => self.parse_params(RequestBody::TaskGetOutput),
+            "task.subscribe" => self.parse_params(RequestBody::TaskSubscribe),
+            "task.unsubscribe" => self.parse_params(RequestBody::TaskUnsubscribe),
             unknown => Err(ResponseError::method_not_found(unknown).into_response(Some(self.id))),
         }
     }
@@ -65,6 +67,8 @@ pub enum RequestBody {
     TaskStart(TaskStartParams),
     TaskSendSignal(TaskSendSignalParams),
     TaskGetOutput(TaskGetOutputParams),
+    TaskSubscribe(TaskSubscribeParams),
+    TaskUnsubscribe(TaskSubscribeParams),
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,6 +103,12 @@ pub struct TaskGetOutputParams {
     pub task_id: TaskId,
     pub from_line: usize,
     pub lines_number: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskSubscribeParams {
+    pub task_id: TaskId,
 }
 
 fn deserialize_signal<'de, D>(d: D) -> Result<Signal, D::Error>
@@ -260,6 +270,42 @@ mod tests {
         assert_eq!(params.task_id.0, 456);
         assert_eq!(params.from_line, 789);
         assert_eq!(params.lines_number, 324);
+    }
+
+    #[test]
+    fn deserialize_task_subscribe() {
+        let json = json! {{
+            "jsonrpc":"2.0",
+            "id": 123,
+            "method": "task.subscribe",
+            "params":{
+                "task_id": 456,
+            }
+        }};
+        let parsed = Request::parse(&json.to_string()).unwrap();
+        assert_eq!(parsed.id, RequestId::Number(123));
+        let RequestBody::TaskSubscribe(params) = parsed.body else {
+            panic!("Invalid request body");
+        };
+        assert_eq!(params.task_id.0, 456);
+    }
+
+    #[test]
+    fn deserialize_task_unsubscribe() {
+        let json = json! {{
+            "jsonrpc":"2.0",
+            "id": 123,
+            "method": "task.unsubscribe",
+            "params":{
+                "task_id": 456,
+            }
+        }};
+        let parsed = Request::parse(&json.to_string()).unwrap();
+        assert_eq!(parsed.id, RequestId::Number(123));
+        let RequestBody::TaskUnsubscribe(params) = parsed.body else {
+            panic!("Invalid request body");
+        };
+        assert_eq!(params.task_id.0, 456);
     }
 
     #[test]

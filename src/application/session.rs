@@ -6,7 +6,9 @@ use tracing::{Instrument, info, info_span, warn};
 
 use crate::{
     api::{Request, RequestId, Response},
-    application::{ApplicationError, handler::Handler},
+    application::{
+        ApplicationError, handler::Handler, subscription_registry::SubscriptionRegistry,
+    },
     tasks::TaskManager,
     transport::{self},
     utils::tracker::{PanicHandler, WrappedTaskTracker},
@@ -15,6 +17,7 @@ use crate::{
 pub(in crate::application) struct Session {
     cancellation_token: CancellationToken,
     internal_coroutines: Arc<WrappedTaskTracker>,
+    subscriptions_registry: SubscriptionRegistry,
     connection: transport::Connection,
     task_manager: Arc<TaskManager>,
 }
@@ -25,9 +28,11 @@ impl Session {
         connection: transport::Connection,
         task_manager: Arc<TaskManager>,
     ) -> Self {
+        let internal_coroutines = Arc::new(WrappedTaskTracker::new(PanicHandler::new_aborting()));
         Self {
             cancellation_token,
-            internal_coroutines: Arc::new(WrappedTaskTracker::new(PanicHandler::new_aborting())),
+            internal_coroutines: internal_coroutines.clone(),
+            subscriptions_registry: SubscriptionRegistry::new(internal_coroutines),
             connection,
             task_manager,
         }
@@ -74,10 +79,10 @@ impl Session {
         let request_id = request.id.clone();
         let task_manager = self.task_manager.clone();
         let connection_writer = self.connection.writer();
-        let spawner = self.internal_coroutines.handle();
+        let subscription_registry = self.subscriptions_registry.clone();
         let spawn_result = self.internal_coroutines.spawn(
             async move {
-                let handler = Handler::new(connection_writer, task_manager, spawner);
+                let handler = Handler::new(connection_writer, task_manager, subscription_registry);
                 handler.handle_request(request).await;
             }
             .instrument(span),

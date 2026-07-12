@@ -136,6 +136,8 @@ pub enum ResponseResult {
         task_id: TaskId,
         lines: Vec<Arc<OutputLine>>,
     },
+    SubscribeResult {},
+    UnsubscribeResult {},
 }
 
 #[derive(Debug, Serialize)]
