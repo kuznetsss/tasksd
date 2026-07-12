@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use tokio::task::AbortHandle;
@@ -33,7 +33,44 @@ impl SubscriptionRegistry {
         task_id: TaskId,
         subscriber: Subscriber,
     ) -> Result<AbortHandle, ApplicationError> {
-        let mut subs = self.subs.lock().expect("Poisoned mutex");
+        let subs = self.subs.lock().expect("Poisoned mutex");
+        self.spawn_subscriber_impl(subs, task_id, subscriber)
+    }
+
+    pub(in crate::application) fn subscribe_or_spawn(
+        &self,
+        task_id: &TaskId,
+        subscriber_builder: impl FnOnce() -> Result<Subscriber, ApplicationError>,
+    ) -> Result<(), ApplicationError> {
+        let subs = self.subs.lock().expect("Poisoned lock");
+        if let Some(handle) = subs.get(task_id) {
+            handle.set_subscribe_to_output(true);
+            return Ok(());
+        }
+        self.spawn_subscriber_impl(subs, *task_id, subscriber_builder()?)?;
+        Ok(())
+    }
+
+    pub(in crate::application) fn unsubscribe(
+        &self,
+        task_id: &TaskId,
+    ) -> Result<(), ApplicationError> {
+        let subs = self.subs.lock().expect("Poisoned lock");
+        let handle = match subs.get(task_id) {
+            Some(h) => h,
+            None => return Err(TaskError::NotFound.into()),
+        };
+        handle.set_subscribe_to_output(false);
+        Ok(())
+    }
+
+    /// Spawns subscriber with locked subs
+    fn spawn_subscriber_impl(
+        &self,
+        mut subs: MutexGuard<'_, HashMap<TaskId, SubscriberHandle>>,
+        task_id: TaskId,
+        subscriber: Subscriber,
+    ) -> Result<AbortHandle, ApplicationError> {
         assert!(
             subs.insert(task_id, subscriber.handle()).is_none(),
             "Duplicated subscriber for task {task_id}"
@@ -43,26 +80,15 @@ impl SubscriptionRegistry {
                 let subs = self.subs.clone();
                 async move {
                     subscriber.run().await;
-                    subs.lock()
-                        .expect("Poisoned mutex")
-                        .remove(&task_id)
-                        .or_else(|| panic!("Missing subscriber handle for {task_id}"));
+                    assert!(
+                        subs.lock()
+                            .expect("Poisoned mutex")
+                            .remove(&task_id)
+                            .is_some(),
+                        "Missing subscriber handle for {task_id}"
+                    );
                 }
             })
             .map_err(|_| ApplicationError::Shutdown)
-    }
-
-    pub(in crate::application) fn set_subscribe_to_output(
-        &self,
-        task_id: &TaskId,
-        value: bool,
-    ) -> Result<(), ApplicationError> {
-        let subs = self.subs.lock().expect("Poisoned lock");
-        let handle = match subs.get(&task_id) {
-            Some(h) => h,
-            None => return Err(TaskError::NotFound.into()),
-        };
-        handle.set_subscribe_to_output(value);
-        Ok(())
     }
 }

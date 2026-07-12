@@ -78,8 +78,7 @@ impl Handler {
             task_events_stream,
         );
         self.subscription_registry
-            .spawn_subscriber(task_id, subscriber)
-            .map_err(|_| ApplicationError::Shutdown)?;
+            .spawn_subscriber(task_id, subscriber)?;
         let response_result = ResponseResult::StartTaskResult { task_id };
         Ok((response_result, gate))
     }
@@ -114,13 +113,22 @@ impl Handler {
 
     fn subscribe(&self, params: TaskSubscribeParams) -> Result<ResponseResult, ApplicationError> {
         self.subscription_registry
-            .set_subscribe_to_output(&params.task_id, true)
+            .subscribe_or_spawn(&params.task_id, || {
+                // Create new subscriber
+                let task = self.task_manager.get_task(params.task_id)?;
+                Ok(Subscriber::new(
+                    self.connection_writer.clone(),
+                    params.task_id,
+                    true,
+                    task.events_stream()?,
+                ))
+            })
             .map(|_| ResponseResult::SubscribeResult {})
     }
 
     fn unsubscribe(&self, params: TaskSubscribeParams) -> Result<ResponseResult, ApplicationError> {
         self.subscription_registry
-            .set_subscribe_to_output(&params.task_id, false)
+            .unsubscribe(&params.task_id)
             .map(|_| ResponseResult::UnsubscribeResult {})
     }
 }

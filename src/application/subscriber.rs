@@ -72,12 +72,13 @@ impl Subscriber {
     }
 
     async fn on_output(&mut self, line: std::sync::Arc<OutputLine>) -> Result<(), TransportError> {
-        let expected = self.last_seen_line.map(|l| l + 1).unwrap_or(0);
-        debug_assert_eq!(
-            line.line_number, expected,
-            "output line numbers must be contiguous with lag accounting;
-            subscriber assumed to start at line 0"
-        );
+        if let Some(l) = self.last_seen_line {
+            assert_eq!(
+                line.line_number,
+                l + 1,
+                "output line numbers must be contiguous with lag accounting"
+            );
+        }
 
         self.last_seen_line = Some(line.line_number);
         if !self.subscribe_to_output.load(Ordering::Relaxed) {
@@ -91,22 +92,25 @@ impl Subscriber {
 
     async fn on_lag(&mut self, number_of_missed_lines: usize) -> Result<(), TransportError> {
         let prev_last_seen_line = self.last_seen_line;
+        if prev_last_seen_line.is_none() {
+            // Can't send missed output notification without knowing the last seen line
+            return Ok(());
+        }
 
-        debug_assert_ne!(
+        assert_ne!(
             number_of_missed_lines, 0,
             "tokio should never provide Lagged(0)"
         );
-        self.last_seen_line = self
-            .last_seen_line
-            .map(|l| l + number_of_missed_lines)
-            .or(Some(number_of_missed_lines - 1));
+        self.last_seen_line = self.last_seen_line.map(|l| l + number_of_missed_lines);
 
         if !self.subscribe_to_output.load(Ordering::Relaxed) {
             return Ok(());
         }
         let notification: Notification = NotificationBody::task_missed_output(
             self.task_id,
-            prev_last_seen_line.map(|l| l + 1).unwrap_or(0),
+            prev_last_seen_line
+                .map(|l| l + 1)
+                .expect("Need to know prev_last_seen_line to send missed_output notification"),
             number_of_missed_lines,
         )
         .into();
@@ -126,7 +130,6 @@ impl Subscriber {
             warn!("Error writing on_exit notification: {e}");
         }
     }
-
 }
 
 pub(in crate::application) struct SubscriberHandle {

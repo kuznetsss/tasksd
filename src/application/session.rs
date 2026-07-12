@@ -17,7 +17,7 @@ use crate::{
 pub(in crate::application) struct Session {
     cancellation_token: CancellationToken,
     internal_coroutines: Arc<WrappedTaskTracker>,
-    subscriptions_registry: SubscriptionRegistry,
+    subscription_registry: SubscriptionRegistry,
     connection: transport::Connection,
     task_manager: Arc<TaskManager>,
 }
@@ -32,7 +32,7 @@ impl Session {
         Self {
             cancellation_token,
             internal_coroutines: internal_coroutines.clone(),
-            subscriptions_registry: SubscriptionRegistry::new(internal_coroutines),
+            subscription_registry: SubscriptionRegistry::new(internal_coroutines),
             connection,
             task_manager,
         }
@@ -79,7 +79,7 @@ impl Session {
         let request_id = request.id.clone();
         let task_manager = self.task_manager.clone();
         let connection_writer = self.connection.writer();
-        let subscription_registry = self.subscriptions_registry.clone();
+        let subscription_registry = self.subscription_registry.clone();
         let spawn_result = self.internal_coroutines.spawn(
             async move {
                 let handler = Handler::new(connection_writer, task_manager, subscription_registry);
