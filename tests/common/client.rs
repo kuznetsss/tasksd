@@ -112,6 +112,20 @@ impl Client {
         self.send_json(&json).await
     }
 
+    pub async fn send_input(&mut self, task_id: usize, input: impl Into<&str>) -> Result<()> {
+        let id = self.next_id();
+        let json = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "task.send_input",
+            "params": {
+                "task_id": task_id,
+                "input": input.into()
+            }
+        });
+        self.send_json(&json).await
+    }
+
     pub fn last_id(&self) -> i64 {
         self.last_id
     }

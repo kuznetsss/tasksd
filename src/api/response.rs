@@ -138,6 +138,7 @@ pub enum ResponseResult {
     },
     SubscribeResult {},
     UnsubscribeResult {},
+    SendInputResult {},
 }
 
 #[derive(Debug, Serialize)]
