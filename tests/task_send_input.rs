@@ -1,3 +1,5 @@
+mod common;
+
 use serde::Deserialize;
 
 use crate::common::{
@@ -7,8 +9,6 @@ use crate::common::{
     },
     running_app,
 };
-
-mod common;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn send_input_sends_input() {
