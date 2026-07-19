@@ -6,7 +6,7 @@ use rustix::path::Arg;
 
 use crate::common::{
     api::{
-        TaskExitNotification, TaskOutputNotification, TaskSendInputResponse,
+        ErrorResponse, TaskExitNotification, TaskOutputNotification, TaskSendInputResponse,
         TaskSendSignalResponse, TaskStartResponse, TaskSubscribeResponse, TaskUnsubscribeResponse,
     },
     running_app,
@@ -174,6 +174,39 @@ async fn subscribe_to_already_running_task() {
         .check()
         .await
         .unwrap();
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_unsubscribe_non_existing_task() {
+    let (ctx, mut client) = running_app().await;
+
+    client.subscribe(123).await.unwrap();
+
+    let err: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(err.id.unwrap(), client.last_id());
+    assert_eq!(err.error.code, 7);
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_unsubscribe_finished_task() {
+    let (ctx, mut client) = running_app().await;
+
+    client.task_start("ls", &[], false).await.unwrap();
+    let response: TaskStartResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+    let task_id = response.result.task_id;
+
+    let exit: TaskExitNotification = client.read_struct().await.unwrap();
+    assert_eq!(exit.params.task_id, task_id);
+
+    client.subscribe(task_id).await.unwrap();
+    let err: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(err.id.unwrap(), client.last_id());
+    assert_eq!(err.error.code, 5);
 
     ctx.shutdown().await;
 }
