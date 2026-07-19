@@ -6,7 +6,8 @@ use crate::{
         TaskSendSignalParams, TaskStartParams, TaskSubscribeParams,
     },
     application::{
-        error::ApplicationError, subscriber::Subscriber,
+        error::ApplicationError,
+        subscriber::{CreatingEvent, Subscriber},
         subscription_registry::SubscriptionRegistry,
     },
     tasks::{TaskError, TaskManager, TaskReadingGate},
@@ -79,6 +80,7 @@ impl Handler {
             task_id,
             params.subscribe_to_output,
             task_events_stream,
+            CreatingEvent::Start,
         );
         self.subscription_registry
             .spawn_subscriber(task_id, subscriber)?;
@@ -124,6 +126,7 @@ impl Handler {
                     params.task_id,
                     true,
                     task.events_stream()?,
+                    CreatingEvent::Subscribe,
                 ))
             })
             .map(|_| ResponseResult::SubscribeResult {})

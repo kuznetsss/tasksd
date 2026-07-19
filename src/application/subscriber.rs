@@ -12,20 +12,28 @@ use crate::{
     transport::{ConnectionWriter, TransportError},
 };
 
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::application) enum CreatingEvent {
+    Start,
+    Subscribe,
+}
+
 pub(in crate::application) struct Subscriber {
     connection_writer: ConnectionWriter,
     task_id: TaskId,
     subscribe_to_output: Arc<AtomicBool>,
     events: TaskEventsStream,
     last_seen_line: Option<usize>,
+    creating_event: CreatingEvent,
 }
 
 impl Subscriber {
-    pub(in crate::application) fn new(
+    pub fn new(
         connection_writer: ConnectionWriter,
         task_id: TaskId,
         subscribe_to_output: bool,
         events: TaskEventsStream,
+        creating_event: CreatingEvent,
     ) -> Self {
         Self {
             connection_writer,
@@ -33,6 +41,7 @@ impl Subscriber {
             subscribe_to_output: Arc::new(AtomicBool::new(subscribe_to_output)),
             events,
             last_seen_line: None,
+            creating_event,
         }
     }
 
@@ -92,7 +101,7 @@ impl Subscriber {
 
     async fn on_lag(&mut self, number_of_missed_lines: usize) -> Result<(), TransportError> {
         let prev_last_seen_line = self.last_seen_line;
-        if prev_last_seen_line.is_none() {
+        if prev_last_seen_line.is_none() && self.creating_event != CreatingEvent::Start {
             // Can't send missed output notification without knowing the last seen line
             return Ok(());
         }
@@ -101,16 +110,17 @@ impl Subscriber {
             number_of_missed_lines, 0,
             "tokio should never provide Lagged(0)"
         );
-        self.last_seen_line = self.last_seen_line.map(|l| l + number_of_missed_lines);
+        self.last_seen_line = self
+            .last_seen_line
+            .map(|l| l + number_of_missed_lines)
+            .or_else(|| Some(number_of_missed_lines - 1));
 
         if !self.subscribe_to_output.load(Ordering::Relaxed) {
             return Ok(());
         }
         let notification: Notification = NotificationBody::task_missed_output(
             self.task_id,
-            prev_last_seen_line
-                .map(|l| l + 1)
-                .expect("Need to know prev_last_seen_line to send missed_output notification"),
+            prev_last_seen_line.map(|l| l + 1).unwrap_or(0),
             number_of_missed_lines,
         )
         .into();

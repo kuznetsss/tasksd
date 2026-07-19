@@ -188,6 +188,12 @@ async fn subscribe_unsubscribe_non_existing_task() {
     assert_eq!(err.id.unwrap(), client.last_id());
     assert_eq!(err.error.code, 7);
 
+    client.unsubscribe(123).await.unwrap();
+
+    let err: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(err.id.unwrap(), client.last_id());
+    assert_eq!(err.error.code, 7);
+
     ctx.shutdown().await;
 }
 
@@ -207,6 +213,11 @@ async fn subscribe_unsubscribe_finished_task() {
     let err: ErrorResponse = client.read_struct().await.unwrap();
     assert_eq!(err.id.unwrap(), client.last_id());
     assert_eq!(err.error.code, 5);
+
+    client.unsubscribe(task_id).await.unwrap();
+    let err: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(err.id.unwrap(), client.last_id());
+    assert_eq!(err.error.code, 7);
 
     ctx.shutdown().await;
 }

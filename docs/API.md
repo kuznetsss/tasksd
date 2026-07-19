@@ -92,6 +92,19 @@ Send a unix signal to a running task.
 `signal` must be a valid signal number for the platform; otherwise the request
 is rejected with [`-32602` Invalid params](#standard-json-rpc-errors).
 
+The signal is delivered to the task's whole process group, not just its main
+process, so any child processes the task spawned are signalled too.
+
+Delivery is attempted as long as the process group still exists in the kernel,
+even after the task's main process has exited. This matters when the task's
+main process forks children that outlive it (for example a shell that spawned a
+still-running grandchild): those lingering group members can still be signalled.
+The request is only rejected with [`5` The task has already exited](#task-errors)
+when the kernel reports that the process group no longer exists (the task and all
+its children are gone). Signalling a task that does not exist is rejected with
+[`7` Task not found](#task-errors); any other delivery failure is rejected with
+[`6` Error sending signal to the task](#task-errors).
+
 **Result**
 
 An empty object `{}`.
