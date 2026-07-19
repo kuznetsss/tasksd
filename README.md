@@ -65,9 +65,7 @@ API is documented in [docs/API.md](docs/API.md).
 - [x] Add line number to output notification
 - [x] Add notifications about missed output
 - [x] Query task output buffer for line range
-- [ ] Subscription control (subscribe on output/exit, unsubscribe)
-    - Update doc
-    - Add tests
+- [x] Subscription control (subscribe on output/exit, unsubscribe)
 - [ ] use client.expect_unordered() (because notification and response are not ordered) in tests for:
     - send_input
     - send_signal
