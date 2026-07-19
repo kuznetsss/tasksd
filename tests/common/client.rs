@@ -1,8 +1,8 @@
-use std::{path::Path, time::Duration};
+use std::{marker::PhantomData, path::Path, time::Duration};
 
 use anyhow::{Result, bail};
 use serde::de::DeserializeOwned;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Interest},
     net::{
@@ -112,6 +112,46 @@ impl Client {
         self.send_json(&json).await
     }
 
+    pub async fn send_input(&mut self, task_id: usize, input: impl Into<&str>) -> Result<()> {
+        let id = self.next_id();
+        let json = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "task.send_input",
+            "params": {
+                "task_id": task_id,
+                "input": input.into()
+            }
+        });
+        self.send_json(&json).await
+    }
+
+    pub async fn subscribe(&mut self, task_id: usize) -> Result<()> {
+        let id = self.next_id();
+        let json = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "task.subscribe",
+            "params": {
+                "task_id": task_id,
+            }
+        });
+        self.send_json(&json).await
+    }
+
+    pub async fn unsubscribe(&mut self, task_id: usize) -> Result<()> {
+        let id = self.next_id();
+        let json = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "task.unsubscribe",
+            "params": {
+                "task_id": task_id,
+            }
+        });
+        self.send_json(&json).await
+    }
+
     pub fn last_id(&self) -> i64 {
         self.last_id
     }
@@ -158,6 +198,10 @@ impl Client {
         serde_json::from_value(json).map_err(Into::into)
     }
 
+    pub fn expect_unordered(&mut self) -> ExpectationBuilder<'_> {
+        ExpectationBuilder::new(self)
+    }
+
     /// Takes 1 second if returning false
     pub async fn is_disconnected(&mut self) -> bool {
         let mut buf = Vec::new();
@@ -166,5 +210,75 @@ impl Client {
             tokio::time::timeout(Duration::from_secs(1), read_future).await,
             Ok(Ok(_))
         )
+    }
+}
+
+trait Expectation {
+    fn verify(&self, v: &Value) -> bool;
+}
+
+pub struct Expect<T, F> {
+    _type: PhantomData<T>,
+    verify_fn: F,
+}
+
+impl<T, F> Expect<T, F>
+where
+    T: DeserializeOwned + 'static,
+    F: Fn(T) -> bool + 'static,
+{
+    pub fn new(f: F) -> Self {
+        Self {
+            _type: PhantomData,
+            verify_fn: f,
+        }
+    }
+}
+
+impl<T: DeserializeOwned, F: Fn(T) -> bool> Expectation for Expect<T, F> {
+    fn verify(&self, v: &Value) -> bool {
+        T::deserialize(v)
+            .map(|t| (self.verify_fn)(t))
+            .unwrap_or(false)
+    }
+}
+
+#[must_use]
+pub struct ExpectationBuilder<'c> {
+    expectations: Vec<Box<dyn Expectation>>,
+    client: &'c mut Client,
+}
+
+impl<'c> ExpectationBuilder<'c> {
+    fn new(client: &'c mut Client) -> Self {
+        Self {
+            expectations: Default::default(),
+            client,
+        }
+    }
+
+    pub fn message<F, T>(mut self, f: F) -> Self
+    where
+        F: Fn(T) -> bool + 'static,
+        T: DeserializeOwned + 'static,
+    {
+        let e = Expect::new(f);
+        self.expectations.push(Box::new(e));
+        self
+    }
+
+    pub async fn check(self) -> Result<()> {
+        let Self {
+            mut expectations,
+            client,
+        } = self;
+        while !expectations.is_empty() {
+            let json = client.read_json().await?;
+            match expectations.iter().position(|e| e.verify(&json)) {
+                Some(p) => expectations.remove(p),
+                None => bail!("Unexpected message: {json}"),
+            };
+        }
+        Ok(())
     }
 }
