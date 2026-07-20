@@ -5,8 +5,10 @@ socket it is started with. The client sends **requests** and receives
 **responses**; the server pushes **notifications** about running tasks back over
 the same connection.
 
-Tasks are tied to the connection that started them: their output and exit
-notifications are delivered only to that connection.
+By default a task's output and exit notifications are delivered to the
+connection that started it. Any connection can also subscribe to a task's output
+with `task.subscribe`, even one it did not start or whose starting connection
+has since disconnected.
 
 ## Message framing
 
@@ -90,6 +92,19 @@ Send a unix signal to a running task.
 `signal` must be a valid signal number for the platform; otherwise the request
 is rejected with [`-32602` Invalid params](#standard-json-rpc-errors).
 
+The signal is delivered to the task's whole process group, not just its main
+process, so any child processes the task spawned are signalled too.
+
+Delivery is attempted as long as the process group still exists in the kernel,
+even after the task's main process has exited. This matters when the task's
+main process forks children that outlive it (for example a shell that spawned a
+still-running grandchild): those lingering group members can still be signalled.
+The request is only rejected with [`5` The task has already exited](#task-errors)
+when the kernel reports that the process group no longer exists (the task and all
+its children are gone). Signalling a task that does not exist is rejected with
+[`7` Task not found](#task-errors); any other delivery failure is rejected with
+[`6` Error sending signal to the task](#task-errors).
+
 **Result**
 
 An empty object `{}`.
@@ -170,6 +185,118 @@ Requesting a `task_id` that does not exist is rejected with
     ]
   }
 }
+```
+
+### `task.subscribe`
+
+Start receiving `task.output` (and `task.missed_output`) notifications for a
+task. This works for a task started with `subscribe_to_output` set to `false`,
+a task whose output was paused with `task.unsubscribe`, and a task started by a
+different connection (even one that has since disconnected) — any running task
+can be subscribed to by its `task_id`.
+
+Output line numbers continue from the task's current position, not from where
+the subscription began.
+
+Subscribing to a task that is already subscribed just (re)enables output
+delivery.
+
+**Params**
+
+| Field     | Type    | Required | Description                          |
+| --------- | ------- | -------- | ------------------------------------ |
+| `task_id` | integer | yes      | Id of the task to subscribe to.      |
+
+**Result**
+
+An empty object `{}`.
+
+Subscribing to a task that does not exist is rejected with
+[`7` Task not found](#task-errors); subscribing to a task that has already
+exited is rejected with [`5` The task has already exited](#task-errors).
+
+**Example**
+
+```json
+// → request
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "task.subscribe",
+  "params": { "task_id": 1 }
+}
+
+// ← response
+{ "jsonrpc": "2.0", "id": 4, "result": {} }
+```
+
+### `task.unsubscribe`
+
+Stop receiving `task.output` / `task.missed_output` notifications for a task.
+The task keeps running and its `task.exit` notification is still delivered.
+
+**Params**
+
+| Field     | Type    | Required | Description                          |
+| --------- | ------- | -------- | ------------------------------------ |
+| `task_id` | integer | yes      | Id of the task to unsubscribe from.  |
+
+**Result**
+
+An empty object `{}`.
+
+Unsubscribing from a task with no active subscription is rejected with
+[`7` Task not found](#task-errors).
+
+**Example**
+
+```json
+// → request
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "task.unsubscribe",
+  "params": { "task_id": 1 }
+}
+
+// ← response
+{ "jsonrpc": "2.0", "id": 5, "result": {} }
+```
+
+### `task.send_input`
+
+Write input to a running task's stdin. The bytes are sent verbatim, so include
+a trailing newline yourself if the task expects one.
+
+**Params**
+
+| Field     | Type    | Required | Description                          |
+| --------- | ------- | -------- | ------------------------------------ |
+| `task_id` | integer | yes      | Id of the task to send input to.     |
+| `input`   | string  | yes      | Text written to the task's stdin.    |
+
+**Result**
+
+An empty object `{}`.
+
+Sending input to a task that does not exist is rejected with
+[`7` Task not found](#task-errors); sending to a task that has already exited is
+rejected with [`5` The task has already exited](#task-errors); a failure while
+writing to stdin is rejected with [`4` Error writing to process](#task-errors).
+
+**Example**
+
+```json
+// → request
+{
+  "jsonrpc": "2.0",
+  "id": 6,
+  "method": "task.send_input",
+  "params": { "task_id": 1, "input": "yes\n" }
+}
+
+// ← response
+{ "jsonrpc": "2.0", "id": 6, "result": {} }
 ```
 
 ---

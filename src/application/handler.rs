@@ -2,13 +2,16 @@ use tracing::warn;
 
 use crate::{
     api::{
-        Request, RequestBody, Response, ResponseResult, TaskGetOutputParams, TaskSendSignalParams,
-        TaskStartParams,
+        Request, RequestBody, Response, ResponseResult, TaskGetOutputParams, TaskSendInputParams,
+        TaskSendSignalParams, TaskStartParams, TaskSubscribeParams,
     },
-    application::{error::ApplicationError, subscriber::Subscriber},
+    application::{
+        error::ApplicationError,
+        subscriber::{CreatingEvent, Subscriber},
+        subscription_registry::SubscriptionRegistry,
+    },
     tasks::{TaskError, TaskManager, TaskReadingGate},
     transport::ConnectionWriter,
-    utils::tracker::SpawnerHandle,
 };
 
 use std::sync::Arc;
@@ -16,19 +19,19 @@ use std::sync::Arc;
 pub(in crate::application) struct Handler {
     connection_writer: ConnectionWriter,
     task_manager: Arc<TaskManager>,
-    spawner: SpawnerHandle,
+    subscription_registry: SubscriptionRegistry,
 }
 
 impl Handler {
     pub(in crate::application) fn new(
         connection_writer: ConnectionWriter,
         task_manager: Arc<TaskManager>,
-        spawner: SpawnerHandle,
+        subscription_registry: SubscriptionRegistry,
     ) -> Self {
         Self {
             connection_writer,
             task_manager,
-            spawner,
+            subscription_registry,
         }
     }
 
@@ -41,6 +44,13 @@ impl Handler {
                 self.send_signal(params).map(|r| (r.into(), None))
             }
             RequestBody::TaskGetOutput(params) => self.get_output(params).map(|r| (r.into(), None)),
+            RequestBody::TaskSubscribe(params) => self.subscribe(params).map(|r| (r.into(), None)),
+            RequestBody::TaskUnsubscribe(params) => {
+                self.unsubscribe(params).map(|r| (r.into(), None))
+            }
+            RequestBody::TaskSendInput(params) => {
+                self.send_input(params).await.map(|r| (r.into(), None))
+            }
         }
         .unwrap_or_else(|e| (e.into(), None));
 
@@ -70,10 +80,10 @@ impl Handler {
             task_id,
             params.subscribe_to_output,
             task_events_stream,
+            CreatingEvent::Start,
         );
-        self.spawner
-            .spawn(async move { subscriber.run().await })
-            .map_err(|_| ApplicationError::Shutdown)?;
+        self.subscription_registry
+            .spawn_subscriber(task_id, subscriber)?;
         let response_result = ResponseResult::StartTaskResult { task_id };
         Ok((response_result, gate))
     }
@@ -104,5 +114,36 @@ impl Handler {
             task_id: params.task_id,
             lines,
         })
+    }
+
+    fn subscribe(&self, params: TaskSubscribeParams) -> Result<ResponseResult, ApplicationError> {
+        self.subscription_registry
+            .subscribe_or_spawn(&params.task_id, || {
+                // Create new subscriber
+                let task = self.task_manager.get_task(params.task_id)?;
+                Ok(Subscriber::new(
+                    self.connection_writer.clone(),
+                    params.task_id,
+                    true,
+                    task.events_stream()?,
+                    CreatingEvent::Subscribe,
+                ))
+            })
+            .map(|_| ResponseResult::SubscribeResult {})
+    }
+
+    fn unsubscribe(&self, params: TaskSubscribeParams) -> Result<ResponseResult, ApplicationError> {
+        self.subscription_registry
+            .unsubscribe(&params.task_id)
+            .map(|_| ResponseResult::UnsubscribeResult {})
+    }
+
+    async fn send_input(
+        &self,
+        params: TaskSendInputParams,
+    ) -> Result<ResponseResult, ApplicationError> {
+        let task = self.task_manager.get_task(params.task_id)?;
+        task.write_to_stdin(params.input.as_bytes()).await?;
+        Ok(ResponseResult::SendInputResult {})
     }
 }

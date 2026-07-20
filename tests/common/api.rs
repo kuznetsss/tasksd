@@ -28,6 +28,21 @@ pub struct TaskGetOutputResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct TaskSendInputResponse {
+    pub id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaskSubscribeResponse {
+    pub id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaskUnsubscribeResponse {
+    pub id: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct OutputLine {
     pub line: String,
     pub line_number: usize,
