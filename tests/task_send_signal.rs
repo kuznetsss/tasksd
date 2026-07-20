@@ -16,13 +16,19 @@ async fn send_signal_success() {
 
     let signal = 9;
     client.send_signal(task_id, signal).await.unwrap();
-    let response: TaskSendSignalResponse = client.read_struct().await.unwrap();
-    assert_eq!(response.id, client.last_id());
 
-    let exit_notification: TaskExitNotification = client.read_struct().await.unwrap();
-    assert_eq!(exit_notification.params.task_id, task_id);
-    assert_eq!(exit_notification.params.exit_code, None);
-    assert_eq!(exit_notification.params.signal, Some(signal));
+    let last_id = client.last_id();
+    client
+        .expect_unordered()
+        .message(move |r: TaskSendSignalResponse| r.id == last_id)
+        .message(move |e: TaskExitNotification| {
+            e.params.task_id == task_id
+                && e.params.exit_code.is_none()
+                && e.params.signal == Some(signal)
+        })
+        .check()
+        .await
+        .unwrap();
 
     ctx.shutdown().await;
 }

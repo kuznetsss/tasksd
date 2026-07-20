@@ -7,6 +7,7 @@ mod response;
 pub use common::RequestId;
 pub use notification::{Notification, NotificationBody};
 pub use request::{
-    Request, RequestBody, TaskGetOutputParams, TaskSendSignalParams, TaskStartParams,
+    Request, RequestBody, TaskGetOutputParams, TaskSendInputParams, TaskSendSignalParams,
+    TaskStartParams, TaskSubscribeParams,
 };
 pub use response::{Response, ResponseResult};

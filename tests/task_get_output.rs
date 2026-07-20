@@ -76,7 +76,5 @@ async fn get_output_running_task() {
     assert_eq!(output.result.lines[1].line_number, 1);
     assert_eq!(output.result.lines[1].line, "line 2\n");
 
-    client.send_signal(task_id, 9).await.unwrap();
-
     ctx.shutdown().await
 }

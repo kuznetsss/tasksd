@@ -4,6 +4,7 @@ mod handler;
 mod logger;
 mod session;
 mod subscriber;
+mod subscription_registry;
 
 pub use cli_options::CliOptions;
 pub use error::ApplicationError;
