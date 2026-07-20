@@ -1,7 +1,5 @@
 mod common;
 
-use serde::Deserialize;
-
 use crate::common::{
     api::{
         ErrorResponse, TaskExitNotification, TaskOutputNotification, TaskSendInputResponse,
@@ -23,32 +21,16 @@ async fn send_input_sends_input() {
     let input = "some input\n";
     client.send_input(task_id, input).await.unwrap();
 
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Either {
-        Response(TaskSendInputResponse),
-        Output(TaskOutputNotification),
-    }
-
-    let mut got_response = false;
-    let mut got_output = false;
-    for _ in 0..2 {
-        match client.read_struct::<Either>().await.unwrap() {
-            Either::Response(response) => {
-                assert_eq!(response.id, client.last_id());
-                got_response = true;
-            }
-            Either::Output(output) => {
-                assert_eq!(output.params.task_id, task_id);
-                assert_eq!(output.params.line, input);
-                assert_eq!(output.params.line_number, 0);
-                got_output = true;
-            }
-        }
-    }
-
-    assert!(got_output);
-    assert!(got_response);
+    let last_id = client.last_id();
+    client
+        .expect_unordered()
+        .message(move |r: TaskSendInputResponse| r.id == last_id)
+        .message(move |o: TaskOutputNotification| {
+            o.params.task_id == task_id && o.params.line == input && o.params.line_number == 0
+        })
+        .check()
+        .await
+        .unwrap();
 
     ctx.shutdown().await;
 }

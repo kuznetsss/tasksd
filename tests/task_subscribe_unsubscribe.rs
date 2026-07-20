@@ -3,6 +3,7 @@ mod common;
 use std::time::Duration;
 
 use rustix::path::Arg;
+use tasksd::tasks::CHANNEL_CAPACITY;
 
 use crate::common::{
     api::{
@@ -188,6 +189,12 @@ async fn subscribe_unsubscribe_non_existing_task() {
     assert_eq!(err.id.unwrap(), client.last_id());
     assert_eq!(err.error.code, 7);
 
+    client.unsubscribe(123).await.unwrap();
+
+    let err: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(err.id.unwrap(), client.last_id());
+    assert_eq!(err.error.code, 7);
+
     ctx.shutdown().await;
 }
 
@@ -207,6 +214,55 @@ async fn subscribe_unsubscribe_finished_task() {
     let err: ErrorResponse = client.read_struct().await.unwrap();
     assert_eq!(err.id.unwrap(), client.last_id());
     assert_eq!(err.error.code, 5);
+
+    client.unsubscribe(task_id).await.unwrap();
+    let err: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(err.id.unwrap(), client.last_id());
+    assert_eq!(err.error.code, 7);
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_to_running_task_first_message_is_lag() {
+    let (ctx, mut client) = running_app().await;
+
+    client
+        .task_start("sh", &["-c", "echo ready; cat"], true)
+        .await
+        .unwrap();
+
+    let response: TaskStartResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+    let task_id = response.result.task_id;
+
+    let output: TaskOutputNotification = client.read_struct().await.unwrap();
+    assert_eq!(output.params.task_id, task_id);
+    assert_eq!(output.params.line, "ready\n");
+    assert_eq!(output.params.line_number, 0);
+
+    client.unsubscribe(task_id).await.unwrap();
+    let response: TaskSubscribeResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+
+    let mut new_client = ctx.make_client().await;
+
+    new_client.subscribe(task_id).await.unwrap();
+    let response: TaskSubscribeResponse = new_client.read_struct().await.unwrap();
+    assert_eq!(response.id, new_client.last_id());
+
+    let input: String = (0..CHANNEL_CAPACITY * 2)
+        .map(|i| format!("line {i}\n"))
+        .collect();
+
+    client.send_input(task_id, input.as_str()).await.unwrap();
+    let response: TaskSendInputResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+
+    let output: TaskOutputNotification = new_client.read_struct().await.unwrap();
+    assert_eq!(output.params.task_id, task_id);
+    assert!(output.params.line_number >= 1);
+    assert!(output.params.line_number <= CHANNEL_CAPACITY + 1);
 
     ctx.shutdown().await;
 }

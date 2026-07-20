@@ -2,7 +2,10 @@ use serde_json::json;
 
 use crate::common::{
     TestContextBuilder,
-    api::{ErrorResponse, TaskSendSignalResponse, TaskStartResponse},
+    api::{
+        ErrorResponse, TaskExitNotification, TaskSendSignalResponse, TaskStartResponse,
+        TaskSubscribeResponse,
+    },
     running_app,
 };
 
@@ -169,12 +172,24 @@ async fn running_task_survives_client_disconnect() {
 
     drop(client);
     let mut client = ctx.make_client().await;
-    // TODO: subscribe new client on exit event of the running task when implemented
+
+    client.subscribe(task_id).await.unwrap();
+    let response: TaskSubscribeResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
 
     let signal = 9;
     client.send_signal(task_id, signal).await.unwrap();
-    let response: TaskSendSignalResponse = client.read_struct().await.unwrap();
-    assert_eq!(response.id, client.last_id());
+
+    let last_id = client.last_id();
+    client
+        .expect_unordered()
+        .message(move |r: TaskSendSignalResponse| r.id == last_id)
+        .message(move |e: TaskExitNotification| {
+            e.params.task_id == task_id && e.params.signal.map_or_else(|| false, |s| s == signal)
+        })
+        .check()
+        .await
+        .unwrap();
 
     ctx.shutdown().await;
 }
