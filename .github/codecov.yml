@@ -1,0 +1,32 @@
+# Codecov configuration.
+# Coverage is uploaded from the `coverage` CI job (cargo llvm-cov -> lcov.info).
+# Validate changes with: curl -X POST --data-binary @.github/codecov.yml https://codecov.io/validate
+
+coverage:
+  # Round down and report two decimals so small moves are visible.
+  precision: 2
+  round: down
+  range: "70...100"
+
+  status:
+    # Overall project coverage, compared against the PR's base commit.
+    project:
+      default:
+        target: auto
+        threshold: 2% # tolerate tiny dips without failing the check
+    # Coverage of just the lines changed in the PR.
+    patch:
+      default:
+        target: 80%
+        threshold: 5%
+
+# PR comment summarising the coverage impact.
+comment:
+  layout: "reason, diff, files"
+  behavior: default
+  require_changes: true # only comment when coverage actually changes
+
+# Paths that are not product code and should not count toward coverage.
+# (Unit-test modules already opt out via `#[coverage(off)]`.)
+ignore:
+  - "tests/**" # integration-test harness

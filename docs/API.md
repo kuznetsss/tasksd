@@ -36,6 +36,41 @@ header or the separating blank line).
 
 ## Requests
 
+### `hello`
+
+Liveness and version check. A client can send this at any time to confirm that
+a compatible, running tasksd is behind the socket: the client identifies itself
+and the server replies with its own version. It has no side effects on tasks and
+is purely informational.
+
+**Params**
+
+| Field            | Type   | Required | Description                        |
+| ---------------- | ------ | -------- | ---------------------------------- |
+| `client_name`    | string | yes      | Name of the connecting client.     |
+| `client_version` | string | yes      | Version of the connecting client.  |
+
+**Result**
+
+| Field            | Type   | Description                            |
+| ---------------- | ------ | -------------------------------------- |
+| `server_version` | string | Version of the running tasksd daemon.  |
+
+**Example**
+
+```json
+// → request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "hello",
+  "params": { "client_name": "nvim-tasksd", "client_version": "0.1.0" }
+}
+
+// ← response
+{ "jsonrpc": "2.0", "id": 1, "result": { "server_version": "0.2.0" } }
+```
+
 ### `task.start`
 
 Start a new task. The executable is run inside a PTY.

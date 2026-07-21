@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::common::{
@@ -190,6 +191,40 @@ async fn running_task_survives_client_disconnect() {
         .check()
         .await
         .unwrap();
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hello_api() {
+    let (ctx, mut client) = running_app().await;
+    let id = 123;
+    let request_json = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "hello",
+        "params": {
+            "client_name": "integration test",
+            "client_version": "none"
+        }
+    });
+
+    client.send_json(&request_json).await.unwrap();
+
+    #[derive(Debug, Deserialize)]
+    struct HelloResponse {
+        id: i64,
+        result: HelloResponseParams,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct HelloResponseParams {
+        server_version: String,
+    }
+
+    let response: HelloResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, id);
+    assert_eq!(response.result.server_version, env!("CARGO_PKG_VERSION"));
 
     ctx.shutdown().await;
 }

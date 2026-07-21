@@ -1,9 +1,9 @@
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     api::{
-        Request, RequestBody, Response, ResponseResult, TaskGetOutputParams, TaskSendInputParams,
-        TaskSendSignalParams, TaskStartParams, TaskSubscribeParams,
+        HelloParams, Request, RequestBody, Response, ResponseResult, TaskGetOutputParams,
+        TaskSendInputParams, TaskSendSignalParams, TaskStartParams, TaskSubscribeParams,
     },
     application::{
         error::ApplicationError,
@@ -51,6 +51,7 @@ impl Handler {
             RequestBody::TaskSendInput(params) => {
                 self.send_input(params).await.map(|r| (r.into(), None))
             }
+            RequestBody::Hello(params) => Ok((self.hello(params).into(), None)),
         }
         .unwrap_or_else(|e| (e.into(), None));
 
@@ -145,5 +146,15 @@ impl Handler {
         let task = self.task_manager.get_task(params.task_id)?;
         task.write_to_stdin(params.input.as_bytes()).await?;
         Ok(ResponseResult::SendInputResult {})
+    }
+
+    fn hello(&self, params: HelloParams) -> ResponseResult {
+        info!(
+            "Got hello from client {} {}",
+            params.client_name, params.client_version
+        );
+        ResponseResult::HelloResponse {
+            server_version: env!("CARGO_PKG_VERSION"),
+        }
     }
 }
