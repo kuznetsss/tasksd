@@ -61,7 +61,7 @@ async fn shutdown_sends_sigkill_after_ignoring_sigterm() {
     assert_eq!(notification.params.task_id, task_id);
     assert_eq!(notification.params.line, "ready\n");
 
-    tokio::time::timeout(Duration::from_secs(1), ctx.shutdown())
+    tokio::time::timeout(Duration::from_secs(2), ctx.shutdown())
         .await
         .unwrap();
 

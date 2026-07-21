@@ -97,7 +97,6 @@ Future ideas:
 - Add suggestion module (history, runnables, tasks.json)
 - Output search/filter
 - TCP sockets support
-- No pty tasks
 
 ## Acknowledgments
 
