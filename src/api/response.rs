@@ -139,6 +139,9 @@ pub enum ResponseResult {
     SubscribeResult {},
     UnsubscribeResult {},
     SendInputResult {},
+    HelloResponse {
+        server_version: &'static str,
+    },
 }
 
 #[derive(Debug, Serialize)]

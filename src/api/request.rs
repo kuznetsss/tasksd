@@ -44,6 +44,7 @@ impl RequestRaw {
             "task.subscribe" => self.parse_params(RequestBody::TaskSubscribe),
             "task.unsubscribe" => self.parse_params(RequestBody::TaskUnsubscribe),
             "task.send_input" => self.parse_params(RequestBody::TaskSendInput),
+            "hello" => self.parse_params(RequestBody::Hello),
             unknown => Err(ResponseError::method_not_found(unknown).into_response(Some(self.id))),
         }
     }
@@ -71,6 +72,7 @@ pub enum RequestBody {
     TaskSubscribe(TaskSubscribeParams),
     TaskUnsubscribe(TaskSubscribeParams),
     TaskSendInput(TaskSendInputParams),
+    Hello(HelloParams),
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +135,13 @@ where
             &"a valid signal number",
         )),
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HelloParams {
+    pub client_name: String,
+    pub client_version: String,
 }
 
 #[cfg(test)]
@@ -335,6 +344,26 @@ mod tests {
         };
         assert_eq!(params.task_id.0, 456);
         assert_eq!(params.input, "some input");
+    }
+
+    #[test]
+    fn deserialize_hello() {
+        let json = json! {{
+            "jsonrpc":"2.0",
+            "id": 123,
+            "method": "hello",
+            "params":{
+                "client_name": "some client",
+                "client_version": "3.4.5"
+            }
+        }};
+        let parsed = Request::parse(&json.to_string()).unwrap();
+        assert_eq!(parsed.id, RequestId::Number(123));
+        let RequestBody::Hello(params) = parsed.body else {
+            panic!("Invalid request body");
+        };
+        assert_eq!(params.client_name, "some client");
+        assert_eq!(params.client_version, "3.4.5");
     }
 
     #[test]
