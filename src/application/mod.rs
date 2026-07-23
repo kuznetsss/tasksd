@@ -3,12 +3,14 @@ mod error;
 mod handler;
 mod logger;
 mod session;
+mod shutdown_handler;
 mod subscriber;
 mod subscription_registry;
 
 pub use cli_options::CliOptions;
 pub use error::ApplicationError;
 pub use logger::setup_logger;
+pub use shutdown_handler::{ShutdownHandler, ShutdownTrigger};
 
 use std::{
     sync::{Arc, atomic::AtomicBool},
@@ -32,10 +34,11 @@ pub struct Application {
     task_manager: Arc<TaskManager>,
     shutdown_complete: AtomicBool,
     graceful_period: Duration,
+    shutdown_trigger: ShutdownTrigger,
 }
 
 impl Application {
-    pub fn new(cli_args: CliOptions) -> Result<Self> {
+    pub fn new(cli_args: CliOptions, shutdown_trigger: ShutdownTrigger) -> Result<Self> {
         info!(
             "Opening unix socket: {}",
             &cli_args
@@ -53,6 +56,7 @@ impl Application {
             task_manager: TaskManager::new(cli_args.process_buffer_size),
             shutdown_complete: AtomicBool::new(false),
             graceful_period: Duration::from_secs(cli_args.graceful_period),
+            shutdown_trigger,
         })
     }
 
@@ -75,10 +79,15 @@ impl Application {
                 let span = info_span!("client", client_id);
                 let cancellation_token = self.root_cancellation.child_token();
                 let task_manager = self.task_manager.clone();
+                let shutdown_trigger = self.shutdown_trigger.clone();
                 async move {
                     info!("Client connected");
-                    let session =
-                        Session::new(cancellation_token, accepted_connection, task_manager);
+                    let session = Session::new(
+                        cancellation_token,
+                        accepted_connection,
+                        task_manager,
+                        shutdown_trigger,
+                    );
                     session.run().await;
                     info!("Connection closed");
                 }

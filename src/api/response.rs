@@ -142,6 +142,7 @@ pub enum ResponseResult {
     HelloResponse {
         server_version: &'static str,
     },
+    Shutdown {},
 }
 
 #[derive(Debug, Serialize)]
