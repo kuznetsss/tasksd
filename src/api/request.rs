@@ -45,6 +45,7 @@ impl RequestRaw {
             "task.unsubscribe" => self.parse_params(RequestBody::TaskUnsubscribe),
             "task.send_input" => self.parse_params(RequestBody::TaskSendInput),
             "hello" => self.parse_params(RequestBody::Hello),
+            "shutdown" => self.parse_params(RequestBody::Shutdown),
             unknown => Err(ResponseError::method_not_found(unknown).into_response(Some(self.id))),
         }
     }
@@ -73,7 +74,15 @@ pub enum RequestBody {
     TaskUnsubscribe(TaskSubscribeParams),
     TaskSendInput(TaskSendInputParams),
     Hello(HelloParams),
+    Shutdown(NoParams),
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Empty {}
+
+#[derive(Debug, Deserialize)]
+pub struct NoParams(Option<Empty>);
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -364,6 +373,20 @@ mod tests {
         };
         assert_eq!(params.client_name, "some client");
         assert_eq!(params.client_version, "3.4.5");
+    }
+
+    #[test]
+    fn deserialize_shutdown() {
+        let json = json! {{
+            "jsonrpc":"2.0",
+            "id": 123,
+            "method": "shutdown",
+        }};
+        let parsed = Request::parse(&json.to_string()).unwrap();
+        assert_eq!(parsed.id, RequestId::Number(123));
+        let RequestBody::Shutdown(_) = parsed.body else {
+            panic!("Invalid request body");
+        };
     }
 
     #[test]

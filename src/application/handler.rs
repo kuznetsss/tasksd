@@ -52,6 +52,7 @@ impl Handler {
                 self.send_input(params).await.map(|r| (r.into(), None))
             }
             RequestBody::Hello(params) => Ok((self.hello(params).into(), None)),
+            RequestBody::Shutdown(_) => todo!(),
         }
         .unwrap_or_else(|e| (e.into(), None));
 
