@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
@@ -7,7 +7,7 @@ use tracing::{Instrument, info, info_span, warn};
 use crate::{
     api::{Request, RequestId, Response},
     application::{
-        ApplicationError, ShutdownTrigger, handler::Handler,
+        ApplicationError, KILL_TIMEOUT, ShutdownTrigger, handler::Handler,
         subscription_registry::SubscriptionRegistry,
     },
     tasks::TaskManager,
@@ -73,9 +73,16 @@ impl Session {
     }
 
     async fn shutdown(self) {
-        self.internal_coroutines.shutdown();
-        self.internal_coroutines.join().await;
-        self.connection.join().await;
+        if tokio::time::timeout(Duration::from_secs(KILL_TIMEOUT.as_secs() - 1), async {
+            self.internal_coroutines.join().await;
+            self.connection.join().await;
+        })
+        .await
+        .is_err()
+        {
+            self.internal_coroutines.shutdown();
+            self.internal_coroutines.join().await;
+        }
     }
 
     fn handle_request(&mut self, request: Request) {

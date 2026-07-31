@@ -10,7 +10,7 @@ mod subscription_registry;
 pub use cli_options::CliOptions;
 pub use error::ApplicationError;
 pub use logger::setup_logger;
-pub use shutdown_handler::{ShutdownHandler, ShutdownTrigger};
+pub use shutdown_handler::{First, Second, ShutdownHandler, ShutdownTrigger};
 
 use std::{
     sync::{Arc, atomic::AtomicBool},
@@ -23,8 +23,14 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, info_span, warn};
 
-use crate::{tasks::TaskManager, transport::UnixSocketServer};
+use crate::{
+    tasks::TaskManager,
+    transport::UnixSocketServer,
+    utils::tracker::{PanicHandler, WrappedTaskTracker},
+};
 use session::Session;
+
+pub const KILL_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub struct Application {
@@ -35,6 +41,7 @@ pub struct Application {
     shutdown_complete: AtomicBool,
     graceful_period: Duration,
     shutdown_trigger: ShutdownTrigger,
+    session_jobs: Arc<WrappedTaskTracker>,
 }
 
 impl Application {
@@ -57,6 +64,7 @@ impl Application {
             shutdown_complete: AtomicBool::new(false),
             graceful_period: Duration::from_secs(cli_args.graceful_period),
             shutdown_trigger,
+            session_jobs: Arc::new(WrappedTaskTracker::new(PanicHandler::new_aborting())),
         })
     }
 
@@ -75,7 +83,7 @@ impl Application {
                     continue;
                 }
             };
-            tokio::spawn({
+            let spawn_result = self.session_jobs.spawn({
                 let span = info_span!("client", client_id);
                 let cancellation_token = self.root_cancellation.child_token();
                 let task_manager = self.task_manager.clone();
@@ -93,6 +101,11 @@ impl Application {
                 }
                 .instrument(span)
             });
+            if spawn_result.is_err() {
+                warn!(
+                    "Failed to spawn a session for new connection. Maybe tasksd is shutting down?"
+                );
+            }
             client_id += 1;
         }
     }
@@ -130,7 +143,6 @@ impl Application {
                 tokio::time::sleep(graceful_period).await;
                 warn!("Some tasks are still running after graceful period {graceful_period:?}. Sending SIGKILL");
                 task_manager.send_signal_to_all_tasks(Signal::KILL);
-                const KILL_TIMEOUT: Duration = Duration::from_secs(2);
                 tokio::time::sleep(KILL_TIMEOUT).await;
                 Event::Timeout
             }
@@ -138,9 +150,11 @@ impl Application {
         parallel_jobs.spawn({
             let task_manager = self.task_manager.clone();
             let root_cancellation = self.root_cancellation.clone();
+            let session_jobs = self.session_jobs.clone();
             async move {
                 task_manager.join().await;
                 root_cancellation.cancel();
+                session_jobs.join().await;
                 Event::Finish
             }
         });

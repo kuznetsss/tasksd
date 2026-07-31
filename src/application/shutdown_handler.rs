@@ -1,16 +1,19 @@
 use tokio::sync::watch;
 use tracing::info;
 
+#[derive(Debug)]
 pub struct First {
     tx: watch::Sender<bool>,
     rx: watch::Receiver<bool>,
     ctrl_c_count: usize,
 }
 
+#[derive(Debug)]
 pub struct Second {
     ctrl_c_count: usize,
 }
 
+#[derive(Debug)]
 pub struct ShutdownHandler<State> {
     state: State,
 }
@@ -22,9 +25,8 @@ pub struct ShutdownTrigger {
 
 impl ShutdownTrigger {
     pub fn call_shutdown(&self) {
-        self.tx
-            .send(true)
-            .expect("ShutdownHandler should still be alive")
+        // Already shutting down if failed
+        let _ = self.tx.send(true);
     }
 }
 

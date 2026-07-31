@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::Result;
-use tasksd::application::{Application, CliOptions};
+use tasksd::application::{Application, CliOptions, First, ShutdownHandler};
 use tempfile::TempDir;
 
 use crate::common::Client;
@@ -13,6 +13,7 @@ use crate::common::Client;
 pub struct TestContext {
     _tmp_dir: TempDir,
     socket_path: PathBuf,
+    shutdown_handler: ShutdownHandler<First>,
     app: Arc<Application>,
 }
 
@@ -71,11 +72,13 @@ impl TestContextBuilder {
         } else {
             socket_path = self.cli_args.unix_socket_path.clone();
         }
-        let app = Application::new(self.cli_args)?;
+        let shutdown_handler = ShutdownHandler::new();
+        let app = Application::new(self.cli_args, shutdown_handler.trigger())?;
         Ok(TestContext {
             _tmp_dir: tmp_dir,
             socket_path,
             app: Arc::new(app),
+            shutdown_handler,
         })
     }
 }

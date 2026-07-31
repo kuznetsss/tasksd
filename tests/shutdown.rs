@@ -72,5 +72,3 @@ async fn shutdown_sends_sigkill_after_ignoring_sigterm() {
 
     assert!(client.is_disconnected().await);
 }
-
-
