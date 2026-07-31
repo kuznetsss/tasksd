@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::Result;
-use tasksd::application::{Application, CliOptions, First, ShutdownHandler};
+use tasksd::application::{Application, Armed, CliOptions, ShutdownHandler};
 use tempfile::TempDir;
 
 use crate::common::Client;
@@ -13,7 +13,7 @@ use crate::common::Client;
 pub struct TestContext {
     _tmp_dir: TempDir,
     socket_path: PathBuf,
-    shutdown_handler: ShutdownHandler<First>,
+    shutdown_handler: ShutdownHandler<Armed>,
     app: Arc<Application>,
 }
 

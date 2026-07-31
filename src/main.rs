@@ -30,10 +30,10 @@ fn main() -> anyhow::Result<()> {
                     application.run().await;
                 }
             });
-            let shutdown_handler = shutdown_handler.wait().await;
+            let shutdown_handler = shutdown_handler.wait_for_shutdown().await;
             tokio::select! {
                 _ = application.shutdown() => {},
-                _ = shutdown_handler.wait_force() => {}
+                _ = shutdown_handler.wait_for_force_exit() => {}
             }
             app_run.abort();
             info!("Exit");

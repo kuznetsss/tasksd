@@ -164,7 +164,7 @@ impl Handler {
     }
 
     fn shutdown(&self) -> ResponseResult {
-        self.shutdown_trigger.call_shutdown();
+        self.shutdown_trigger.request_shutdown();
         ResponseResult::Shutdown {}
     }
 }

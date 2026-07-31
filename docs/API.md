@@ -334,6 +334,44 @@ writing to stdin is rejected with [`4` Error writing to process](#task-errors).
 { "jsonrpc": "2.0", "id": 6, "result": {} }
 ```
 
+### `shutdown`
+
+Shut down the daemon. This is not scoped to the calling connection: every task
+is terminated and every client is disconnected.
+
+**Params**
+
+None. `params` may be omitted, `null`, or an empty object `{}`. Any other value
+is rejected with [`-32602` Invalid params](#standard-json-rpc-errors).
+
+**Result**
+
+An empty object `{}`.
+
+The response is sent before the daemon starts shutting down, so a client can
+rely on receiving it. What follows, in order, is:
+
+1. `SIGTERM` to every running task.
+2. A graceful period (the daemon's `--graceful-period`, in seconds) for tasks to
+   exit on their own, after which survivors are sent `SIGKILL`.
+3. A `task.exit` notification for each task the connection is subscribed to.
+4. End of stream on the socket as the daemon exits.
+
+A client should treat the EOF after a `shutdown` response as a normal
+disconnect rather than an error. Sending `shutdown` while a shutdown is already
+in progress neither restarts nor extends the sequence, and may not be answered
+at all, since the connection is already closing.
+
+**Example**
+
+```json
+// → request
+{ "jsonrpc": "2.0", "id": 7, "method": "shutdown" }
+
+// ← response
+{ "jsonrpc": "2.0", "id": 7, "result": {} }
+```
+
 ---
 
 ## Notifications

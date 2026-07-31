@@ -10,7 +10,7 @@ mod subscription_registry;
 pub use cli_options::CliOptions;
 pub use error::ApplicationError;
 pub use logger::setup_logger;
-pub use shutdown_handler::{First, Second, ShutdownHandler, ShutdownTrigger};
+pub use shutdown_handler::{Armed, ShutdownHandler, ShutdownTrigger, ShuttingDown};
 
 use std::{
     sync::{Arc, atomic::AtomicBool},

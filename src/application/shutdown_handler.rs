@@ -1,16 +1,21 @@
-use tokio::sync::watch;
+use tokio::{
+    signal::unix::{Signal, SignalKind},
+    sync::watch,
+};
 use tracing::info;
 
 #[derive(Debug)]
-pub struct First {
+pub struct Armed {
     tx: watch::Sender<bool>,
     rx: watch::Receiver<bool>,
-    ctrl_c_count: usize,
+    had_ctrl_c: bool,
+    sigint: Signal,
 }
 
 #[derive(Debug)]
-pub struct Second {
-    ctrl_c_count: usize,
+pub struct ShuttingDown {
+    sigint: Signal,
+    had_ctrl_c: bool,
 }
 
 #[derive(Debug)]
@@ -24,20 +29,22 @@ pub struct ShutdownTrigger {
 }
 
 impl ShutdownTrigger {
-    pub fn call_shutdown(&self) {
+    pub fn request_shutdown(&self) {
         // Already shutting down if failed
         let _ = self.tx.send(true);
     }
 }
 
-impl ShutdownHandler<First> {
+impl ShutdownHandler<Armed> {
     pub fn new() -> Self {
         let (tx, rx) = watch::channel(false);
         Self {
-            state: First {
+            state: Armed {
                 tx,
                 rx,
-                ctrl_c_count: 0,
+                sigint: tokio::signal::unix::signal(SignalKind::interrupt())
+                    .expect("Failed to listen for Ctrl-C"),
+                had_ctrl_c: false,
             },
         }
     }
@@ -48,16 +55,17 @@ impl ShutdownHandler<First> {
         }
     }
 
-    pub async fn wait(self) -> ShutdownHandler<Second> {
-        let First {
+    pub async fn wait_for_shutdown(self) -> ShutdownHandler<ShuttingDown> {
+        let Armed {
             tx: _tx,
             mut rx,
-            mut ctrl_c_count,
+            mut sigint,
+            mut had_ctrl_c,
         } = self.state;
         tokio::select! {
-            _ = wait_for_ctrl_c() => {
+            _ = sigint.recv() => {
                 info!("Got Ctrl-C, initiating shutdown...");
-                ctrl_c_count += 1;
+                had_ctrl_c = true;
             },
             r = rx.wait_for(|&v| v) => {
                 info!("Received internal shutdown signal, initiating shutdown...");
@@ -65,33 +73,25 @@ impl ShutdownHandler<First> {
             }
         }
 
-        ShutdownHandler::<Second> {
-            state: Second { ctrl_c_count },
+        ShutdownHandler::<ShuttingDown> {
+            state: ShuttingDown { sigint, had_ctrl_c },
         }
     }
 }
 
-impl Default for ShutdownHandler<First> {
+impl Default for ShutdownHandler<Armed> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ShutdownHandler<Second> {
-    pub async fn wait_force(mut self) {
-        while self.state.ctrl_c_count < 2 {
-            wait_for_ctrl_c().await;
-            self.state.ctrl_c_count += 1;
-            if self.state.ctrl_c_count == 1 {
-                info!("Got Ctrl-C, but shutdown is already in progress, ignoring");
-            }
+impl ShutdownHandler<ShuttingDown> {
+    pub async fn wait_for_force_exit(mut self) {
+        if !self.state.had_ctrl_c {
+            self.state.sigint.recv().await;
+            info!("Got Ctrl-C, but shutdown is already in progress, ignoring");
         }
+        self.state.sigint.recv().await;
         info!("Got second Ctrl-C, force exit");
     }
-}
-
-async fn wait_for_ctrl_c() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to listen for Ctrl-C");
 }
