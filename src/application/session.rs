@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use tokio::task::AbortHandle;
 use tokio_util::sync::CancellationToken;
@@ -7,7 +7,8 @@ use tracing::{Instrument, info, info_span, warn};
 use crate::{
     api::{Request, RequestId, Response},
     application::{
-        ApplicationError, handler::Handler, subscription_registry::SubscriptionRegistry,
+        ApplicationError, KILL_TIMEOUT, ShutdownTrigger, handler::Handler,
+        subscription_registry::SubscriptionRegistry,
     },
     tasks::TaskManager,
     transport::{self},
@@ -20,6 +21,7 @@ pub(in crate::application) struct Session {
     subscription_registry: SubscriptionRegistry,
     connection: transport::Connection,
     task_manager: Arc<TaskManager>,
+    shutdown_trigger: ShutdownTrigger,
 }
 
 impl Session {
@@ -27,6 +29,7 @@ impl Session {
         cancellation_token: CancellationToken,
         connection: transport::Connection,
         task_manager: Arc<TaskManager>,
+        shutdown_trigger: ShutdownTrigger,
     ) -> Self {
         let internal_coroutines = Arc::new(WrappedTaskTracker::new(PanicHandler::new_aborting()));
         Self {
@@ -35,6 +38,7 @@ impl Session {
             subscription_registry: SubscriptionRegistry::new(internal_coroutines),
             connection,
             task_manager,
+            shutdown_trigger,
         }
     }
 
@@ -69,9 +73,16 @@ impl Session {
     }
 
     async fn shutdown(self) {
-        self.internal_coroutines.shutdown();
-        self.internal_coroutines.join().await;
-        self.connection.join().await;
+        if tokio::time::timeout(Duration::from_secs(KILL_TIMEOUT.as_secs() - 1), async {
+            self.internal_coroutines.join().await;
+            self.connection.join().await;
+        })
+        .await
+        .is_err()
+        {
+            self.internal_coroutines.shutdown();
+            self.internal_coroutines.join().await;
+        }
     }
 
     fn handle_request(&mut self, request: Request) {
@@ -80,9 +91,15 @@ impl Session {
         let task_manager = self.task_manager.clone();
         let connection_writer = self.connection.writer();
         let subscription_registry = self.subscription_registry.clone();
+        let shutdown_trigger = self.shutdown_trigger.clone();
         let spawn_result = self.internal_coroutines.spawn(
             async move {
-                let handler = Handler::new(connection_writer, task_manager, subscription_registry);
+                let handler = Handler::new(
+                    connection_writer,
+                    task_manager,
+                    subscription_registry,
+                    shutdown_trigger,
+                );
                 handler.handle_request(request).await;
             }
             .instrument(span),

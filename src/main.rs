@@ -2,10 +2,9 @@
 #![cfg_attr(coverage_nightly, coverage(off))]
 use std::sync::Arc;
 
-use tasksd::application::{Application, CliOptions, setup_logger};
+use tasksd::application::{Application, CliOptions, ShutdownHandler, setup_logger};
 
 use clap::Parser;
-use tokio::task::JoinSet;
 use tracing::info;
 
 fn main() -> anyhow::Result<()> {
@@ -23,33 +22,21 @@ fn main() -> anyhow::Result<()> {
         .build()
         .unwrap()
         .block_on(async move {
-            let application = Arc::new(Application::new(cli_args)?);
+            let shutdown_handler = ShutdownHandler::new();
+            let application = Arc::new(Application::new(cli_args, shutdown_handler.trigger())?);
             let app_run = tokio::spawn({
                 let application = application.clone();
                 async move {
                     application.run().await;
                 }
             });
-            ctrl_c_handler(application.clone()).await;
+            let shutdown_handler = shutdown_handler.wait_for_shutdown().await;
+            tokio::select! {
+                _ = application.shutdown() => {},
+                _ = shutdown_handler.wait_for_force_exit() => {}
+            }
             app_run.abort();
             info!("Exit");
             Ok(())
         })
-}
-
-async fn ctrl_c_handler(application: Arc<Application>) {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to listen for Ctrl-C");
-    info!("Got Ctrl-C, shutting down");
-
-    let mut jobs = JoinSet::new();
-    jobs.spawn(async move {
-        application.shutdown().await;
-    });
-    jobs.spawn(async {
-        tokio::signal::ctrl_c().await.unwrap();
-        info!("Force exit on the second Ctrl-C");
-    });
-    jobs.join_next().await;
 }

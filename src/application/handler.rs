@@ -6,6 +6,7 @@ use crate::{
         TaskSendInputParams, TaskSendSignalParams, TaskStartParams, TaskSubscribeParams,
     },
     application::{
+        ShutdownTrigger,
         error::ApplicationError,
         subscriber::{CreatingEvent, Subscriber},
         subscription_registry::SubscriptionRegistry,
@@ -20,6 +21,7 @@ pub(in crate::application) struct Handler {
     connection_writer: ConnectionWriter,
     task_manager: Arc<TaskManager>,
     subscription_registry: SubscriptionRegistry,
+    shutdown_trigger: ShutdownTrigger,
 }
 
 impl Handler {
@@ -27,11 +29,13 @@ impl Handler {
         connection_writer: ConnectionWriter,
         task_manager: Arc<TaskManager>,
         subscription_registry: SubscriptionRegistry,
+        shutdown_trigger: ShutdownTrigger,
     ) -> Self {
         Self {
             connection_writer,
             task_manager,
             subscription_registry,
+            shutdown_trigger,
         }
     }
 
@@ -52,6 +56,7 @@ impl Handler {
                 self.send_input(params).await.map(|r| (r.into(), None))
             }
             RequestBody::Hello(params) => Ok((self.hello(params).into(), None)),
+            RequestBody::Shutdown(_) => Ok((self.shutdown().into(), None)),
         }
         .unwrap_or_else(|e| (e.into(), None));
 
@@ -156,5 +161,10 @@ impl Handler {
         ResponseResult::HelloResponse {
             server_version: env!("CARGO_PKG_VERSION"),
         }
+    }
+
+    fn shutdown(&self) -> ResponseResult {
+        self.shutdown_trigger.request_shutdown();
+        ResponseResult::Shutdown {}
     }
 }

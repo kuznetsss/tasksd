@@ -45,6 +45,7 @@ impl RequestRaw {
             "task.unsubscribe" => self.parse_params(RequestBody::TaskUnsubscribe),
             "task.send_input" => self.parse_params(RequestBody::TaskSendInput),
             "hello" => self.parse_params(RequestBody::Hello),
+            "shutdown" => self.parse_params(RequestBody::Shutdown),
             unknown => Err(ResponseError::method_not_found(unknown).into_response(Some(self.id))),
         }
     }
@@ -73,7 +74,15 @@ pub enum RequestBody {
     TaskUnsubscribe(TaskSubscribeParams),
     TaskSendInput(TaskSendInputParams),
     Hello(HelloParams),
+    Shutdown(NoParams),
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Empty {}
+
+#[derive(Debug, Deserialize)]
+pub struct NoParams(Option<Empty>);
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -364,6 +373,53 @@ mod tests {
         };
         assert_eq!(params.client_name, "some client");
         assert_eq!(params.client_version, "3.4.5");
+    }
+
+    #[test]
+    fn deserialize_shutdown() {
+        let json = json! {{
+            "jsonrpc":"2.0",
+            "id": 123,
+            "method": "shutdown",
+        }};
+        let parsed = Request::parse(&json.to_string()).unwrap();
+        assert_eq!(parsed.id, RequestId::Number(123));
+        let RequestBody::Shutdown(_) = parsed.body else {
+            panic!("Invalid request body");
+        };
+    }
+
+    #[test]
+    fn deserialize_shutdown_accepts_empty_params() {
+        for params in [json!(null), json!({})] {
+            let json = json! {{
+                "jsonrpc":"2.0",
+                "id": 123,
+                "method": "shutdown",
+                "params": params.clone(),
+            }};
+            let parsed = Request::parse(&json.to_string()).unwrap();
+            let RequestBody::Shutdown(_) = parsed.body else {
+                panic!("Invalid request body for params: {params}");
+            };
+        }
+    }
+
+    #[test]
+    fn deserialize_shutdown_rejects_unknown_params() {
+        let json = json! {{
+            "jsonrpc":"2.0",
+            "id": 123,
+            "method": "shutdown",
+            "params": { "unexpected": true },
+        }};
+        let err = Request::parse(&json.to_string()).unwrap_err();
+        assert_eq!(err.id, Some(RequestId::Number(123)));
+        let body = match err.body {
+            ResponseBody::Error(b) => b,
+            b => panic!("Unexpected response body {b:?}"),
+        };
+        assert_eq!(body.code, ErrorCode::InvalidParams);
     }
 
     #[test]
