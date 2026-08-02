@@ -5,13 +5,21 @@ use std::time::Duration;
 use serde_json::json;
 
 use crate::common::{
-    TestContextBuilder,
+    Client, TestContext, TestContextBuilder,
     api::{
-        ErrorResponse, ShutdownNotification, ShutdownResponse, TaskExitNotification,
-        TaskOutputNotification, TaskSendSignalResponse, TaskStartResponse,
+        ErrorResponse, HelloResponse, ShutdownResponse, ShuttingDownNotification,
+        TaskExitNotification, TaskOutputNotification, TaskSendSignalResponse, TaskStartResponse,
     },
     running_app,
 };
+
+async fn connected_client(ctx: &TestContext) -> Client {
+    let mut client = ctx.make_client().await;
+    client.hello().await.unwrap();
+    let response: HelloResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+    client
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shutdown_sends_sigterm_to_running_tasks() {
@@ -31,9 +39,27 @@ async fn shutdown_sends_sigterm_to_running_tasks() {
     assert_eq!(exit_notification.params.exit_code, None);
     assert_eq!(exit_notification.params.signal, Some(15));
 
-    let _: ShutdownNotification = client.read_struct().await.unwrap();
+    let _: ShuttingDownNotification = client.read_struct().await.unwrap();
 
     assert!(client.is_disconnected().await);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutting_down_notification_is_sent_to_every_client() {
+    let ctx = TestContextBuilder::new().build().unwrap();
+    ctx.spawn_app_run();
+    let mut first_client = connected_client(&ctx).await;
+    let mut second_client = connected_client(&ctx).await;
+
+    tokio::time::timeout(Duration::from_secs(1), ctx.shutdown())
+        .await
+        .unwrap();
+
+    let _: ShuttingDownNotification = first_client.read_struct().await.unwrap();
+    let _: ShuttingDownNotification = second_client.read_struct().await.unwrap();
+
+    assert!(first_client.is_disconnected().await);
+    assert!(second_client.is_disconnected().await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -77,7 +103,7 @@ async fn shutdown_sends_sigkill_after_ignoring_sigterm() {
     assert_eq!(exit_notification.params.exit_code, None);
     assert_eq!(exit_notification.params.signal, Some(9));
 
-    let _: ShutdownNotification = client.read_struct().await.unwrap();
+    let _: ShuttingDownNotification = client.read_struct().await.unwrap();
 
     assert!(client.is_disconnected().await);
 }
@@ -97,7 +123,7 @@ async fn shutdown_request_is_answered_before_exiting() {
     let response: ShutdownResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, client.last_id());
 
-    let _: ShutdownNotification = client.read_struct().await.unwrap();
+    let _: ShuttingDownNotification = client.read_struct().await.unwrap();
 
     assert!(client.is_disconnected().await);
 }
@@ -131,7 +157,7 @@ async fn shutdown_request_sends_sigterm_to_running_tasks() {
         .unwrap()
         .unwrap();
 
-    let _: ShutdownNotification = client.read_struct().await.unwrap();
+    let _: ShuttingDownNotification = client.read_struct().await.unwrap();
 
     assert!(client.is_disconnected().await);
 }

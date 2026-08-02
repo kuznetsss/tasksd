@@ -103,8 +103,19 @@ pub struct TaskExitNotificationParams {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ShutdownNotification {
-    pub method: MustBe!("shutdown"),
+pub struct ShuttingDownNotification {
+    pub method: MustBe!("shutting_down"),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HelloResponse {
+    pub id: i64,
+    pub result: HelloResponseResult,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HelloResponseResult {
+    pub server_version: String,
 }
 
 #[derive(Debug, Deserialize)]

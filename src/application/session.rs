@@ -76,7 +76,7 @@ impl Session {
         let shutdown_result =
             tokio::time::timeout(Duration::from_secs(KILL_TIMEOUT.as_secs() - 1), async {
                 self.internal_coroutines.join().await;
-                let shutdown_notification: Notification = NotificationBody::Shutdown.into();
+                let shutdown_notification: Notification = NotificationBody::ShuttingDown.into();
                 let _ = self
                     .connection
                     .writer()
