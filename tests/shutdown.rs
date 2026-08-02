@@ -7,8 +7,8 @@ use serde_json::json;
 use crate::common::{
     TestContextBuilder,
     api::{
-        ErrorResponse, ShutdownResponse, TaskExitNotification, TaskOutputNotification,
-        TaskSendSignalResponse, TaskStartResponse,
+        ErrorResponse, ShutdownNotification, ShutdownResponse, TaskExitNotification,
+        TaskOutputNotification, TaskSendSignalResponse, TaskStartResponse,
     },
     running_app,
 };
@@ -30,6 +30,8 @@ async fn shutdown_sends_sigterm_to_running_tasks() {
     assert_eq!(exit_notification.params.task_id, task_id);
     assert_eq!(exit_notification.params.exit_code, None);
     assert_eq!(exit_notification.params.signal, Some(15));
+
+    let _: ShutdownNotification = client.read_struct().await.unwrap();
 
     assert!(client.is_disconnected().await);
 }
@@ -75,6 +77,8 @@ async fn shutdown_sends_sigkill_after_ignoring_sigterm() {
     assert_eq!(exit_notification.params.exit_code, None);
     assert_eq!(exit_notification.params.signal, Some(9));
 
+    let _: ShutdownNotification = client.read_struct().await.unwrap();
+
     assert!(client.is_disconnected().await);
 }
 
@@ -92,6 +96,8 @@ async fn shutdown_request_is_answered_before_exiting() {
 
     let response: ShutdownResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, client.last_id());
+
+    let _: ShutdownNotification = client.read_struct().await.unwrap();
 
     assert!(client.is_disconnected().await);
 }
@@ -124,6 +130,8 @@ async fn shutdown_request_sends_sigterm_to_running_tasks() {
         .await
         .unwrap()
         .unwrap();
+
+    let _: ShutdownNotification = client.read_struct().await.unwrap();
 
     assert!(client.is_disconnected().await);
 }

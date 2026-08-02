@@ -103,6 +103,11 @@ pub struct TaskExitNotificationParams {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ShutdownNotification {
+    pub method: MustBe!("shutdown"),
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ErrorResponse {
     pub id: Option<i64>,
     pub error: ErrorResponseDetails,

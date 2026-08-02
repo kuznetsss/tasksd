@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, info, info_span, warn};
 
 use crate::{
-    api::{Request, RequestId, Response},
+    api::{Notification, NotificationBody, Request, RequestId, Response},
     application::{
         ApplicationError, KILL_TIMEOUT, ShutdownTrigger, handler::Handler,
         subscription_registry::SubscriptionRegistry,
@@ -73,13 +73,19 @@ impl Session {
     }
 
     async fn shutdown(self) {
-        if tokio::time::timeout(Duration::from_secs(KILL_TIMEOUT.as_secs() - 1), async {
-            self.internal_coroutines.join().await;
-            self.connection.join().await;
-        })
-        .await
-        .is_err()
-        {
+        let shutdown_result =
+            tokio::time::timeout(Duration::from_secs(KILL_TIMEOUT.as_secs() - 1), async {
+                self.internal_coroutines.join().await;
+                let shutdown_notification: Notification = NotificationBody::Shutdown.into();
+                let _ = self
+                    .connection
+                    .writer()
+                    .write(&shutdown_notification.to_json_string())
+                    .await;
+                self.connection.join().await;
+            })
+            .await;
+        if shutdown_result.is_err() {
             self.internal_coroutines.shutdown();
             self.internal_coroutines.join().await;
         }
