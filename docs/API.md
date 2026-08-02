@@ -348,14 +348,19 @@ is rejected with [`-32602` Invalid params](#standard-json-rpc-errors).
 
 An empty object `{}`.
 
-The response is sent before the daemon starts shutting down, so a client can
-rely on receiving it. What follows, in order, is:
+The response is always delivered before the daemon exits, so a client can rely
+on receiving it. The daemon then:
 
-1. `SIGTERM` to every running task.
-2. A graceful period (the daemon's `--graceful-period`, in seconds) for tasks to
-   exit on their own, after which survivors are sent `SIGKILL`.
-3. A `task.exit` notification for each task the connection is subscribed to.
-4. End of stream on the socket as the daemon exits.
+1. Sends `SIGTERM` to every running task.
+2. Waits a graceful period (the daemon's `--graceful-period`, in seconds) for
+   tasks to exit on their own, then sends `SIGKILL` to the survivors.
+3. Sends a `task.exit` notification for each task the connection is subscribed
+   to.
+4. Closes the connection, ending the stream.
+
+As with every other method, the response is not ordered against notifications:
+a `task.exit` for a task killed by the shutdown may arrive before or after the
+`shutdown` response. Only the EOF is guaranteed to come last.
 
 A client should treat the EOF after a `shutdown` response as a normal
 disconnect rather than an error. Sending `shutdown` while a shutdown is already

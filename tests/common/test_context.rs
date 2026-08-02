@@ -6,6 +6,7 @@ use std::{
 use anyhow::Result;
 use tasksd::application::{Application, Armed, CliOptions, ShutdownHandler};
 use tempfile::TempDir;
+use tokio::task::JoinHandle;
 
 use crate::common::Client;
 
@@ -13,7 +14,7 @@ use crate::common::Client;
 pub struct TestContext {
     _tmp_dir: TempDir,
     socket_path: PathBuf,
-    shutdown_handler: ShutdownHandler<Armed>,
+    shutdown_handler: Option<ShutdownHandler<Armed>>,
     app: Arc<Application>,
 }
 
@@ -35,6 +36,18 @@ impl TestContext {
 
     pub async fn shutdown(&self) {
         self.app.shutdown().await;
+    }
+
+    pub fn spawn_shutdown_watcher(&mut self) -> JoinHandle<()> {
+        let shutdown_handler = self
+            .shutdown_handler
+            .take()
+            .expect("shutdown watcher is already spawned");
+        let app = self.app();
+        tokio::spawn(async move {
+            shutdown_handler.wait_for_shutdown().await;
+            app.shutdown().await;
+        })
     }
 
     pub async fn make_client(&self) -> Client {
@@ -72,13 +85,13 @@ impl TestContextBuilder {
         } else {
             socket_path = self.cli_args.unix_socket_path.clone();
         }
-        let shutdown_handler = ShutdownHandler::new();
+        let shutdown_handler = ShutdownHandler::default();
         let app = Application::new(self.cli_args, shutdown_handler.trigger())?;
         Ok(TestContext {
             _tmp_dir: tmp_dir,
             socket_path,
             app: Arc::new(app),
-            shutdown_handler,
+            shutdown_handler: Some(shutdown_handler),
         })
     }
 }

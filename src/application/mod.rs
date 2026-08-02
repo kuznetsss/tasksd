@@ -148,6 +148,7 @@ impl Application {
             }
         });
         parallel_jobs.spawn({
+            // TODO: this order means running session could spawn a new task
             let task_manager = self.task_manager.clone();
             let root_cancellation = self.root_cancellation.clone();
             let session_jobs = self.session_jobs.clone();

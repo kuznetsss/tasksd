@@ -43,6 +43,15 @@ pub struct TaskUnsubscribeResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ShutdownResponse {
+    pub id: i64,
+    pub result: ShutdownResponseResult,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ShutdownResponseResult {}
+
+#[derive(Debug, Deserialize)]
 pub struct OutputLine {
     pub line: String,
     pub line_number: usize,

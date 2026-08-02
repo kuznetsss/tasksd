@@ -69,7 +69,7 @@ API is documented in [docs/API.md](docs/API.md).
 - [x] Use client.expect_unordered() (because notification and response are not ordered) in tests for:
 - [x] Flaky test: https://github.com/kuznetsss/tasksd/actions/runs/29212404093/job/86702237672?pr=32
 - [x] Client hello and server hello messages
-- [ ] Shutdown API method
+- [x] Shutdown API method
 - [ ] Broadcast shutdown notification to all connections
 - [ ] CI release improvements:
     - No sha file

@@ -390,6 +390,39 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_shutdown_accepts_empty_params() {
+        for params in [json!(null), json!({})] {
+            let json = json! {{
+                "jsonrpc":"2.0",
+                "id": 123,
+                "method": "shutdown",
+                "params": params.clone(),
+            }};
+            let parsed = Request::parse(&json.to_string()).unwrap();
+            let RequestBody::Shutdown(_) = parsed.body else {
+                panic!("Invalid request body for params: {params}");
+            };
+        }
+    }
+
+    #[test]
+    fn deserialize_shutdown_rejects_unknown_params() {
+        let json = json! {{
+            "jsonrpc":"2.0",
+            "id": 123,
+            "method": "shutdown",
+            "params": { "unexpected": true },
+        }};
+        let err = Request::parse(&json.to_string()).unwrap_err();
+        assert_eq!(err.id, Some(RequestId::Number(123)));
+        let body = match err.body {
+            ResponseBody::Error(b) => b,
+            b => panic!("Unexpected response body {b:?}"),
+        };
+        assert_eq!(body.code, ErrorCode::InvalidParams);
+    }
+
+    #[test]
     fn deserialize_signal_success() {
         let original_signal = 12;
         let json_str = format!(r#"{{"task_id": 456, "signal":{original_signal}}}"#);

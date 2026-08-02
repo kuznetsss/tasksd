@@ -52,6 +52,7 @@ impl TaskManager {
         working_dir: Option<String>,
     ) -> Result<(Arc<Task>, TaskId, TaskReadingGate), TaskError> {
         let lock = self.completion_coroutines.lock().unwrap();
+        // TODO: should be shutdown error
         let completion_coroutines = lock.as_ref().ok_or(TaskError::AlreadyExited)?;
 
         let task_id = TaskId(
