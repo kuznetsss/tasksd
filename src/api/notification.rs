@@ -42,6 +42,9 @@ pub enum NotificationBody {
 
     #[serde(rename = "task.exit")]
     TaskExit(TaskExitParams),
+
+    #[serde(rename = "shutting_down")]
+    ShuttingDown,
 }
 
 impl NotificationBody {
@@ -153,5 +156,12 @@ mod tests {
                 r#"{{"jsonrpc":"2.0","method":"task.exit","params":{{"task_id":{task_id},"exit_code":{exit_code},"signal":null}}}}"#
             )
         )
+    }
+
+    #[test]
+    fn shutting_down_serialization() {
+        let notification: Notification = NotificationBody::ShuttingDown.into();
+        let json_str = notification.to_json_string();
+        assert_eq!(json_str, r#"{"jsonrpc":"2.0","method":"shutting_down"}"#);
     }
 }

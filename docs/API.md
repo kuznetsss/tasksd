@@ -31,6 +31,10 @@ header or the separating blank line).
 - Request `id` may be a string or a number and is echoed back on the response.
 - `task_id` is an unsigned integer assigned by the server when a task starts.
 - All fields are required unless marked optional.
+- Method names are scoped by subject: a `task.` prefix means the message is
+  about one task, and a bare name means it is about the daemon or the
+  connection itself. Every method name is unique across requests and
+  notifications, so `method` alone identifies a message.
 
 ---
 
@@ -356,7 +360,9 @@ on receiving it. The daemon then:
    tasks to exit on their own, then sends `SIGKILL` to the survivors.
 3. Sends a `task.exit` notification for each task the connection is subscribed
    to.
-4. Closes the connection, ending the stream.
+4. Sends a [`shutting_down`](#shutting_down) notification, after every
+   `task.exit` above.
+5. Closes the connection, ending the stream.
 
 As with every other method, the response is not ordered against notifications:
 a `task.exit` for a task killed by the shutdown may arrive before or after the
@@ -437,6 +443,33 @@ Emitted once when a task terminates.
   "jsonrpc": "2.0",
   "method": "task.exit",
   "params": { "task_id": 1, "exit_code": 0, "signal": null }
+}
+```
+
+### `shutting_down`
+
+Emitted once per connection when the daemon is terminating, whatever started
+the shutdown: a [`shutdown`](#shutdown) request from this connection, a
+`shutdown` request from a different connection, or a signal sent to the daemon
+itself. Every connected client receives it, and it lets a client tell a
+deliberate daemon shutdown apart from a crash or a dropped socket.
+
+It carries no `params`.
+
+It is the last message on the connection, sent after every `task.exit` the
+connection is owed, and is followed only by the EOF.
+
+Delivery is best-effort: it is dropped if the daemon has to force its way
+through a stuck shutdown, and it can be lost in flight like any other message
+if the connection breaks. A client should treat it as an explanation of the
+disconnect, not as the disconnect signal itself — **the EOF remains the
+authoritative end of the stream**, and a client must not wait for
+`shutting_down` before closing.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "shutting_down"
 }
 ```
 
