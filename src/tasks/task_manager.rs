@@ -24,21 +24,35 @@ impl std::fmt::Display for TaskId {
 }
 
 #[derive(Debug)]
+struct TaskRegistry {
+    running: HashMap<TaskId, Arc<Task>>,
+    finished: RecentFinishedTasks,
+}
+
+impl TaskRegistry {
+    fn new(finished_tasks_capacity: usize) -> Self {
+        Self {
+            running: HashMap::new(),
+            finished: RecentFinishedTasks::new(finished_tasks_capacity),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct TaskManager {
     task_output_buffer_capacity: usize,
-    tasks: RwLock<HashMap<TaskId, Arc<Task>>>,
+    tasks: RwLock<TaskRegistry>,
     next_id: AtomicUsize,
-    finished_tasks: RwLock<RecentFinishedTasks>,
     completion_coroutines: Mutex<Option<WrappedTaskTracker>>,
 }
 
 impl TaskManager {
     pub fn new(task_output_buffer_capacity: usize) -> Arc<Self> {
+        const FINISHED_TASKS_CAPACITY: usize = 100;
         Arc::new(Self {
             task_output_buffer_capacity,
-            tasks: Default::default(),
+            tasks: RwLock::new(TaskRegistry::new(FINISHED_TASKS_CAPACITY)),
             next_id: AtomicUsize::new(0),
-            finished_tasks: RwLock::new(RecentFinishedTasks::new(100)),
             completion_coroutines: Mutex::new(Some(WrappedTaskTracker::new(
                 PanicHandler::new_aborting(),
             ))),
@@ -72,15 +86,17 @@ impl TaskManager {
         self.tasks
             .write()
             .expect("RwLock is poisoned")
+            .running
             .insert(task_id, task.clone());
         Ok((task, task_id, reading_gate))
     }
 
     pub fn get_task(&self, id: TaskId) -> Result<Arc<Task>, TaskError> {
-        if let Some(t) = self.get_running_task(id) {
-            return Ok(t);
+        let tasks = self.tasks.read().unwrap();
+        if let Some(t) = tasks.running.get(&id) {
+            return Ok(t.clone());
         }
-        if self.finished_tasks.read().unwrap().get(id).is_some() {
+        if tasks.finished.get(id).is_some() {
             Err(TaskError::AlreadyExited)
         } else {
             Err(TaskError::NotFound)
@@ -91,12 +107,13 @@ impl TaskManager {
         self.tasks
             .read()
             .expect("RwLock is poisoned")
+            .running
             .get(&id)
             .cloned()
     }
 
     pub fn get_finished_task(&self, id: TaskId) -> Option<Arc<FinishedTask>> {
-        self.finished_tasks.read().unwrap().get(id)
+        self.tasks.read().unwrap().finished.get(id)
     }
 
     pub async fn join(&self) {
@@ -108,24 +125,23 @@ impl TaskManager {
     }
 
     pub fn send_signal_to_all_tasks(&self, signal: rustix::process::Signal) {
-        let tasks_map = self.tasks.read().unwrap();
-        for task in tasks_map.values() {
+        let tasks = self.tasks.read().unwrap();
+        for task in tasks.running.values() {
             let _ = task.send_signal(signal);
         }
     }
 
     pub fn task_list(&self) -> TaskList {
         let mut list = TaskList::default();
-        let tasks_map = self.tasks.read().unwrap();
-        for (&id, task) in tasks_map.iter() {
+        let tasks = self.tasks.read().unwrap();
+        for (&id, task) in tasks.running.iter() {
             let entry = TaskEntry {
                 info: task.info(),
                 id,
             };
             list.running.push(entry);
         }
-        let finished_tasks = self.finished_tasks.read().unwrap();
-        for (&id, task) in finished_tasks.iter() {
+        for (&id, task) in tasks.finished.iter() {
             let entry = TaskEntry {
                 info: task.info.clone(),
                 id,
@@ -147,15 +163,12 @@ impl TaskManager {
                 let this = self.clone();
                 async move {
                     let finished_task = task.join().await;
-                    this.finished_tasks
-                        .write()
-                        .unwrap()
-                        .insert(task_id, Arc::new(finished_task));
-                    this.tasks
-                        .write()
-                        .unwrap()
+                    let mut tasks = this.tasks.write().unwrap();
+                    tasks.finished.insert(task_id, Arc::new(finished_task));
+                    tasks
+                        .running
                         .remove(&task_id)
-                        .expect("Task should still be in the hmap");
+                        .expect("Task should still be in the running map");
                 }
             })
             .expect("Should never happen because of mutex");
@@ -191,7 +204,7 @@ pub struct TaskList {
 mod tests {
     use std::{
         assert_matches, collections::HashSet, env::current_dir, os::unix::process::ExitStatusExt,
-        pin::pin, task::Poll, time::Duration,
+        pin::pin, sync::Arc, task::Poll, time::Duration,
     };
 
     use futures::task::noop_waker;
@@ -361,12 +374,13 @@ mod tests {
         assert!(list.finished.is_empty());
         task.send_signal(Signal::KILL).unwrap();
         task.wait().await;
-        tokio::task::yield_now().await;
+        tokio::time::timeout(Duration::from_secs(5), tm.join())
+            .await
+            .unwrap();
 
         let list = tm.task_list();
         assert!(list.running.is_empty());
         assert_eq!(list.finished.len(), 1);
         assert_eq!(list.finished[0].id, task_id);
-        tm.join().await;
     }
 }

@@ -384,6 +384,13 @@ is a bounded window: older tasks fall out of it and stop appearing here (a
 other methods). `finished` is ordered oldest first; the order of `running` is
 unspecified and may differ between calls.
 
+A task is moved from `running` to `finished` shortly after it terminates, and
+that move is not synchronised with the [`task.exit`](#taskexit) notification. A
+`task.list` issued immediately after receiving `task.exit` for a task may still
+report it under `running`; it appears under `finished` on a later call. Clients
+that need to observe the transition should re-request rather than assume the
+notification has already taken effect.
+
 Both arrays may be empty. A daemon with no tasks at all still answers with a
 result rather than an error.
 
@@ -525,6 +532,9 @@ Emitted once when a task terminates.
   "params": { "task_id": 1, "exit_code": 0, "signal": null }
 }
 ```
+
+Receiving this notification does not guarantee that [`task.list`](#tasklist)
+already reports the task under `finished`; see that method for details.
 
 ### `shutting_down`
 
