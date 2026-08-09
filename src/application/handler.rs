@@ -55,6 +55,7 @@ impl Handler {
             RequestBody::TaskSendInput(params) => {
                 self.send_input(params).await.map(|r| (r.into(), None))
             }
+            RequestBody::TaskList(_) => Ok((self.task_list().into(), None)),
             RequestBody::Hello(params) => Ok((self.hello(params).into(), None)),
             RequestBody::Shutdown(_) => Ok((self.shutdown().into(), None)),
         }
@@ -161,6 +162,11 @@ impl Handler {
         ResponseResult::HelloResponse {
             server_version: env!("CARGO_PKG_VERSION"),
         }
+    }
+
+    fn task_list(&self) -> ResponseResult {
+        let list = self.task_manager.task_list();
+        ResponseResult::TaskList { tasks: list }
     }
 
     fn shutdown(&self) -> ResponseResult {

@@ -114,6 +114,27 @@ impl TaskManager {
         }
     }
 
+    pub fn task_list(&self) -> TaskList {
+        let mut list = TaskList::default();
+        let tasks_map = self.tasks.read().unwrap();
+        for (&id, task) in tasks_map.iter() {
+            let entry = TaskEntry {
+                info: task.info(),
+                id,
+            };
+            list.running.push(entry);
+        }
+        let finished_tasks = self.finished_tasks.read().unwrap();
+        for (&id, task) in finished_tasks.iter() {
+            let entry = TaskEntry {
+                info: task.info.clone(),
+                id,
+            };
+            list.finished.push(entry);
+        }
+        list
+    }
+
     fn spawn_task_completion(
         self: &Arc<Self>,
         completion_coroutines: &WrappedTaskTracker,
@@ -151,6 +172,18 @@ impl Drop for TaskManager {
             "TaskManager is dropped without calling join()"
         );
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskEntry {
+    pub info: Arc<TaskInfo>,
+    pub id: TaskId,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct TaskList {
+    pub running: Vec<TaskEntry>,
+    pub finished: Vec<TaskEntry>,
 }
 
 #[cfg(test)]
@@ -315,6 +348,25 @@ mod tests {
         let task = tm.get_task(task_id).unwrap();
         assert_eq!(task.output_buffer().capacity(), TASK_OUTPUT_BUFFER_CAPACITY);
         task.send_signal(Signal::TERM).unwrap();
+        tm.join().await;
+    }
+
+    #[tokio::test]
+    async fn task_list_returns_list_of_tasks() {
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
+        let (task, task_id, _) = tm.spawn("cat", &[], None).unwrap();
+        let list = tm.task_list();
+        assert_eq!(list.running.len(), 1);
+        assert_eq!(list.running[0].id, task_id);
+        assert!(list.finished.is_empty());
+        task.send_signal(Signal::KILL).unwrap();
+        task.wait().await;
+        tokio::task::yield_now().await;
+
+        let list = tm.task_list();
+        assert!(list.running.is_empty());
+        assert_eq!(list.finished.len(), 1);
+        assert_eq!(list.finished[0].id, task_id);
         tm.join().await;
     }
 }

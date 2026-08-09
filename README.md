@@ -71,6 +71,7 @@ API is documented in [docs/API.md](docs/API.md).
 - [x] Client hello and server hello messages
 - [x] Shutdown API method
 - [x] Broadcast shutdown notification to all connections
+- [x] Add `task.list` API to get list of running and finished tasks
 - [ ] CI release improvements:
     - No sha file
     - Build in old ubuntu instead of musl

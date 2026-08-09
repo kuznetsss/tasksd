@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-#[derive(Debug)]
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
 pub struct TaskInfo {
     pub executable: String,
     pub args: Vec<String>,

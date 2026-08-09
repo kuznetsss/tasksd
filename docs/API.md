@@ -338,6 +338,86 @@ writing to stdin is rejected with [`4` Error writing to process](#task-errors).
 { "jsonrpc": "2.0", "id": 6, "result": {} }
 ```
 
+### `task.list`
+
+List the tasks the daemon knows about. The listing is daemon-wide, not scoped
+to the calling connection: it includes tasks started by other connections and
+tasks whose starting connection has since disconnected.
+
+**Params**
+
+None. `params` may be omitted, `null`, or an empty object `{}`. Any other value
+is rejected with [`-32602` Invalid params](#standard-json-rpc-errors).
+
+**Result**
+
+| Field   | Type   | Description                          |
+| ------- | ------ | ------------------------------------ |
+| `tasks` | object | The task listing, split by state.    |
+
+`tasks` has two arrays:
+
+| Field      | Type     | Description                                         |
+| ---------- | -------- | --------------------------------------------------- |
+| `running`  | object[] | Tasks that have not exited yet.                     |
+| `finished` | object[] | Tasks that have exited and are still remembered.    |
+
+Each entry in either array has the same shape:
+
+| Field  | Type    | Description                       |
+| ------ | ------- | --------------------------------- |
+| `id`   | integer | Id of the task.                   |
+| `info` | object  | How the task was started.         |
+
+`info` describes the task as the server resolved it when it started, not the
+raw `task.start` params:
+
+| Field         | Type     | Description                                                       |
+| ------------- | -------- | ----------------------------------------------------------------- |
+| `executable`  | string   | Program the task runs.                                            |
+| `args`        | string[] | Arguments it was started with; empty if none were given.          |
+| `working_dir` | string   | Directory it runs in, resolved to the daemon's cwd if omitted.    |
+
+The server only remembers the 100 most recently finished tasks, so `finished`
+is a bounded window: older tasks fall out of it and stop appearing here (a
+`task_id` that has aged out is also [`7` Task not found](#task-errors) for the
+other methods). `finished` is ordered oldest first; the order of `running` is
+unspecified and may differ between calls.
+
+Both arrays may be empty. A daemon with no tasks at all still answers with a
+result rather than an error.
+
+This method reports no errors of its own.
+
+**Example**
+
+```json
+// → request
+{ "jsonrpc": "2.0", "id": 7, "method": "task.list" }
+
+// ← response
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "result": {
+    "tasks": {
+      "running": [
+        {
+          "id": 2,
+          "info": { "executable": "cat", "args": [], "working_dir": "/tmp" }
+        }
+      ],
+      "finished": [
+        {
+          "id": 1,
+          "info": { "executable": "ls", "args": ["-la"], "working_dir": "/tmp" }
+        }
+      ]
+    }
+  }
+}
+```
+
 ### `shutdown`
 
 Shut down the daemon. This is not scoped to the calling connection: every task
@@ -377,10 +457,10 @@ at all, since the connection is already closing.
 
 ```json
 // → request
-{ "jsonrpc": "2.0", "id": 7, "method": "shutdown" }
+{ "jsonrpc": "2.0", "id": 8, "method": "shutdown" }
 
 // ← response
-{ "jsonrpc": "2.0", "id": 7, "result": {} }
+{ "jsonrpc": "2.0", "id": 8, "result": {} }
 ```
 
 ---
