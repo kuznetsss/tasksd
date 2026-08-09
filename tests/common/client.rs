@@ -176,6 +176,16 @@ impl Client {
         self.send_json(&json).await
     }
 
+    pub async fn task_list(&mut self) -> Result<()> {
+        let id = self.next_id();
+        let json = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "task.list",
+        });
+        self.send_json(&json).await
+    }
+
     pub fn last_id(&self) -> i64 {
         self.last_id
     }

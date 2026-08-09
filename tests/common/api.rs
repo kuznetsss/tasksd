@@ -52,6 +52,36 @@ pub struct ShutdownResponse {
 pub struct ShutdownResponseResult {}
 
 #[derive(Debug, Deserialize)]
+pub struct TaskListResponse {
+    pub id: i64,
+    pub result: TaskListResponseResult,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaskListResponseResult {
+    pub tasks: TaskList,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaskList {
+    pub running: Vec<TaskEntry>,
+    pub finished: Vec<TaskEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaskEntry {
+    pub id: usize,
+    pub info: TaskInfo,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaskInfo {
+    pub executable: String,
+    pub args: Vec<String>,
+    pub working_dir: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct OutputLine {
     pub line: String,
     pub line_number: usize,

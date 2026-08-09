@@ -39,6 +39,14 @@ impl RecentFinishedTasks {
         self.id_to_task.get(&id).map(Arc::clone)
     }
 
+    pub(in crate::tasks) fn iter(&self) -> impl Iterator<Item = (&TaskId, &Arc<FinishedTask>)> {
+        self.recent_tasks.iter().map(|id| {
+            self.id_to_task
+                .get_key_value(id)
+                .expect("Hash map should always contain id from recent_tasks")
+        })
+    }
+
     fn remove_last(&mut self) {
         let id = self
             .recent_tasks
@@ -53,7 +61,7 @@ impl RecentFinishedTasks {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::{env::current_dir, process::ExitStatus};
+    use std::{assert_matches, env::current_dir, process::ExitStatus};
 
     use crate::tasks::{info::TaskInfo, output_buffer::OutputBuffer};
 
@@ -123,5 +131,35 @@ mod tests {
         assert_eq!(task.info.executable, id2.0.to_string());
         let task = ft.get(id3).unwrap();
         assert_eq!(task.info.executable, id3.0.to_string());
+    }
+
+    #[test]
+    fn iter_iterates_over_tasks() {
+        let mut ft = RecentFinishedTasks::new(2);
+        assert!(ft.iter().next().is_none());
+
+        let (id1, task1) = make_finished_task(1);
+        ft.insert(id1, task1.clone());
+        {
+            let mut it = ft.iter();
+            assert_matches!(it.next(), Some((id, t)) if id == &id1 && Arc::ptr_eq(t, &task1));
+            assert_matches!(it.next(), None);
+        }
+
+        let (id2, task2) = make_finished_task(2);
+        ft.insert(id2, task2.clone());
+        {
+            let mut it = ft.iter();
+            assert_matches!(it.next(), Some((id, t)) if id == &id1 && Arc::ptr_eq(t, &task1));
+            assert_matches!(it.next(), Some((id, t)) if id == &id2 && Arc::ptr_eq(t, &task2));
+            assert_matches!(it.next(), None);
+        }
+
+        let (id3, task3) = make_finished_task(3);
+        ft.insert(id3, task3.clone());
+        let mut it = ft.iter();
+        assert_matches!(it.next(), Some((id, t)) if id == &id2 && Arc::ptr_eq(t, &task2));
+        assert_matches!(it.next(), Some((id, t)) if id == &id3 && Arc::ptr_eq(t, &task3));
+        assert_matches!(it.next(), None);
     }
 }

@@ -44,6 +44,7 @@ impl RequestRaw {
             "task.subscribe" => self.parse_params(RequestBody::TaskSubscribe),
             "task.unsubscribe" => self.parse_params(RequestBody::TaskUnsubscribe),
             "task.send_input" => self.parse_params(RequestBody::TaskSendInput),
+            "task.list" => self.parse_params(RequestBody::TaskList),
             "hello" => self.parse_params(RequestBody::Hello),
             "shutdown" => self.parse_params(RequestBody::Shutdown),
             unknown => Err(ResponseError::method_not_found(unknown).into_response(Some(self.id))),
@@ -73,6 +74,7 @@ pub enum RequestBody {
     TaskSubscribe(TaskSubscribeParams),
     TaskUnsubscribe(TaskSubscribeParams),
     TaskSendInput(TaskSendInputParams),
+    TaskList(NoParams),
     Hello(HelloParams),
     Shutdown(NoParams),
 }
@@ -157,6 +159,7 @@ pub struct HelloParams {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use serde_json::json;
+    use std::assert_matches;
 
     use crate::api::response::{ErrorCode, ResponseBody};
 
@@ -353,6 +356,18 @@ mod tests {
         };
         assert_eq!(params.task_id.0, 456);
         assert_eq!(params.input, "some input");
+    }
+
+    #[test]
+    fn deserialize_task_list() {
+        let json = json!({
+            "jsonrpc":"2.0",
+            "id": 123,
+            "method": "task.list",
+        });
+        let parsed = Request::parse(&json.to_string()).unwrap();
+        assert_eq!(parsed.id, RequestId::Number(123));
+        assert_matches!(parsed.body, RequestBody::TaskList(_));
     }
 
     #[test]
