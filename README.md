@@ -4,23 +4,19 @@
 [![Crates audit](https://github.com/kuznetsss/tasksd/actions/workflows/audit.yml/badge.svg)](https://github.com/kuznetsss/tasksd/actions/workflows/audit.yml)
 [![Test coverage](https://codecov.io/gh/kuznetsss/tasksd/graph/badge.svg?token=NBUAOGLWUH)](https://codecov.io/gh/kuznetsss/tasksd)
 
-Tasksd is a daemon allowing to spawn processes via JSON-RPC API.
+Tasksd is a daemon providing JSON-RPC API to spawn processes.
 As a daemon it detaches execution from the client allowing the spawned process to run even if the client is down.
+
+It is created as a companion for Neovim but it doesn't have anything specific for Neovim. Tasksd can be used as a general purpose terminal multiplexer with an API.
 
 > [!WARNING]
 > Tasksd is still under development. There could be bugs, API-breaking changes, and any other sort of instability.
-
-## Why it exists
-
-A few reasons:
-- I was curious to try applying the idea of LSP to task running.
-- I didn't like any existing Neovim code runners and I wanted to shift as much logic as possible from Lua to Rust
 
 ## Installation
 
 Requirements:
 - Linux or macOS (Windows is not supported)
-- Maybe the latest stable Rust toolchain
+- Rust 1.97 or newer
 
 For now cargo is the easiest way to install tasksd:
 
@@ -48,34 +44,19 @@ Use `--help` flag to see all the available options.
 - (Not implemented yet) PTY is allocated for each task - spawned command sees a real terminal
 - output capture - each task output is captured into a ring buffer (by default tasksd keeps last 10 000 lines)
 - streaming JSON-RPC API - clients subscribe to live output and exit notifications over a unix socket
+- list of tasks - clients can get a list of running or recently finished processes
 
 ## JSON-RPC API
 
 API is documented in [docs/API.md](docs/API.md).
 
-## Roadmap
+## Why it exists
 
-`0.2.0`:
-- [x] Separate task not found and task already exited errors
-- [x] transport::Connection refactoring: Connection should have its internal cancellation token and method stop()
-- [x] **BUG**: pty output couldn't be divided into chunks:
-    - [x] Move task subscribers into session
-    - [x] In the current task piped (tokio's native stdout/stderr) outputs instead of pty
-        - [x] Send signal to the process group instead of single process to affect children of the task
-- [x] Add line number to output notification
-- [x] Add notifications about missed output
-- [x] Query task output buffer for line range
-- [x] Subscription control (subscribe on output/exit, unsubscribe)
-- [x] Use client.expect_unordered() (because notification and response are not ordered) in tests for:
-- [x] Flaky test: https://github.com/kuznetsss/tasksd/actions/runs/29212404093/job/86702237672?pr=32
-- [x] Client hello and server hello messages
-- [x] Shutdown API method
-- [x] Broadcast shutdown notification to all connections
-- [x] Add `task.list` API to get list of running and finished tasks
-- [x] CI release improvements:
-    - No sha file
-    - Build in old ubuntu instead of musl
-    - No code signing
+A few reasons:
+- I was curious to try applying the idea of LSP to task running
+- I didn't like any existing Neovim code runners and I wanted to shift as much logic as possible from Lua to Rust
+
+## Roadmap
 
 `0.3.0` or later:
 - [ ] Switch output stream to Vec<u8>

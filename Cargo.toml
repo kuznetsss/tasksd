@@ -2,7 +2,8 @@
 name = "tasksd"
 version = "0.2.0"
 edition = "2024"
-authors = [""]
+authors = ["Sergey Kunzetsov"]
+rust-version = "1.97"
 
 [dependencies]
 anyhow = "1.0.102"
