@@ -10,6 +10,10 @@ updates:
       timezone: UTC
     commit-message:
       prefix: "chore"
+    groups:
+      cargo:
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: "/"
@@ -20,3 +24,7 @@ updates:
       timezone: UTC
     commit-message:
       prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
