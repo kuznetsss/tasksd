@@ -22,7 +22,7 @@ coverage:
 
 # PR comment summarising the coverage impact.
 comment:
-  layout: "reason, diff, files"
+  layout: "header, diff, files"
   behavior: default
   require_changes: true # only comment when coverage actually changes
 

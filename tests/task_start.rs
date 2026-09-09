@@ -188,7 +188,7 @@ async fn start_task_invalid_working_dir() {
 
     let response: ErrorResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id.unwrap(), id);
-    assert_eq!(response.error.code, 3);
+    assert_eq!(response.error.code, 1);
 
     ctx.shutdown().await;
 }

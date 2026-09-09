@@ -58,6 +58,15 @@ A few reasons:
 
 ## Roadmap
 
+Bugs:
+- [x] starting task with an invalid working dir returns:
+    `could not start `true`: Error starting child process: No such file or directory (os error 2)`
+- [ ] `task.info` API get a single entry of `tasks.list` by task id
+- [ ] in `task.get_output` the parameter `from_line` should become optional:
+      if it is not provided return the last `lines_number`
+- [ ] `task.subscribe` should provide option `output` and by default only subscribe on exit event
+- [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
+
 `0.3.0` or later:
 - [ ] Switch output stream to Vec<u8>
 - [ ] Implement different task type PtyTask:

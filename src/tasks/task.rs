@@ -1,4 +1,5 @@
 use std::{
+    path::Path,
     process::{ExitStatus, Stdio},
     sync::Arc,
 };
@@ -188,6 +189,7 @@ impl Task {
     }
 
     fn spawn_child_process(info: &TaskInfo) -> Result<Child, TaskError> {
+        Self::check_working_directory(&info.working_dir)?;
         // Using unsafe because pre_exec() is not safe since it is running in a process after fork
         let child = unsafe {
             Command::new(&info.executable)
@@ -204,6 +206,14 @@ impl Task {
                 .map_err(TaskError::starting_child_process_error)?
         };
         Ok(child)
+    }
+
+    fn check_working_directory(wd: &Path) -> Result<(), TaskError> {
+        if wd.is_dir() && rustix::fs::access(wd, rustix::fs::Access::EXEC_OK).is_ok() {
+            Ok(())
+        } else {
+            Err(TaskError::InvalidDirectory)
+        }
     }
 
     fn spawn_output_reading(
@@ -347,8 +357,14 @@ mod tests {
 
     use super::*;
     use std::{
-        assert_matches, env::current_dir, io::Write, os::unix::process::ExitStatusExt,
-        path::PathBuf, str::FromStr, sync::Mutex, time::Duration,
+        assert_matches,
+        env::current_dir,
+        io::Write,
+        os::unix::{fs::PermissionsExt, process::ExitStatusExt},
+        path::PathBuf,
+        str::FromStr,
+        sync::Mutex,
+        time::Duration,
     };
 
     const OUTPUT_BUFFER_CAPACITY: usize = CHANNEL_CAPACITY * 2;
@@ -418,7 +434,7 @@ mod tests {
             current_dir().unwrap().join("non_existing_123"),
         )
         .unwrap_err();
-        assert!(matches!(err, TaskError::StartingChildProcessError(_)));
+        assert_matches!(err, TaskError::InvalidDirectory);
     }
 
     #[tokio::test]
@@ -784,5 +800,57 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(rx.borrow().unwrap(), ());
+    }
+
+    #[test]
+    fn check_working_directory_returns_ok_for_a_regular_directory() {
+        assert_matches!(
+            Task::check_working_directory(&current_dir().unwrap()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn check_working_directory_returns_error_on_non_existing_path() {
+        let dir = current_dir().unwrap().join("non_existing_123");
+        assert!(!dir.exists());
+        assert_matches!(
+            Task::check_working_directory(&dir),
+            Err(TaskError::InvalidDirectory),
+            "check_working_directory returns error on non existing directory"
+        );
+    }
+
+    #[test]
+    fn check_working_directory_returns_error_on_file_path() {
+        let file = current_dir()
+            .unwrap()
+            .read_dir()
+            .unwrap()
+            .find(|e| {
+                e.as_ref()
+                    .map(|e| e.file_type().unwrap().is_file())
+                    .unwrap_or(false)
+            })
+            .unwrap()
+            .unwrap();
+        assert_matches!(
+            Task::check_working_directory(&file.path()),
+            Err(TaskError::InvalidDirectory),
+            "check_working_directory returns error on file {:?}",
+            file.path()
+        );
+    }
+
+    #[test]
+    fn check_working_directory_returns_error_on_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert_matches!(
+            Task::check_working_directory(dir.path()),
+            Err(TaskError::InvalidDirectory),
+            "check_working_directory returns error on bad permissions ",
+        );
     }
 }
