@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, os::unix::process::ExitStatusExt, process::ExitStatus};
 
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +45,21 @@ impl Display for RequestId {
         match self {
             RequestId::String(s) => write!(f, "{s}"),
             RequestId::Number(n) => write!(f, "{n}"),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct TaskExitStatus {
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
+}
+
+impl From<ExitStatus> for TaskExitStatus {
+    fn from(value: ExitStatus) -> Self {
+        Self {
+            exit_code: value.code(),
+            signal: value.signal(),
         }
     }
 }

@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::{
     api::common::{JsonRpcVersion, RequestId},
     application::ApplicationError,
-    tasks::{OutputLine, TaskError, TaskId, TaskInfo, TaskList},
+    tasks::{OutputLine, TaskEntry, TaskError, TaskId, TaskList},
 };
 
 #[derive(Debug, Serialize)]
@@ -143,7 +143,8 @@ pub enum ResponseResult {
         tasks: TaskList,
     },
     TaskInfoResult {
-        info: Arc<TaskInfo>,
+        #[serde(flatten)]
+        entry: TaskEntry,
     },
     HelloResponse {
         server_version: &'static str,

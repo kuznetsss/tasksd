@@ -6,11 +6,14 @@ use std::{
     sync::{Arc, Mutex, RwLock, atomic::AtomicUsize},
 };
 
-use crate::tasks::{
-    finished_task::FinishedTask, info::TaskInfo, recent_finished_tasks::RecentFinishedTasks,
-    task::TaskReadingGate, task_error::TaskError,
-};
 use crate::utils::tracker::{PanicHandler, WrappedTaskTracker};
+use crate::{
+    api::TaskExitStatus,
+    tasks::{
+        finished_task::FinishedTask, info::TaskInfo, recent_finished_tasks::RecentFinishedTasks,
+        task::TaskReadingGate, task_error::TaskError,
+    },
+};
 
 use super::task::Task;
 
@@ -132,21 +135,25 @@ impl TaskManager {
     }
 
     pub fn task_list(&self) -> TaskList {
-        let mut list = TaskList::default();
         let tasks = self.tasks.read().unwrap();
+        let mut list = TaskList {
+            entries: Vec::with_capacity(tasks.running.len() + tasks.finished.len()),
+        };
         for (&id, task) in tasks.running.iter() {
             let entry = TaskEntry {
                 info: task.info(),
                 id,
+                status: TaskStatus::Running,
             };
-            list.running.push(entry);
+            list.entries.push(entry);
         }
         for (&id, task) in tasks.finished.iter() {
             let entry = TaskEntry {
                 info: task.info.clone(),
                 id,
+                status: TaskStatus::Finished(task.exit_status.into()),
             };
-            list.finished.push(entry);
+            list.entries.push(entry);
         }
         list
     }
@@ -187,16 +194,24 @@ impl Drop for TaskManager {
     }
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum TaskStatus {
+    Running,
+    Finished(TaskExitStatus),
+}
+
 #[derive(Debug, Serialize)]
 pub struct TaskEntry {
     pub info: Arc<TaskInfo>,
     pub id: TaskId,
+    #[serde(flatten)]
+    pub status: TaskStatus,
 }
 
 #[derive(Debug, Serialize, Default)]
 pub struct TaskList {
-    pub running: Vec<TaskEntry>,
-    pub finished: Vec<TaskEntry>,
+    pub entries: Vec<TaskEntry>,
 }
 
 #[cfg(test)]
@@ -209,6 +224,7 @@ mod tests {
 
     use futures::task::noop_waker;
     use rustix::{path::Arg, process::Signal};
+    use serde_json::json;
 
     use crate::tasks::sender::TaskEvent;
 
@@ -369,18 +385,94 @@ mod tests {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let (task, task_id, _) = tm.spawn("cat", &[], None).unwrap();
         let list = tm.task_list();
-        assert_eq!(list.running.len(), 1);
-        assert_eq!(list.running[0].id, task_id);
-        assert!(list.finished.is_empty());
-        task.send_signal(Signal::KILL).unwrap();
+        assert_eq!(list.entries.len(), 1);
+        assert_eq!(list.entries[0].id, task_id);
+        assert_matches!(list.entries[0].status, TaskStatus::Running);
+        let signal = Signal::KILL;
+        task.send_signal(signal).unwrap();
         task.wait().await;
         tokio::time::timeout(Duration::from_secs(5), tm.join())
             .await
             .unwrap();
 
         let list = tm.task_list();
-        assert!(list.running.is_empty());
-        assert_eq!(list.finished.len(), 1);
-        assert_eq!(list.finished[0].id, task_id);
+        assert_eq!(list.entries.len(), 1);
+        assert_eq!(list.entries[0].id, task_id);
+        let expected_exit_status = TaskExitStatus {
+            exit_code: None,
+            signal: Some(signal.as_raw()),
+        };
+        assert_matches!(
+            &list.entries[0].status,
+            TaskStatus::Finished(e) if e == &expected_exit_status
+        );
+    }
+
+    #[test]
+    fn task_entry_serialization() {
+        let info = Arc::new(TaskInfo {
+            executable: "some_executable".to_string(),
+            args: vec!["some".to_string(), "args".to_string()],
+            working_dir: current_dir().unwrap(),
+        });
+        let id = TaskId(123);
+        let status = TaskStatus::Running;
+
+        let task_entry = TaskEntry {
+            info: info.clone(),
+            id,
+            status: status.clone(),
+        };
+        let json_str = serde_json::to_string(&task_entry).unwrap();
+        let expected_json = json!({
+            "id": id,
+            "info": {
+                "executable": &info.executable,
+                "args": &info.args,
+                "working_dir": &&info.working_dir
+            },
+            "status": "running"
+        });
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json_str).unwrap(),
+            expected_json
+        );
+    }
+
+    #[test]
+    fn task_entry_serialization_finished_task() {
+        let info = Arc::new(TaskInfo {
+            executable: "some_executable".to_string(),
+            args: vec!["some".to_string(), "args".to_string()],
+            working_dir: current_dir().unwrap(),
+        });
+        let id = TaskId(123);
+        let task_exit_status = TaskExitStatus {
+            exit_code: Some(123),
+            signal: None,
+        };
+        let status = TaskStatus::Finished(task_exit_status.clone());
+
+        let task_entry = TaskEntry {
+            info: info.clone(),
+            id,
+            status: status.clone(),
+        };
+        let json_str = serde_json::to_string(&task_entry).unwrap();
+        let expected_json = json!({
+            "id": id,
+            "info": {
+                "executable": &info.executable,
+                "args": &info.args,
+                "working_dir": &&info.working_dir
+            },
+            "status": "finished",
+            "exit_code": task_exit_status.exit_code,
+            "signal": Option::<i32>::None
+        });
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json_str).unwrap(),
+            expected_json
+        );
     }
 }

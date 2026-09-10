@@ -58,6 +58,17 @@ pub struct TaskListResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct TaskInfoResponse {
+    pub id: i64,
+    pub result: TaskInfoResponseResult,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaskInfoResponseResult {
+    pub info: TaskInfo
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TaskListResponseResult {
     pub tasks: TaskList,
 }

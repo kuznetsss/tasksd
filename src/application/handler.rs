@@ -12,7 +12,7 @@ use crate::{
         subscriber::{CreatingEvent, Subscriber},
         subscription_registry::SubscriptionRegistry,
     },
-    tasks::{TaskError, TaskManager, TaskReadingGate},
+    tasks::{TaskEntry, TaskError, TaskManager, TaskReadingGate, TaskStatus},
     transport::ConnectionWriter,
 };
 
@@ -172,17 +172,25 @@ impl Handler {
     }
 
     fn task_info(&self, params: TaskInfoParams) -> Result<ResponseResult, ApplicationError> {
-        let task_info = self
+        let task_entry = self
             .task_manager
             .get_running_task(params.task_id)
-            .map(|t| t.info())
+            .map(|t| TaskEntry {
+                info: t.info(),
+                id: params.task_id,
+                status: TaskStatus::Running,
+            })
             .or_else(|| {
                 self.task_manager
                     .get_finished_task(params.task_id)
-                    .map(|t| t.info.clone())
+                    .map(|t| TaskEntry {
+                        info: t.info.clone(),
+                        id: params.task_id,
+                        status: TaskStatus::Finished(t.exit_status.into()),
+                    })
             })
             .ok_or(TaskError::NotFound)?;
-        Ok(ResponseResult::TaskInfoResult { info: task_info })
+        Ok(ResponseResult::TaskInfoResult { entry: task_entry })
     }
 
     fn shutdown(&self) -> ResponseResult {
