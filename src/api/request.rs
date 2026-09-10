@@ -38,6 +38,13 @@ struct RequestRaw {
 impl RequestRaw {
     fn parse_into_request(self) -> Result<Request, Response> {
         match self.method.as_str() {
+            "hello" => self.parse_params(RequestBody::Hello),
+            "shutdown" => self.parse_params(RequestBody::Shutdown),
+            "task.get_output" => self.parse_params(RequestBody::TaskGetOutput),
+            "task.info" => self.parse_params(RequestBody::TaskInfo),
+            "task.list" => self.parse_params(RequestBody::TaskList),
+            "task.send_input" => self.parse_params(RequestBody::TaskSendInput),
+            "task.send_signal" => self.parse_params(RequestBody::TaskSendSignal),
             "task.start" => self.parse_params(RequestBody::TaskStart),
             "task.send_signal" => self.parse_params(RequestBody::TaskSendSignal),
             "task.get_output" => self.parse_params(RequestBody::TaskGetOutput),

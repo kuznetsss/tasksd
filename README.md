@@ -58,17 +58,25 @@ A few reasons:
 
 ## Roadmap
 
-Bugs:
+`0.3.0`:
 - [x] starting task with an invalid working dir returns:
     `could not start `true`: Error starting child process: No such file or directory (os error 2)`
-- [ ] `task.info` API get a single entry of `tasks.list` by task id
+- [x] `task.info` API: get a single entry of `tasks.list` by task id
+      - Unify `task.list` and `task.info`: list entry should be task info + status (running or finished)
+- [ ] `task.exit` notification is sent before task is moved out of running map:
+      - add a gate to the completion coroutine, when task is moved, gate opens
+      - add wait for the gate in subscriber: if it gets an exit event it waits for the gate
 - [ ] in `task.get_output` the parameter `from_line` should become optional:
       if it is not provided return the last `lines_number`
 - [ ] `task.subscribe` should provide option `output` and by default only subscribe on exit event
 - [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
-
-`0.3.0` or later:
+- [ ] Support graceful shutdown by `SIGTERM`
 - [ ] Switch output stream to Vec<u8>
+- [ ] Rearrange integration tests: one `it` (as integration tests) module containing common and all the tests
+- [ ] Use `thiserror` crate
+- [ ] Add a parameter to adjust RecentFinishedTasks size
+
+`0.4.0`:
 - [ ] Implement different task type PtyTask:
       - It should render screen from stream of bytes from pty using (libghostty-vt or vt100)
       - Share screen state via watch channel
@@ -78,13 +86,10 @@ Bugs:
       This will prevent tasksd from hanging on detached grand child processes
       but it will stop capturing detached process' output
 - [ ] Separate stdout and stderr in output notifications and in `OutputBuffer`
-- [ ] Use `thiserror` crate
-- [ ] Tasks chains
-- [ ] Limit log file size
-- [ ] Support graceful shutdown by `SIGTERM`
-- [ ] Add a parameter to adjust RecentFinishedTasks size
 
 Future ideas:
+- Tasks chains
+- Limit log file size
 - Add suggestion module (history, runnables, tasks.json)
 - Output search/filter
 - TCP sockets support
