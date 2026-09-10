@@ -3,7 +3,8 @@ use tracing::{info, warn};
 use crate::{
     api::{
         HelloParams, Request, RequestBody, Response, ResponseResult, TaskGetOutputParams,
-        TaskSendInputParams, TaskSendSignalParams, TaskStartParams, TaskSubscribeParams,
+        TaskInfoParams, TaskSendInputParams, TaskSendSignalParams, TaskStartParams,
+        TaskSubscribeParams,
     },
     application::{
         ShutdownTrigger,
@@ -56,6 +57,7 @@ impl Handler {
                 self.send_input(params).await.map(|r| (r.into(), None))
             }
             RequestBody::TaskList(_) => Ok((self.task_list().into(), None)),
+            RequestBody::TaskInfo(params) => self.task_info(params).map(|r| (r.into(), None)),
             RequestBody::Hello(params) => Ok((self.hello(params).into(), None)),
             RequestBody::Shutdown(_) => Ok((self.shutdown().into(), None)),
         }
@@ -167,6 +169,20 @@ impl Handler {
     fn task_list(&self) -> ResponseResult {
         let list = self.task_manager.task_list();
         ResponseResult::TaskList { tasks: list }
+    }
+
+    fn task_info(&self, params: TaskInfoParams) -> Result<ResponseResult, ApplicationError> {
+        let task_info = self
+            .task_manager
+            .get_running_task(params.task_id)
+            .map(|t| t.info())
+            .or_else(|| {
+                self.task_manager
+                    .get_finished_task(params.task_id)
+                    .map(|t| t.info.clone())
+            })
+            .ok_or(TaskError::NotFound)?;
+        Ok(ResponseResult::TaskInfoResult { info: task_info })
     }
 
     fn shutdown(&self) -> ResponseResult {
