@@ -177,7 +177,7 @@ impl Handler {
             .get_running_task(params.task_id)
             .map(|t| TaskEntry {
                 info: t.info(),
-                id: params.task_id,
+                task_id: params.task_id,
                 status: TaskStatus::Running,
             })
             .or_else(|| {
@@ -185,7 +185,7 @@ impl Handler {
                     .get_finished_task(params.task_id)
                     .map(|t| TaskEntry {
                         info: t.info.clone(),
-                        id: params.task_id,
+                        task_id: params.task_id,
                         status: TaskStatus::Finished(t.exit_status.into()),
                     })
             })

@@ -140,6 +140,7 @@ pub enum ResponseResult {
     UnsubscribeResult {},
     SendInputResult {},
     TaskList {
+        #[serde(flatten)]
         tasks: TaskList,
     },
     TaskInfoResult {

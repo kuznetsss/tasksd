@@ -137,23 +137,23 @@ impl TaskManager {
     pub fn task_list(&self) -> TaskList {
         let tasks = self.tasks.read().unwrap();
         let mut list = TaskList {
-            entries: Vec::with_capacity(tasks.running.len() + tasks.finished.len()),
+            tasks: Vec::with_capacity(tasks.running.len() + tasks.finished.len()),
         };
-        for (&id, task) in tasks.running.iter() {
+        for (&task_id, task) in tasks.running.iter() {
             let entry = TaskEntry {
                 info: task.info(),
-                id,
+                task_id,
                 status: TaskStatus::Running,
             };
-            list.entries.push(entry);
+            list.tasks.push(entry);
         }
-        for (&id, task) in tasks.finished.iter() {
+        for (&task_id, task) in tasks.finished.iter() {
             let entry = TaskEntry {
                 info: task.info.clone(),
-                id,
+                task_id,
                 status: TaskStatus::Finished(task.exit_status.into()),
             };
-            list.entries.push(entry);
+            list.tasks.push(entry);
         }
         list
     }
@@ -204,14 +204,14 @@ pub enum TaskStatus {
 #[derive(Debug, Serialize)]
 pub struct TaskEntry {
     pub info: Arc<TaskInfo>,
-    pub id: TaskId,
+    pub task_id: TaskId,
     #[serde(flatten)]
     pub status: TaskStatus,
 }
 
 #[derive(Debug, Serialize, Default)]
 pub struct TaskList {
-    pub entries: Vec<TaskEntry>,
+    pub tasks: Vec<TaskEntry>,
 }
 
 #[cfg(test)]
@@ -385,9 +385,9 @@ mod tests {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let (task, task_id, _) = tm.spawn("cat", &[], None).unwrap();
         let list = tm.task_list();
-        assert_eq!(list.entries.len(), 1);
-        assert_eq!(list.entries[0].id, task_id);
-        assert_matches!(list.entries[0].status, TaskStatus::Running);
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, task_id);
+        assert_matches!(list.tasks[0].status, TaskStatus::Running);
         let signal = Signal::KILL;
         task.send_signal(signal).unwrap();
         task.wait().await;
@@ -396,14 +396,14 @@ mod tests {
             .unwrap();
 
         let list = tm.task_list();
-        assert_eq!(list.entries.len(), 1);
-        assert_eq!(list.entries[0].id, task_id);
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, task_id);
         let expected_exit_status = TaskExitStatus {
             exit_code: None,
             signal: Some(signal.as_raw()),
         };
         assert_matches!(
-            &list.entries[0].status,
+            &list.tasks[0].status,
             TaskStatus::Finished(e) if e == &expected_exit_status
         );
     }
@@ -415,17 +415,17 @@ mod tests {
             args: vec!["some".to_string(), "args".to_string()],
             working_dir: current_dir().unwrap(),
         });
-        let id = TaskId(123);
+        let task_id = TaskId(123);
         let status = TaskStatus::Running;
 
         let task_entry = TaskEntry {
             info: info.clone(),
-            id,
+            task_id,
             status: status.clone(),
         };
         let json_str = serde_json::to_string(&task_entry).unwrap();
         let expected_json = json!({
-            "id": id,
+            "task_id": task_id,
             "info": {
                 "executable": &info.executable,
                 "args": &info.args,
@@ -446,7 +446,7 @@ mod tests {
             args: vec!["some".to_string(), "args".to_string()],
             working_dir: current_dir().unwrap(),
         });
-        let id = TaskId(123);
+        let task_id = TaskId(123);
         let task_exit_status = TaskExitStatus {
             exit_code: Some(123),
             signal: None,
@@ -455,12 +455,12 @@ mod tests {
 
         let task_entry = TaskEntry {
             info: info.clone(),
-            id,
+            task_id,
             status: status.clone(),
         };
         let json_str = serde_json::to_string(&task_entry).unwrap();
         let expected_json = json!({
-            "id": id,
+            "task_id": task_id,
             "info": {
                 "executable": &info.executable,
                 "args": &info.args,

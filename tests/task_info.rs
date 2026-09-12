@@ -25,6 +25,9 @@ async fn task_info_returns_info_of_running_task() {
         task_info.result.info.working_dir,
         current_dir().unwrap().to_str().unwrap()
     );
+    assert_eq!(task_info.result.status, "running");
+    assert_eq!(task_info.result.exit_code, None);
+    assert_eq!(task_info.result.signal, None);
 
     ctx.shutdown().await;
 }
@@ -44,7 +47,11 @@ async fn task_info_returns_info_of_finished_task() {
 
     // Wait for the task to appear in finished to make sure it is finished
     client
-        .wait_for_task_list(|l| l.finished.iter().find(|t| t.id == task_id).is_some())
+        .wait_for_task_list(|l| {
+            l.iter()
+                .find(|t| t.task_id == task_id && t.status == "finished")
+                .is_some()
+        })
         .await;
 
     client.task_info(task_id).await.unwrap();
@@ -56,6 +63,9 @@ async fn task_info_returns_info_of_finished_task() {
         task_info.result.info.working_dir,
         current_dir().unwrap().to_str().unwrap()
     );
+    assert_eq!(task_info.result.status, "finished");
+    assert_eq!(task_info.result.exit_code, Some(0));
+    assert_eq!(task_info.result.signal, None);
 
     ctx.shutdown().await;
 }
