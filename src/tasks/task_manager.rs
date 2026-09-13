@@ -49,6 +49,12 @@ pub struct TaskManager {
     completion_coroutines: Mutex<Option<WrappedTaskTracker>>,
 }
 
+#[derive(Debug)]
+pub enum AnyTask {
+    Running(Arc<Task>),
+    Finished(Arc<FinishedTask>),
+}
+
 impl TaskManager {
     pub fn new(task_output_buffer_capacity: usize) -> Arc<Self> {
         const FINISHED_TASKS_CAPACITY: usize = 100;
@@ -94,7 +100,7 @@ impl TaskManager {
         Ok((task, task_id, reading_gate))
     }
 
-    pub fn get_task(&self, id: TaskId) -> Result<Arc<Task>, TaskError> {
+    pub fn get_running_task(&self, id: TaskId) -> Result<Arc<Task>, TaskError> {
         let tasks = self.tasks.read().unwrap();
         if let Some(t) = tasks.running.get(&id) {
             return Ok(t.clone());
@@ -106,17 +112,15 @@ impl TaskManager {
         }
     }
 
-    pub fn get_running_task(&self, id: TaskId) -> Option<Arc<Task>> {
-        self.tasks
-            .read()
-            .expect("RwLock is poisoned")
-            .running
-            .get(&id)
-            .cloned()
-    }
-
-    pub fn get_finished_task(&self, id: TaskId) -> Option<Arc<FinishedTask>> {
-        self.tasks.read().unwrap().finished.get(id)
+    pub fn find_task(&self, id: TaskId) -> Option<AnyTask> {
+        let tasks = self.tasks.read().unwrap();
+        if let Some(t) = tasks.running.get(&id) {
+            return Some(AnyTask::Running(t.clone()));
+        }
+        if let Some(t) = tasks.finished.get(id) {
+            return Some(AnyTask::Finished(t.clone()));
+        }
+        None
     }
 
     pub async fn join(&self) {
@@ -309,10 +313,11 @@ mod tests {
             .await
             .unwrap();
         for id in &task_ids {
-            assert!(tm.get_finished_task(*id).is_some());
+            assert_matches!(tm.find_task(*id).unwrap(), AnyTask::Finished(_));
         }
     }
 
+    // TODO: split into tests for get_running_task and find_task
     #[tokio::test]
     async fn get_methods_return_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
@@ -320,13 +325,16 @@ mod tests {
         let (task, task_id, _) = tm.spawn(executable, &[], None).unwrap();
 
         assert!(Arc::ptr_eq(&task, &tm.get_running_task(task_id).unwrap()));
-        assert!(Arc::ptr_eq(&task, &tm.get_task(task_id).unwrap()));
-        assert!(tm.get_finished_task(task_id).is_none());
+        assert!(Arc::ptr_eq(&task, &tm.get_running_task(task_id).unwrap()));
+        assert!(tm.find_task(task_id).is_none());
 
         let non_existing_id = TaskId(task_id.0 + 123);
-        assert_matches!(tm.get_task(non_existing_id), Err(TaskError::NotFound));
-        assert!(tm.get_running_task(non_existing_id).is_none());
-        assert!(tm.get_finished_task(non_existing_id).is_none());
+        assert_matches!(
+            tm.get_running_task(non_existing_id),
+            Err(TaskError::NotFound)
+        );
+        assert!(tm.get_running_task_deprecated(non_existing_id).is_none());
+        assert!(tm.get_finished_task_deprecated(non_existing_id).is_none());
 
         let signal = Signal::TERM;
         task.send_signal(signal).unwrap();
@@ -334,15 +342,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert_matches!(tm.get_task(task_id), Err(TaskError::AlreadyExited));
-        assert!(tm.get_running_task(task_id).is_none());
-        let finished_task = tm.get_finished_task(task_id).unwrap();
+        assert_matches!(tm.get_running_task(task_id), Err(TaskError::AlreadyExited));
+        assert!(tm.get_running_task_deprecated(task_id).is_none());
+        let finished_task = tm.get_finished_task_deprecated(task_id).unwrap();
         assert_eq!(&finished_task.info.executable, executable);
         assert_eq!(&finished_task.info.working_dir, &current_dir().unwrap());
         assert_eq!(finished_task.exit_status.signal().unwrap(), signal.as_raw());
 
-        assert_matches!(tm.get_task(non_existing_id), Err(TaskError::NotFound));
-        assert!(tm.get_finished_task(non_existing_id).is_none());
+        assert_matches!(
+            tm.get_running_task(non_existing_id),
+            Err(TaskError::NotFound)
+        );
+        assert!(tm.get_finished_task_deprecated(non_existing_id).is_none());
     }
 
     #[tokio::test]
@@ -374,7 +385,7 @@ mod tests {
     async fn output_buffer_capacity_passed_to_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let (_, task_id, _) = tm.spawn("cat", &[], None).unwrap();
-        let task = tm.get_task(task_id).unwrap();
+        let task = tm.get_running_task(task_id).unwrap();
         assert_eq!(task.output_buffer().capacity(), TASK_OUTPUT_BUFFER_CAPACITY);
         task.send_signal(Signal::TERM).unwrap();
         tm.join().await;
