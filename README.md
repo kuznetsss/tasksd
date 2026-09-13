@@ -66,6 +66,7 @@ A few reasons:
 - [ ] `task.exit` notification is sent before task is moved out of running map:
       - add a gate to the completion coroutine, when task is moved, gate opens
       - add wait for the gate in subscriber: if it gets an exit event it waits for the gate
+      - update API.md
 - [ ] in `task.get_output` the parameter `from_line` should become optional:
       if it is not provided return the last `lines_number`
 - [ ] `task.subscribe` should provide option `output` and by default only subscribe on exit event

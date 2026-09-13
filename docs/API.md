@@ -375,48 +375,29 @@ is rejected with [`-32602` Invalid params](#standard-json-rpc-errors).
 
 **Result**
 
-| Field   | Type   | Description                          |
-| ------- | ------ | ------------------------------------ |
-| `tasks` | object | The task listing, split by state.    |
+| Field   | Type     | Description                                                    |
+| ------- | -------- | -------------------------------------------------------------- |
+| `tasks` | object[] | One entry per task, running and finished in a single array.     |
 
-`tasks` has two arrays:
+Each entry is a [task entry](#task-entry): running and finished tasks are told
+apart by the `status` field, not by which array they are in.
 
-| Field      | Type     | Description                                         |
-| ---------- | -------- | --------------------------------------------------- |
-| `running`  | object[] | Tasks that have not exited yet.                     |
-| `finished` | object[] | Tasks that have exited and are still remembered.    |
+The server only remembers the 100 most recently finished tasks, so finished
+tasks are a bounded window: older tasks fall out of it and stop appearing here
+(a `task_id` that has aged out is also [`7` Task not found](#task-errors) for
+the other methods). The order of `tasks` is unspecified and may differ between
+calls; clients that want a stable order should sort by `task_id`, which is
+assigned in start order.
 
-Each entry in either array has the same shape:
+A task's `status` flips from `running` to `finished` shortly after it
+terminates, and that transition is not synchronised with the
+[`task.exit`](#taskexit) notification. A `task.list` issued immediately after
+receiving `task.exit` for a task may still report it as `running`; it reports
+`finished` on a later call. Clients that need to observe the transition should
+re-request rather than assume the notification has already taken effect.
 
-| Field  | Type    | Description                       |
-| ------ | ------- | --------------------------------- |
-| `id`   | integer | Id of the task.                   |
-| `info` | object  | How the task was started.         |
-
-`info` describes the task as the server resolved it when it started, not the
-raw `task.start` params:
-
-| Field         | Type     | Description                                                       |
-| ------------- | -------- | ----------------------------------------------------------------- |
-| `executable`  | string   | Program the task runs.                                            |
-| `args`        | string[] | Arguments it was started with; empty if none were given.          |
-| `working_dir` | string   | Directory it runs in, resolved to the daemon's cwd if omitted.    |
-
-The server only remembers the 100 most recently finished tasks, so `finished`
-is a bounded window: older tasks fall out of it and stop appearing here (a
-`task_id` that has aged out is also [`7` Task not found](#task-errors) for the
-other methods). `finished` is ordered oldest first; the order of `running` is
-unspecified and may differ between calls.
-
-A task is moved from `running` to `finished` shortly after it terminates, and
-that move is not synchronised with the [`task.exit`](#taskexit) notification. A
-`task.list` issued immediately after receiving `task.exit` for a task may still
-report it under `running`; it appears under `finished` on a later call. Clients
-that need to observe the transition should re-request rather than assume the
-notification has already taken effect.
-
-Both arrays may be empty. A daemon with no tasks at all still answers with a
-result rather than an error.
+`tasks` may be empty. A daemon with no tasks at all still answers with a result
+rather than an error.
 
 This method reports no errors of its own.
 
@@ -431,23 +412,97 @@ This method reports no errors of its own.
   "jsonrpc": "2.0",
   "id": 7,
   "result": {
-    "tasks": {
-      "running": [
-        {
-          "id": 2,
-          "info": { "executable": "cat", "args": [], "working_dir": "/tmp" }
-        }
-      ],
-      "finished": [
-        {
-          "id": 1,
-          "info": { "executable": "ls", "args": ["-la"], "working_dir": "/tmp" }
-        }
-      ]
-    }
+    "tasks": [
+      {
+        "task_id": 2,
+        "info": { "executable": "cat", "args": [], "working_dir": "/tmp" },
+        "status": "running"
+      },
+      {
+        "task_id": 1,
+        "info": { "executable": "ls", "args": ["-la"], "working_dir": "/tmp" },
+        "status": "finished",
+        "exit_code": 0,
+        "signal": null
+      }
+    ]
   }
 }
 ```
+
+### `task.info`
+
+Look up a single task by id. The result is exactly one
+[task entry](#task-entry) — the same object `task.list` returns for that task —
+so this is the cheap way to poll one task instead of listing all of them.
+
+Like `task.list`, it is daemon-wide: a task started by another connection, or
+by a connection that has since disconnected, can be looked up by its `task_id`.
+
+**Params**
+
+| Field     | Type    | Required | Description                |
+| --------- | ------- | -------- | -------------------------- |
+| `task_id` | integer | yes      | Id of the task to look up. |
+
+**Result**
+
+A [task entry](#task-entry), inlined directly into `result`.
+
+A `task_id` that the daemon does not know — never issued, or a finished task
+that has aged out of the 100-entry window — is rejected with
+[`7` Task not found](#task-errors).
+
+**Example**
+
+```json
+// → request
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "method": "task.info",
+  "params": { "task_id": 1 }
+}
+
+// ← response
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "result": {
+    "task_id": 1,
+    "info": { "executable": "ls", "args": ["-la"], "working_dir": "/tmp" },
+    "status": "finished",
+    "exit_code": 0,
+    "signal": null
+  }
+}
+```
+
+### Task entry
+
+The object [`task.list`](#tasklist) and [`task.info`](#taskinfo) both report a
+task with:
+
+| Field       | Type            | Description                                                          |
+| ----------- | --------------- | -------------------------------------------------------------------- |
+| `task_id`   | integer         | Id of the task.                                                      |
+| `info`      | object          | How the task was started.                                            |
+| `status`    | string          | `"running"` or `"finished"`.                                         |
+| `exit_code` | integer \| null | Finished only: exit code, or `null` if the task was killed by a signal. |
+| `signal`    | integer \| null | Finished only: terminating signal, or `null` if it exited normally.  |
+
+`exit_code` and `signal` are present only when `status` is `"finished"`; on a
+running task they are absent rather than `null`. Read `status` first and only
+then the exit fields.
+
+`info` describes the task as the server resolved it when it started, not the
+raw `task.start` params:
+
+| Field         | Type     | Description                                                       |
+| ------------- | -------- | ----------------------------------------------------------------- |
+| `executable`  | string   | Program the task runs.                                            |
+| `args`        | string[] | Arguments it was started with; empty if none were given.          |
+| `working_dir` | string   | Directory it runs in, resolved to the daemon's cwd if omitted.    |
 
 ### `shutdown`
 
@@ -488,10 +543,10 @@ at all, since the connection is already closing.
 
 ```json
 // → request
-{ "jsonrpc": "2.0", "id": 8, "method": "shutdown" }
+{ "jsonrpc": "2.0", "id": 9, "method": "shutdown" }
 
 // ← response
-{ "jsonrpc": "2.0", "id": 8, "result": {} }
+{ "jsonrpc": "2.0", "id": 9, "result": {} }
 ```
 
 ---
@@ -557,8 +612,12 @@ Emitted once when a task terminates.
 }
 ```
 
-Receiving this notification does not guarantee that [`task.list`](#tasklist)
-already reports the task under `finished`; see that method for details.
+The two fields are the same pair carried by a finished
+[task entry](#task-entry).
+
+Receiving this notification does not guarantee that [`task.list`](#tasklist) or
+[`task.info`](#taskinfo) already report the task as `finished`; see `task.list`
+for details.
 
 ### `shutting_down`
 

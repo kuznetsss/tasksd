@@ -80,12 +80,6 @@ pub struct TaskInfoResponseResult {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TaskEntry {
-    pub id: usize,
-    pub info: TaskInfo,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct TaskInfo {
     pub executable: String,
     pub args: Vec<String>,
