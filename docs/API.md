@@ -377,10 +377,10 @@ is rejected with [`-32602` Invalid params](#standard-json-rpc-errors).
 
 | Field   | Type     | Description                                                    |
 | ------- | -------- | -------------------------------------------------------------- |
-| `tasks` | object[] | One entry per task, running and finished in a single array.     |
+| `tasks` | object[] | One entry per task, both running and finished.                  |
 
-Each entry is a [task entry](#task-entry): running and finished tasks are told
-apart by the `status` field, not by which array they are in.
+Each entry is a [task entry](#task-entry). The `status` field tells running and
+finished tasks apart.
 
 The server only remembers the 100 most recently finished tasks, so finished
 tasks are a bounded window: older tasks fall out of it and stop appearing here

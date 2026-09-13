@@ -62,7 +62,9 @@ A few reasons:
 - [x] starting task with an invalid working dir returns:
     `could not start `true`: Error starting child process: No such file or directory (os error 2)`
 - [x] `task.info` API: get a single entry of `tasks.list` by task id
-      - Unify `task.list` and `task.info`: list entry should be task info + status (running or finished)
+      - [x] Unify `task.list` and `task.info`: list entry should be task info + status (running or finished)
+      - [x] Fix tests
+      - [ ] Deduplicate the creation of TaskEntry
 - [ ] `task.exit` notification is sent before task is moved out of running map:
       - add a gate to the completion coroutine, when task is moved, gate opens
       - add wait for the gate in subscriber: if it gets an exit event it waits for the gate

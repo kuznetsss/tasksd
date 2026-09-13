@@ -49,6 +49,12 @@ pub struct TaskManager {
     completion_coroutines: Mutex<Option<WrappedTaskTracker>>,
 }
 
+#[derive(Debug)]
+pub enum AnyTask {
+    Running(Arc<Task>),
+    Finished(Arc<FinishedTask>),
+}
+
 impl TaskManager {
     pub fn new(task_output_buffer_capacity: usize) -> Arc<Self> {
         const FINISHED_TASKS_CAPACITY: usize = 100;
@@ -94,29 +100,24 @@ impl TaskManager {
         Ok((task, task_id, reading_gate))
     }
 
-    pub fn get_task(&self, id: TaskId) -> Result<Arc<Task>, TaskError> {
+    pub fn get_running_task(&self, id: TaskId) -> Result<Arc<Task>, TaskError> {
+        match self.find_task(id) {
+            Some(AnyTask::Running(t)) => Ok(t),
+            Some(AnyTask::Finished(_)) => Err(TaskError::AlreadyExited),
+            None => Err(TaskError::NotFound),
+        }
+    }
+
+    pub fn find_task(&self, id: TaskId) -> Option<AnyTask> {
         let tasks = self.tasks.read().unwrap();
         if let Some(t) = tasks.running.get(&id) {
-            return Ok(t.clone());
+            return Some(AnyTask::Running(t.clone()));
         }
-        if tasks.finished.get(id).is_some() {
-            Err(TaskError::AlreadyExited)
-        } else {
-            Err(TaskError::NotFound)
+        // TODO: Maybe refactor finished to have the same semantics as running
+        if let Some(t) = tasks.finished.get(id) {
+            return Some(AnyTask::Finished(t));
         }
-    }
-
-    pub fn get_running_task(&self, id: TaskId) -> Option<Arc<Task>> {
-        self.tasks
-            .read()
-            .expect("RwLock is poisoned")
-            .running
-            .get(&id)
-            .cloned()
-    }
-
-    pub fn get_finished_task(&self, id: TaskId) -> Option<Arc<FinishedTask>> {
-        self.tasks.read().unwrap().finished.get(id)
+        None
     }
 
     pub async fn join(&self) {
@@ -218,8 +219,8 @@ pub struct TaskList {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{
-        assert_matches, collections::HashSet, env::current_dir, os::unix::process::ExitStatusExt,
-        pin::pin, sync::Arc, task::Poll, time::Duration,
+        assert_matches, collections::HashSet, env::current_dir, pin::pin, sync::Arc, task::Poll,
+        time::Duration,
     };
 
     use futures::task::noop_waker;
@@ -309,40 +310,45 @@ mod tests {
             .await
             .unwrap();
         for id in &task_ids {
-            assert!(tm.get_finished_task(*id).is_some());
+            assert_matches!(tm.find_task(*id).unwrap(), AnyTask::Finished(_));
         }
     }
 
     #[tokio::test]
-    async fn get_methods_return_task() {
+    async fn get_running_task_works_correctly() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let executable = "cat";
-        let (task, task_id, _) = tm.spawn(executable, &[], None).unwrap();
-
+        let (task, task_id, _) = tm.spawn("cat", &[], None).unwrap();
         assert!(Arc::ptr_eq(&task, &tm.get_running_task(task_id).unwrap()));
-        assert!(Arc::ptr_eq(&task, &tm.get_task(task_id).unwrap()));
-        assert!(tm.get_finished_task(task_id).is_none());
 
-        let non_existing_id = TaskId(task_id.0 + 123);
-        assert_matches!(tm.get_task(non_existing_id), Err(TaskError::NotFound));
-        assert!(tm.get_running_task(non_existing_id).is_none());
-        assert!(tm.get_finished_task(non_existing_id).is_none());
-
-        let signal = Signal::TERM;
-        task.send_signal(signal).unwrap();
-        tokio::time::timeout(Duration::from_secs(1), tm.join())
+        task.send_signal(Signal::KILL).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), task.join())
             .await
             .unwrap();
+        assert_matches!(tm.get_running_task(task_id), Err(TaskError::AlreadyExited));
 
-        assert_matches!(tm.get_task(task_id), Err(TaskError::AlreadyExited));
-        assert!(tm.get_running_task(task_id).is_none());
-        let finished_task = tm.get_finished_task(task_id).unwrap();
-        assert_eq!(&finished_task.info.executable, executable);
-        assert_eq!(&finished_task.info.working_dir, &current_dir().unwrap());
-        assert_eq!(finished_task.exit_status.signal().unwrap(), signal.as_raw());
+        let non_existing_id = TaskId(123);
+        assert_matches!(
+            tm.get_running_task(non_existing_id),
+            Err(TaskError::NotFound)
+        );
+        tm.join().await;
+    }
 
-        assert_matches!(tm.get_task(non_existing_id), Err(TaskError::NotFound));
-        assert!(tm.get_finished_task(non_existing_id).is_none());
+    #[tokio::test]
+    async fn find_task_works_correctly() {
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
+        let (task, task_id, _) = tm.spawn("cat", &[], None).unwrap();
+        assert_matches!(tm.find_task(task_id), Some(AnyTask::Running(t)) if Arc::ptr_eq(&task, &t));
+
+        task.send_signal(Signal::KILL).unwrap();
+        let finished_task = tokio::time::timeout(Duration::from_secs(1), task.join())
+            .await
+            .unwrap();
+        assert_matches!(tm.find_task(task_id), Some(AnyTask::Finished(t)) if Arc::ptr_eq(&finished_task.info, &t.info));
+
+        let non_existing_id = TaskId(123);
+        assert_matches!(tm.find_task(non_existing_id), None);
+        tm.join().await;
     }
 
     #[tokio::test]
@@ -374,7 +380,7 @@ mod tests {
     async fn output_buffer_capacity_passed_to_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let (_, task_id, _) = tm.spawn("cat", &[], None).unwrap();
-        let task = tm.get_task(task_id).unwrap();
+        let task = tm.get_running_task(task_id).unwrap();
         assert_eq!(task.output_buffer().capacity(), TASK_OUTPUT_BUFFER_CAPACITY);
         task.send_signal(Signal::TERM).unwrap();
         tm.join().await;
