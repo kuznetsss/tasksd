@@ -6,11 +6,14 @@ use std::{
     sync::{Arc, Mutex, RwLock, atomic::AtomicUsize},
 };
 
-use crate::tasks::{
-    finished_task::FinishedTask, info::TaskInfo, recent_finished_tasks::RecentFinishedTasks,
-    task::TaskReadingGate, task_error::TaskError,
-};
 use crate::utils::tracker::{PanicHandler, WrappedTaskTracker};
+use crate::{
+    api::TaskExitStatus,
+    tasks::{
+        finished_task::FinishedTask, info::TaskInfo, recent_finished_tasks::RecentFinishedTasks,
+        task::TaskReadingGate, task_error::TaskError,
+    },
+};
 
 use super::task::Task;
 
@@ -44,6 +47,12 @@ pub struct TaskManager {
     tasks: RwLock<TaskRegistry>,
     next_id: AtomicUsize,
     completion_coroutines: Mutex<Option<WrappedTaskTracker>>,
+}
+
+#[derive(Debug)]
+pub enum AnyTask {
+    Running(Arc<Task>),
+    Finished(Arc<FinishedTask>),
 }
 
 impl TaskManager {
@@ -91,7 +100,7 @@ impl TaskManager {
         Ok((task, task_id, reading_gate))
     }
 
-    pub fn get_task(&self, id: TaskId) -> Result<Arc<Task>, TaskError> {
+    pub fn get_running_task(&self, id: TaskId) -> Result<Arc<Task>, TaskError> {
         let tasks = self.tasks.read().unwrap();
         if let Some(t) = tasks.running.get(&id) {
             return Ok(t.clone());
@@ -103,17 +112,15 @@ impl TaskManager {
         }
     }
 
-    pub fn get_running_task(&self, id: TaskId) -> Option<Arc<Task>> {
-        self.tasks
-            .read()
-            .expect("RwLock is poisoned")
-            .running
-            .get(&id)
-            .cloned()
-    }
-
-    pub fn get_finished_task(&self, id: TaskId) -> Option<Arc<FinishedTask>> {
-        self.tasks.read().unwrap().finished.get(id)
+    pub fn find_task(&self, id: TaskId) -> Option<AnyTask> {
+        let tasks = self.tasks.read().unwrap();
+        if let Some(t) = tasks.running.get(&id) {
+            return Some(AnyTask::Running(t.clone()));
+        }
+        if let Some(t) = tasks.finished.get(id) {
+            return Some(AnyTask::Finished(t.clone()));
+        }
+        None
     }
 
     pub async fn join(&self) {
@@ -132,21 +139,25 @@ impl TaskManager {
     }
 
     pub fn task_list(&self) -> TaskList {
-        let mut list = TaskList::default();
         let tasks = self.tasks.read().unwrap();
-        for (&id, task) in tasks.running.iter() {
+        let mut list = TaskList {
+            tasks: Vec::with_capacity(tasks.running.len() + tasks.finished.len()),
+        };
+        for (&task_id, task) in tasks.running.iter() {
             let entry = TaskEntry {
                 info: task.info(),
-                id,
+                task_id,
+                status: TaskStatus::Running,
             };
-            list.running.push(entry);
+            list.tasks.push(entry);
         }
-        for (&id, task) in tasks.finished.iter() {
+        for (&task_id, task) in tasks.finished.iter() {
             let entry = TaskEntry {
                 info: task.info.clone(),
-                id,
+                task_id,
+                status: TaskStatus::Finished(task.exit_status.into()),
             };
-            list.finished.push(entry);
+            list.tasks.push(entry);
         }
         list
     }
@@ -187,16 +198,24 @@ impl Drop for TaskManager {
     }
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum TaskStatus {
+    Running,
+    Finished(TaskExitStatus),
+}
+
 #[derive(Debug, Serialize)]
 pub struct TaskEntry {
     pub info: Arc<TaskInfo>,
-    pub id: TaskId,
+    pub task_id: TaskId,
+    #[serde(flatten)]
+    pub status: TaskStatus,
 }
 
 #[derive(Debug, Serialize, Default)]
 pub struct TaskList {
-    pub running: Vec<TaskEntry>,
-    pub finished: Vec<TaskEntry>,
+    pub tasks: Vec<TaskEntry>,
 }
 
 #[cfg(test)]
@@ -209,6 +228,7 @@ mod tests {
 
     use futures::task::noop_waker;
     use rustix::{path::Arg, process::Signal};
+    use serde_json::json;
 
     use crate::tasks::sender::TaskEvent;
 
@@ -293,10 +313,11 @@ mod tests {
             .await
             .unwrap();
         for id in &task_ids {
-            assert!(tm.get_finished_task(*id).is_some());
+            assert_matches!(tm.find_task(*id).unwrap(), AnyTask::Finished(_));
         }
     }
 
+    // TODO: split into tests for get_running_task and find_task
     #[tokio::test]
     async fn get_methods_return_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
@@ -304,13 +325,16 @@ mod tests {
         let (task, task_id, _) = tm.spawn(executable, &[], None).unwrap();
 
         assert!(Arc::ptr_eq(&task, &tm.get_running_task(task_id).unwrap()));
-        assert!(Arc::ptr_eq(&task, &tm.get_task(task_id).unwrap()));
-        assert!(tm.get_finished_task(task_id).is_none());
+        assert!(Arc::ptr_eq(&task, &tm.get_running_task(task_id).unwrap()));
+        assert!(tm.find_task(task_id).is_none());
 
         let non_existing_id = TaskId(task_id.0 + 123);
-        assert_matches!(tm.get_task(non_existing_id), Err(TaskError::NotFound));
-        assert!(tm.get_running_task(non_existing_id).is_none());
-        assert!(tm.get_finished_task(non_existing_id).is_none());
+        assert_matches!(
+            tm.get_running_task(non_existing_id),
+            Err(TaskError::NotFound)
+        );
+        assert!(tm.get_running_task_deprecated(non_existing_id).is_none());
+        assert!(tm.get_finished_task_deprecated(non_existing_id).is_none());
 
         let signal = Signal::TERM;
         task.send_signal(signal).unwrap();
@@ -318,15 +342,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert_matches!(tm.get_task(task_id), Err(TaskError::AlreadyExited));
-        assert!(tm.get_running_task(task_id).is_none());
-        let finished_task = tm.get_finished_task(task_id).unwrap();
+        assert_matches!(tm.get_running_task(task_id), Err(TaskError::AlreadyExited));
+        assert!(tm.get_running_task_deprecated(task_id).is_none());
+        let finished_task = tm.get_finished_task_deprecated(task_id).unwrap();
         assert_eq!(&finished_task.info.executable, executable);
         assert_eq!(&finished_task.info.working_dir, &current_dir().unwrap());
         assert_eq!(finished_task.exit_status.signal().unwrap(), signal.as_raw());
 
-        assert_matches!(tm.get_task(non_existing_id), Err(TaskError::NotFound));
-        assert!(tm.get_finished_task(non_existing_id).is_none());
+        assert_matches!(
+            tm.get_running_task(non_existing_id),
+            Err(TaskError::NotFound)
+        );
+        assert!(tm.get_finished_task_deprecated(non_existing_id).is_none());
     }
 
     #[tokio::test]
@@ -358,7 +385,7 @@ mod tests {
     async fn output_buffer_capacity_passed_to_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let (_, task_id, _) = tm.spawn("cat", &[], None).unwrap();
-        let task = tm.get_task(task_id).unwrap();
+        let task = tm.get_running_task(task_id).unwrap();
         assert_eq!(task.output_buffer().capacity(), TASK_OUTPUT_BUFFER_CAPACITY);
         task.send_signal(Signal::TERM).unwrap();
         tm.join().await;
@@ -369,18 +396,94 @@ mod tests {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let (task, task_id, _) = tm.spawn("cat", &[], None).unwrap();
         let list = tm.task_list();
-        assert_eq!(list.running.len(), 1);
-        assert_eq!(list.running[0].id, task_id);
-        assert!(list.finished.is_empty());
-        task.send_signal(Signal::KILL).unwrap();
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, task_id);
+        assert_matches!(list.tasks[0].status, TaskStatus::Running);
+        let signal = Signal::KILL;
+        task.send_signal(signal).unwrap();
         task.wait().await;
         tokio::time::timeout(Duration::from_secs(5), tm.join())
             .await
             .unwrap();
 
         let list = tm.task_list();
-        assert!(list.running.is_empty());
-        assert_eq!(list.finished.len(), 1);
-        assert_eq!(list.finished[0].id, task_id);
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, task_id);
+        let expected_exit_status = TaskExitStatus {
+            exit_code: None,
+            signal: Some(signal.as_raw()),
+        };
+        assert_matches!(
+            &list.tasks[0].status,
+            TaskStatus::Finished(e) if e == &expected_exit_status
+        );
+    }
+
+    #[test]
+    fn task_entry_serialization() {
+        let info = Arc::new(TaskInfo {
+            executable: "some_executable".to_string(),
+            args: vec!["some".to_string(), "args".to_string()],
+            working_dir: current_dir().unwrap(),
+        });
+        let task_id = TaskId(123);
+        let status = TaskStatus::Running;
+
+        let task_entry = TaskEntry {
+            info: info.clone(),
+            task_id,
+            status: status.clone(),
+        };
+        let json_str = serde_json::to_string(&task_entry).unwrap();
+        let expected_json = json!({
+            "task_id": task_id,
+            "info": {
+                "executable": &info.executable,
+                "args": &info.args,
+                "working_dir": &&info.working_dir
+            },
+            "status": "running"
+        });
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json_str).unwrap(),
+            expected_json
+        );
+    }
+
+    #[test]
+    fn task_entry_serialization_finished_task() {
+        let info = Arc::new(TaskInfo {
+            executable: "some_executable".to_string(),
+            args: vec!["some".to_string(), "args".to_string()],
+            working_dir: current_dir().unwrap(),
+        });
+        let task_id = TaskId(123);
+        let task_exit_status = TaskExitStatus {
+            exit_code: Some(123),
+            signal: None,
+        };
+        let status = TaskStatus::Finished(task_exit_status.clone());
+
+        let task_entry = TaskEntry {
+            info: info.clone(),
+            task_id,
+            status: status.clone(),
+        };
+        let json_str = serde_json::to_string(&task_entry).unwrap();
+        let expected_json = json!({
+            "task_id": task_id,
+            "info": {
+                "executable": &info.executable,
+                "args": &info.args,
+                "working_dir": &&info.working_dir
+            },
+            "status": "finished",
+            "exit_code": task_exit_status.exit_code,
+            "signal": Option::<i32>::None
+        });
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json_str).unwrap(),
+            expected_json
+        );
     }
 }

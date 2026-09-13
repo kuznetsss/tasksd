@@ -47,6 +47,10 @@ impl RecentFinishedTasks {
         })
     }
 
+    pub(in crate::tasks) fn len(&self) -> usize {
+        self.recent_tasks.len()
+    }
+
     fn remove_last(&mut self) {
         let id = self
             .recent_tasks
@@ -99,6 +103,8 @@ mod tests {
         let (id2, task) = make_finished_task(2);
         ft.insert(id2, task);
 
+        assert_eq!(ft.len(), 2);
+
         let task = ft.get(id1).unwrap();
         assert_eq!(task.info.executable, id1.0.to_string());
 
@@ -116,6 +122,7 @@ mod tests {
         ft.insert(id1, task);
         let task = ft.get(id1).unwrap();
         assert_eq!(task.info.executable, id1.0.to_string());
+        assert_eq!(ft.len(), 1);
 
         let (id2, task) = make_finished_task(2);
         ft.insert(id2, task);
@@ -123,9 +130,11 @@ mod tests {
         assert_eq!(task.info.executable, id1.0.to_string());
         let task = ft.get(id2).unwrap();
         assert_eq!(task.info.executable, id2.0.to_string());
+        assert_eq!(ft.len(), 2);
 
         let (id3, task) = make_finished_task(3);
         ft.insert(id3, task);
+        assert_eq!(ft.len(), 2);
         assert!(ft.get(id1).is_none());
         let task = ft.get(id2).unwrap();
         assert_eq!(task.info.executable, id2.0.to_string());

@@ -3,7 +3,8 @@ use tracing::{info, warn};
 use crate::{
     api::{
         HelloParams, Request, RequestBody, Response, ResponseResult, TaskGetOutputParams,
-        TaskSendInputParams, TaskSendSignalParams, TaskStartParams, TaskSubscribeParams,
+        TaskInfoParams, TaskSendInputParams, TaskSendSignalParams, TaskStartParams,
+        TaskSubscribeParams,
     },
     application::{
         ShutdownTrigger,
@@ -11,7 +12,7 @@ use crate::{
         subscriber::{CreatingEvent, Subscriber},
         subscription_registry::SubscriptionRegistry,
     },
-    tasks::{TaskError, TaskManager, TaskReadingGate},
+    tasks::{AnyTask, TaskEntry, TaskError, TaskManager, TaskReadingGate, TaskStatus},
     transport::ConnectionWriter,
 };
 
@@ -56,6 +57,7 @@ impl Handler {
                 self.send_input(params).await.map(|r| (r.into(), None))
             }
             RequestBody::TaskList(_) => Ok((self.task_list().into(), None)),
+            RequestBody::TaskInfo(params) => self.task_info(params).map(|r| (r.into(), None)),
             RequestBody::Hello(params) => Ok((self.hello(params).into(), None)),
             RequestBody::Shutdown(_) => Ok((self.shutdown().into(), None)),
         }
@@ -100,7 +102,7 @@ impl Handler {
         params: TaskSendSignalParams,
     ) -> Result<ResponseResult, ApplicationError> {
         self.task_manager
-            .get_task(params.task_id)
+            .get_running_task(params.task_id)
             .and_then(|task| {
                 task.send_signal(params.signal)
                     .map(|_| ResponseResult::SendSignalResult {})
@@ -110,13 +112,14 @@ impl Handler {
 
     fn get_output(&self, params: TaskGetOutputParams) -> Result<ResponseResult, ApplicationError> {
         let line_range = params.from_line..params.from_line.saturating_add(params.lines_number);
-        let lines = if let Some(task) = self.task_manager.get_running_task(params.task_id) {
-            task.output_buffer().get_line_range(line_range)
-        } else if let Some(task) = self.task_manager.get_finished_task(params.task_id) {
-            task.output_buffer.get_line_range(line_range)
-        } else {
-            return Err(TaskError::NotFound.into());
-        };
+        let lines = self
+            .task_manager
+            .find_task(params.task_id)
+            .map(|t| match t {
+                AnyTask::Running(t) => t.output_buffer().get_line_range(line_range),
+                AnyTask::Finished(t) => t.output_buffer.get_line_range(line_range),
+            })
+            .ok_or(TaskError::NotFound)?;
         Ok(ResponseResult::GetOutputResult {
             task_id: params.task_id,
             lines,
@@ -127,7 +130,7 @@ impl Handler {
         self.subscription_registry
             .subscribe_or_spawn(&params.task_id, || {
                 // Create new subscriber
-                let task = self.task_manager.get_task(params.task_id)?;
+                let task = self.task_manager.get_running_task(params.task_id)?;
                 Ok(Subscriber::new(
                     self.connection_writer.clone(),
                     params.task_id,
@@ -149,7 +152,7 @@ impl Handler {
         &self,
         params: TaskSendInputParams,
     ) -> Result<ResponseResult, ApplicationError> {
-        let task = self.task_manager.get_task(params.task_id)?;
+        let task = self.task_manager.get_running_task(params.task_id)?;
         task.write_to_stdin(params.input.as_bytes()).await?;
         Ok(ResponseResult::SendInputResult {})
     }
@@ -167,6 +170,26 @@ impl Handler {
     fn task_list(&self) -> ResponseResult {
         let list = self.task_manager.task_list();
         ResponseResult::TaskList { tasks: list }
+    }
+
+    fn task_info(&self, params: TaskInfoParams) -> Result<ResponseResult, ApplicationError> {
+        let task_entry = self
+            .task_manager
+            .find_task(params.task_id)
+            .map(|t| match t {
+                AnyTask::Running(t) => TaskEntry {
+                    info: t.info(),
+                    task_id: params.task_id,
+                    status: TaskStatus::Running,
+                },
+                AnyTask::Finished(t) => TaskEntry {
+                    info: t.info.clone(),
+                    task_id: params.task_id,
+                    status: TaskStatus::Finished(t.exit_status.into()),
+                },
+            })
+            .ok_or(TaskError::NotFound)?;
+        Ok(ResponseResult::TaskInfoResult { entry: task_entry })
     }
 
     fn shutdown(&self) -> ResponseResult {

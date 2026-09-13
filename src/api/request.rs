@@ -38,15 +38,16 @@ struct RequestRaw {
 impl RequestRaw {
     fn parse_into_request(self) -> Result<Request, Response> {
         match self.method.as_str() {
-            "task.start" => self.parse_params(RequestBody::TaskStart),
-            "task.send_signal" => self.parse_params(RequestBody::TaskSendSignal),
-            "task.get_output" => self.parse_params(RequestBody::TaskGetOutput),
-            "task.subscribe" => self.parse_params(RequestBody::TaskSubscribe),
-            "task.unsubscribe" => self.parse_params(RequestBody::TaskUnsubscribe),
-            "task.send_input" => self.parse_params(RequestBody::TaskSendInput),
-            "task.list" => self.parse_params(RequestBody::TaskList),
             "hello" => self.parse_params(RequestBody::Hello),
             "shutdown" => self.parse_params(RequestBody::Shutdown),
+            "task.get_output" => self.parse_params(RequestBody::TaskGetOutput),
+            "task.info" => self.parse_params(RequestBody::TaskInfo),
+            "task.list" => self.parse_params(RequestBody::TaskList),
+            "task.send_input" => self.parse_params(RequestBody::TaskSendInput),
+            "task.send_signal" => self.parse_params(RequestBody::TaskSendSignal),
+            "task.start" => self.parse_params(RequestBody::TaskStart),
+            "task.subscribe" => self.parse_params(RequestBody::TaskSubscribe),
+            "task.unsubscribe" => self.parse_params(RequestBody::TaskUnsubscribe),
             unknown => Err(ResponseError::method_not_found(unknown).into_response(Some(self.id))),
         }
     }
@@ -68,15 +69,16 @@ impl RequestRaw {
 
 #[derive(Debug)]
 pub enum RequestBody {
-    TaskStart(TaskStartParams),
-    TaskSendSignal(TaskSendSignalParams),
-    TaskGetOutput(TaskGetOutputParams),
-    TaskSubscribe(TaskSubscribeParams),
-    TaskUnsubscribe(TaskSubscribeParams),
-    TaskSendInput(TaskSendInputParams),
-    TaskList(NoParams),
     Hello(HelloParams),
     Shutdown(NoParams),
+    TaskGetOutput(TaskGetOutputParams),
+    TaskInfo(TaskInfoParams),
+    TaskList(NoParams),
+    TaskSendInput(TaskSendInputParams),
+    TaskSendSignal(TaskSendSignalParams),
+    TaskStart(TaskStartParams),
+    TaskSubscribe(TaskSubscribeParams),
+    TaskUnsubscribe(TaskSubscribeParams),
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,6 +133,12 @@ pub struct TaskSubscribeParams {
 pub struct TaskSendInputParams {
     pub task_id: TaskId,
     pub input: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskInfoParams {
+    pub task_id: TaskId,
 }
 
 fn deserialize_signal<'de, D>(d: D) -> Result<Signal, D::Error>
@@ -435,6 +443,23 @@ mod tests {
             b => panic!("Unexpected response body {b:?}"),
         };
         assert_eq!(body.code, ErrorCode::InvalidParams);
+    }
+
+    #[test]
+    fn deserialize_task_info() {
+        let json = json! {{
+            "jsonrpc":"2.0",
+            "id": 123,
+            "method": "task.info",
+            "params": { "task_id": 456 },
+        }};
+        let parsed = Request::parse(&json.to_string()).unwrap();
+        assert_eq!(parsed.id, RequestId::Number(123));
+        let body = match parsed.body {
+            RequestBody::TaskInfo(b) => b,
+            b => panic!("Unexpected response body {b:?}"),
+        };
+        assert_eq!(body.task_id, TaskId(456));
     }
 
     #[test]
