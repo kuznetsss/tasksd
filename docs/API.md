@@ -72,12 +72,20 @@ is purely informational.
 }
 
 // ← response
-{ "jsonrpc": "2.0", "id": 1, "result": { "server_version": "0.2.0" } }
+{ "jsonrpc": "2.0", "id": 1, "result": { "server_version": "0.3.0" } }
 ```
 
 ### `task.start`
 
-Start a new task. The executable is run inside a PTY.
+Start a new task. The executable is spawned directly, with its stdin, stdout
+and stderr connected to pipes, in a new session of its own so that the task and
+everything it spawns form one process group (see
+[`task.send_signal`](#tasksend_signal)). Stdout and stderr are merged into a
+single line-numbered output stream in arrival order.
+
+The task is **not** attached to a terminal, so programs that switch to block
+buffering when stdout is not a tty deliver their output in chunks rather than
+line by line, and programs that colourise conditionally will not.
 
 **Params**
 
@@ -93,6 +101,22 @@ Start a new task. The executable is run inside a PTY.
 | Field     | Type    | Description                |
 | --------- | ------- | -------------------------- |
 | `task_id` | integer | Id of the started task.    |
+
+`working_dir` is validated before the task is spawned: a path that does not
+exist, is not a directory, or that the daemon cannot search (no execute
+permission, on the directory itself or on a component of the path leading to
+it) is rejected with [`1` Invalid working directory](#task-errors). The same
+error is returned when `working_dir` is omitted and the daemon cannot resolve
+its own current directory. This check happens in the daemon before it forks, so
+it is advisory rather than a guarantee: a directory that is removed between the
+check and the spawn is reported as
+[`3` Error starting child process](#task-errors) instead.
+
+Everything that fails in the spawn itself — most commonly an `executable` that
+does not exist or is not executable — is rejected with
+[`3` Error starting child process](#task-errors), with the underlying OS error
+in `data`. Unlike `3`, error `1` carries no `data`: it tells the client which
+argument is at fault, not why.
 
 **Example**
 
@@ -592,14 +616,23 @@ parsed well enough to recover its `id`, `id` is `null`.
 
 ### Task errors
 
-Application-defined errors returned by task methods:
+Application-defined errors:
 
-| Code | Message                          | When                                          |
-| ---- | -------------------------------- | --------------------------------------------- |
-| `1`  | Invalid working directory        | `working_dir` does not exist / is not usable. |
-| `2`  | Error creating a new pty         | The server failed to allocate a PTY.          |
-| `3`  | Error starting child process     | The executable could not be spawned.          |
-| `4`  | Error writing to process         | Writing to the task's stdin failed.           |
-| `5`  | The task has already exited      | The target task has finished.                 |
-| `6`  | Error sending signal to the task | The signal could not be delivered.            |
-| `7`  | Task not found                   | No task exists with the given `task_id`.      |
+| Code | Message                          | When                                                       |
+| ---- | -------------------------------- | ---------------------------------------------------------- |
+| `1`  | Invalid working directory        | `working_dir` is missing, is not a directory, or is not searchable. |
+| `2`  | Error creating a new pty         | The server failed to allocate a PTY.                       |
+| `3`  | Error starting child process     | The executable could not be spawned.                       |
+| `4`  | Error writing to process         | Writing to the task's stdin failed.                        |
+| `5`  | The task has already exited      | The target task has finished.                              |
+| `6`  | Error sending signal to the task | The signal could not be delivered.                         |
+| `7`  | Task not found                   | No task exists with the given `task_id`.                   |
+| `8`  | Tasksd is shutting down          | The daemon is terminating and will not serve the request.  |
+
+`2` is reserved and not currently returned: tasks run on pipes rather than a
+PTY, so there is no PTY to fail to allocate.
+
+`8` is not tied to a particular method. Any request can be answered with it
+once the daemon has started shutting down, including one that arrives after a
+[`shutdown`](#shutdown) response has been sent, and its `id` is `null` if the
+shutdown races a request the daemon could not parse.
