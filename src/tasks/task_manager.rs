@@ -113,8 +113,7 @@ impl TaskManager {
         if let Some(t) = tasks.running.get(&id) {
             return Some(AnyTask::Running(t.clone()));
         }
-        // TODO: Maybe refactor finished to have the same semantics as running
-        if let Some(t) = tasks.finished.get(id) {
+        if let Some(t) = tasks.finished.get(&id) {
             return Some(AnyTask::Finished(t));
         }
         None
