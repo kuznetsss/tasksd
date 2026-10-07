@@ -12,7 +12,7 @@ use crate::{
         subscriber::{CreatingEvent, Subscriber},
         subscription_registry::SubscriptionRegistry,
     },
-    tasks::{AnyTask, TaskEntry, TaskError, TaskManager, TaskReadingGate, TaskStatus},
+    tasks::{AnyTask, TaskEntry, TaskError, TaskManager, TaskReadingGate},
     transport::ConnectionWriter,
 };
 
@@ -177,16 +177,8 @@ impl Handler {
             .task_manager
             .find_task(params.task_id)
             .map(|t| match t {
-                AnyTask::Running(t) => TaskEntry {
-                    info: t.info(),
-                    task_id: params.task_id,
-                    status: TaskStatus::Running,
-                },
-                AnyTask::Finished(t) => TaskEntry {
-                    info: t.info.clone(),
-                    task_id: params.task_id,
-                    status: TaskStatus::Finished(t.exit_status.into()),
-                },
+                AnyTask::Running(t) => TaskEntry::running(&t, params.task_id),
+                AnyTask::Finished(t) => TaskEntry::finished(&t, params.task_id),
             })
             .ok_or(TaskError::NotFound)?;
         Ok(ResponseResult::TaskInfoResult { entry: task_entry })

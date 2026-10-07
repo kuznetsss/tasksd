@@ -140,19 +140,11 @@ impl TaskManager {
             tasks: Vec::with_capacity(tasks.running.len() + tasks.finished.len()),
         };
         for (&task_id, task) in tasks.running.iter() {
-            let entry = TaskEntry {
-                info: task.info(),
-                task_id,
-                status: TaskStatus::Running,
-            };
+            let entry = TaskEntry::running(task, task_id);
             list.tasks.push(entry);
         }
         for (&task_id, task) in tasks.finished.iter() {
-            let entry = TaskEntry {
-                info: task.info.clone(),
-                task_id,
-                status: TaskStatus::Finished(task.exit_status.into()),
-            };
+            let entry = TaskEntry::finished(task, task_id);
             list.tasks.push(entry);
         }
         list
@@ -207,6 +199,24 @@ pub struct TaskEntry {
     pub task_id: TaskId,
     #[serde(flatten)]
     pub status: TaskStatus,
+}
+
+impl TaskEntry {
+    pub fn running(task: &Task, task_id: TaskId) -> Self {
+        Self {
+            info: task.info(),
+            task_id,
+            status: TaskStatus::Running,
+        }
+    }
+
+    pub fn finished(task: &FinishedTask, task_id: TaskId) -> Self {
+        Self {
+            info: task.info.clone(),
+            task_id,
+            status: TaskStatus::Finished(task.exit_status.into()),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -313,6 +323,16 @@ mod tests {
         }
     }
 
+    async fn wait_for_tasks_to_finish(tm: &TaskManager) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !tm.tasks.read().unwrap().running.is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn get_running_task_works_correctly() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
@@ -323,6 +343,7 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), task.join())
             .await
             .unwrap();
+        wait_for_tasks_to_finish(&tm).await;
         assert_matches!(tm.get_running_task(task_id), Err(TaskError::AlreadyExited));
 
         let non_existing_id = TaskId(123);
@@ -343,6 +364,7 @@ mod tests {
         let finished_task = tokio::time::timeout(Duration::from_secs(1), task.join())
             .await
             .unwrap();
+        wait_for_tasks_to_finish(&tm).await;
         assert_matches!(tm.find_task(task_id), Some(AnyTask::Finished(t)) if Arc::ptr_eq(&finished_task.info, &t.info));
 
         let non_existing_id = TaskId(123);
@@ -411,6 +433,29 @@ mod tests {
             &list.tasks[0].status,
             TaskStatus::Finished(e) if e == &expected_exit_status
         );
+    }
+
+    #[tokio::test]
+    async fn task_entry_constructors() {
+        let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
+        let (task, task_id, _) = tm.spawn("ls", &[], None).unwrap();
+
+        let entry = TaskEntry::running(&task, task_id);
+        assert!(Arc::ptr_eq(&entry.info, &task.info()));
+        assert_eq!(entry.task_id, task_id);
+        assert_matches!(entry.status, TaskStatus::Running);
+
+        let finished_task = task.join().await;
+        let entry = TaskEntry::finished(&finished_task, task_id);
+        assert!(Arc::ptr_eq(&entry.info, &task.info()));
+        assert_eq!(entry.task_id, task_id);
+        assert_matches!(
+            entry.status,
+            TaskStatus::Finished(e) if e == finished_task.exit_status.into()
+        );
+        tokio::time::timeout(Duration::from_secs(1), tm.join())
+            .await
+            .unwrap();
     }
 
     #[test]
