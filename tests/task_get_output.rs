@@ -78,3 +78,20 @@ async fn get_output_running_task() {
 
     ctx.shutdown().await
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_output_last_lines() {
+    let (ctx, mut client) = running_app().await;
+    client
+        .task_start("echo", &["line 1\nline 2\nline 3"], false)
+        .await
+        .unwrap();
+
+    let response: TaskStartResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+    let task_id = response.result.task_id;
+
+
+
+    ctx.shutdown().await
+}
