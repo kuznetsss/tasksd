@@ -97,7 +97,7 @@ impl Client {
     pub async fn get_output(
         &mut self,
         task_id: usize,
-        from_line: usize,
+        from_line: Option<usize>,
         lines_number: usize,
     ) -> Result<()> {
         let id = self.next_id();
