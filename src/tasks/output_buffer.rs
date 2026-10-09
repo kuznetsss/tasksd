@@ -76,6 +76,13 @@ impl OutputBuffer {
         data.range(range).map(Arc::clone).collect()
     }
 
+    pub fn get_last_lines(&self, n: usize) -> Vec<Arc<OutputLine>> {
+        let mut range = self.line_range();
+        let n = n.min(range.len());
+        range.start = range.end - n;
+        self.get_line_range(range)
+    }
+
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -223,6 +230,41 @@ mod tests {
         assert!(ob.get_line(1).is_none());
         assert!(ob.get_line_range(0..5).is_empty());
         assert_eq!(ob.line_range(), 0..0);
+    }
+
+    #[test]
+    fn get_last_lines_returns_last_n_lines() {
+        let ob = OutputBuffer::new(3);
+
+        assert!(ob.get_last_lines(123).is_empty());
+
+        let output_lines: Vec<Arc<OutputLine>> = (0..3)
+            .map(|i| {
+                OutputLine {
+                    content: format!("line {i}"),
+                    line_number: i,
+                }
+                .into()
+            })
+            .collect();
+        ob.insert_line(output_lines[0].clone());
+        let lines = ob.get_last_lines(1);
+        assert_eq!(lines, [output_lines[0].clone()]);
+
+        assert_eq!(lines, ob.get_last_lines(2));
+        assert_eq!(lines, ob.get_last_lines(3));
+
+        ob.insert_line(output_lines[1].clone());
+        ob.insert_line(output_lines[2].clone());
+
+        assert!(ob.get_last_lines(0).is_empty());
+        assert_eq!(ob.get_last_lines(1), [output_lines[2].clone()]);
+        assert_eq!(
+            ob.get_last_lines(2),
+            [output_lines[1].clone(), output_lines[2].clone()]
+        );
+        assert_eq!(ob.get_last_lines(3), output_lines);
+        assert_eq!(ob.get_last_lines(4), output_lines);
     }
 
     #[test]

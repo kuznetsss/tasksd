@@ -6,13 +6,16 @@ use std::{
     sync::{Arc, Mutex, RwLock, atomic::AtomicUsize},
 };
 
-use crate::utils::tracker::{PanicHandler, WrappedTaskTracker};
 use crate::{
     api::TaskExitStatus,
     tasks::{
         finished_task::FinishedTask, info::TaskInfo, recent_finished_tasks::RecentFinishedTasks,
         task::TaskReadingGate, task_error::TaskError,
     },
+};
+use crate::{
+    tasks::output_buffer::OutputBuffer,
+    utils::tracker::{PanicHandler, WrappedTaskTracker},
 };
 
 use super::task::Task;
@@ -53,6 +56,15 @@ pub struct TaskManager {
 pub enum AnyTask {
     Running(Arc<Task>),
     Finished(Arc<FinishedTask>),
+}
+
+impl AnyTask {
+    pub fn output_buffer(&self) -> &Arc<OutputBuffer> {
+        match self {
+            Self::Running(t) => t.output_buffer(),
+            Self::Finished(t) => &t.output_buffer,
+        }
+    }
 }
 
 impl TaskManager {
