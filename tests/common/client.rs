@@ -11,6 +11,8 @@ use tokio::{
     },
 };
 
+use crate::common::api::{TaskList, TaskListResponse};
+
 #[derive(Debug)]
 pub struct Client {
     reader: BufReader<OwnedReadHalf>,
@@ -112,6 +114,19 @@ impl Client {
         self.send_json(&json).await
     }
 
+    pub async fn task_info(&mut self, task_id: usize) -> Result<()> {
+        let id = self.next_id();
+        let json = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "task.info",
+            "params": {
+                "task_id": task_id
+            }
+        });
+        self.send_json(&json).await
+    }
+
     pub async fn send_input(&mut self, task_id: usize, input: impl Into<&str>) -> Result<()> {
         let id = self.next_id();
         let json = json!({
@@ -184,6 +199,21 @@ impl Client {
             "method": "task.list",
         });
         self.send_json(&json).await
+    }
+
+    pub async fn wait_for_task_list(&mut self, predicate: impl Fn(&TaskList) -> bool) -> TaskList {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                self.task_list().await.unwrap();
+                let response: TaskListResponse = self.read_struct().await.unwrap();
+                assert_eq!(response.id, self.last_id());
+                if predicate(&response.result.tasks) {
+                    return response.result.tasks;
+                }
+            }
+        })
+        .await
+        .expect("task list should converge")
     }
 
     pub fn last_id(&self) -> i64 {

@@ -62,16 +62,21 @@ pub struct TaskListResponseResult {
     pub tasks: TaskList,
 }
 
+pub type TaskList = Vec<TaskInfoResponseResult>;
+
 #[derive(Debug, Deserialize)]
-pub struct TaskList {
-    pub running: Vec<TaskEntry>,
-    pub finished: Vec<TaskEntry>,
+pub struct TaskInfoResponse {
+    pub id: i64,
+    pub result: TaskInfoResponseResult,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TaskEntry {
-    pub id: usize,
+pub struct TaskInfoResponseResult {
     pub info: TaskInfo,
+    pub task_id: usize,
+    pub status: String,
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]

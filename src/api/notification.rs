@@ -1,9 +1,9 @@
-use std::{os::unix::process::ExitStatusExt, process::ExitStatus, sync::Arc};
+use std::{process::ExitStatus, sync::Arc};
 
 use serde::Serialize;
 
 use crate::{
-    api::common::JsonRpcVersion,
+    api::common::{JsonRpcVersion, TaskExitStatus},
     tasks::{OutputLine, TaskId},
 };
 
@@ -66,8 +66,7 @@ impl NotificationBody {
     pub fn task_exit(task_id: TaskId, exit_status: ExitStatus) -> Self {
         Self::TaskExit(TaskExitParams {
             task_id,
-            exit_code: exit_status.code(),
-            signal: exit_status.signal(),
+            exit_status: exit_status.into(),
         })
     }
 }
@@ -82,8 +81,8 @@ pub struct TaskOutputParams {
 #[derive(Debug, Serialize)]
 pub struct TaskExitParams {
     task_id: TaskId,
-    exit_code: Option<i32>,
-    signal: Option<i32>,
+    #[serde(flatten)]
+    exit_status: TaskExitStatus,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,6 +96,8 @@ pub struct TaskMissedOutputParams {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    use std::os::unix::process::ExitStatusExt;
 
     #[test]
     fn task_output_serialization() {
