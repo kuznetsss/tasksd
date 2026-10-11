@@ -193,19 +193,25 @@ Query a range of buffered output lines for a task. Works for both running and
 finished tasks, as long as the task still exists on the server.
 
 The server keeps only the most recent lines of each task's output in a bounded
-buffer, so older lines may no longer be available. The returned range is the
-half-open interval `[from_line, from_line + lines_number)`, intersected with the
-lines currently held in the buffer. Requesting a range that lies entirely
-outside the buffer (or `lines_number` of `0`) yields an empty `lines` array
-rather than an error.
+buffer, so older lines may no longer be available.
+
+- If `from_line` is given, the returned range is the half-open interval
+  `[from_line, from_line + lines_number)`, intersected with the lines currently
+  held in the buffer. Requesting a range that lies entirely outside the buffer
+  yields an empty `lines` array rather than an error.
+- If `from_line` is omitted (or `null`), the last `lines_number` lines currently
+  held in the buffer are returned. If the buffer holds fewer lines than that,
+  all of them are returned.
+
+In both modes a `lines_number` of `0` yields an empty `lines` array.
 
 **Params**
 
-| Field          | Type    | Required | Description                                          |
-| -------------- | ------- | -------- | ---------------------------------------------------- |
-| `task_id`      | integer | yes      | Id of the task to read output from.                  |
-| `from_line`    | integer | yes      | Zero-based index of the first line to return.        |
-| `lines_number` | integer | yes      | Maximum number of lines to return from `from_line`.  |
+| Field          | Type            | Required | Description                                                                   |
+| -------------- | --------------- | -------- | ----------------------------------------------------------------------------- |
+| `task_id`      | integer         | yes      | Id of the task to read output from.                                           |
+| `from_line`    | integer \| null | no       | Zero-based index of the first line to return. If omitted, read from the tail. |
+| `lines_number` | integer         | yes      | Maximum number of lines to return.                                            |
 
 **Result**
 
@@ -245,6 +251,26 @@ Requesting a `task_id` that does not exist is rejected with
     "lines": [
       { "line": "line 2\n", "line_number": 1 },
       { "line": "line 3\n", "line_number": 2 }
+    ]
+  }
+}
+
+// → request: last line of output (task has printed 4 lines)
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "task.get_output",
+  "params": { "task_id": 1, "lines_number": 1 }
+}
+
+// ← response
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "result": {
+    "task_id": 1,
+    "lines": [
+      { "line": "line 4\n", "line_number": 3 }
     ]
   }
 }
