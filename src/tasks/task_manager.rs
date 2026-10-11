@@ -8,13 +8,11 @@ use std::{
 
 use crate::{
     api::TaskExitStatus,
+    tasks::output_buffer::OutputBuffer,
     tasks::{
         finished_task::FinishedTask, info::TaskInfo, recent_finished_tasks::RecentFinishedTasks,
         task::TaskReadingGate, task_error::TaskError,
     },
-};
-use crate::{
-    tasks::output_buffer::OutputBuffer,
     utils::tracker::{PanicHandler, WrappedTaskTracker},
 };
 

@@ -117,7 +117,7 @@ impl Handler {
             .ok_or(TaskError::NotFound)?;
         let lines = if let Some(from_line) = params.from_line {
             let line_range = from_line..from_line.saturating_add(params.lines_number);
-            task.output_buffer().get_line_range(line_range)
+            task.output_buffer().get_range_of_lines(line_range)
         } else {
             task.output_buffer().get_last_lines(params.lines_number)
         };

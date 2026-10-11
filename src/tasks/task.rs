@@ -561,7 +561,7 @@ mod tests {
         assert_eq!(range, 0..2);
         assert_eq!(
             task.output_buffer()
-                .get_line_range(range)
+                .get_range_of_lines(range)
                 .into_iter()
                 .map(|s| s.content.clone())
                 .collect::<Vec<_>>(),

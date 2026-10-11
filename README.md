@@ -65,9 +65,8 @@ A few reasons:
       - [x] Unify `task.list` and `task.info`: list entry should be task info + status (running or finished)
       - [x] Fix tests
       - [x] Deduplicate the creation of TaskEntry
-- [ ] in `task.get_output` the parameter `from_line` should become optional:
+- [x] in `task.get_output` the parameter `from_line` should become optional:
       if it is not provided return the last `lines_number`
-      - Add integration tests
 - [ ] `task.subscribe` should provide option `output` and by default only subscribe on exit event
 - [ ] `task.exit` notification is sent before task is moved out of running map:
       - add a gate to the completion coroutine, when task is moved, gate opens

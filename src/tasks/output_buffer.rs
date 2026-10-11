@@ -6,85 +6,111 @@ use std::{
 
 use crate::tasks::OutputLine;
 
-type Storage = VecDeque<Arc<OutputLine>>;
 #[derive(Debug)]
 pub struct OutputBuffer {
-    data: Mutex<Storage>,
-    capacity: usize,
+    data: Mutex<LineStorage>,
 }
 
 impl OutputBuffer {
     pub(in crate::tasks) fn new(capacity: usize) -> OutputBuffer {
-        assert!(capacity > 0, "Capacity should be positive");
         Self {
-            data: Mutex::new(VecDeque::with_capacity(capacity)),
-            capacity,
+            data: Mutex::new(LineStorage::new(capacity)),
         }
     }
 
     pub(in crate::tasks) fn insert_line(&self, line: Arc<OutputLine>) {
-        let mut data = self.data.lock().unwrap();
-        if !data.is_empty() {
-            assert_eq!(data.back().unwrap().line_number + 1, line.line_number);
-        } else {
-            assert_eq!(line.line_number, 0);
-        }
-        if data.len() >= self.capacity {
-            data.pop_front().expect("data shouldn't be empty");
-        }
-        data.push_back(line);
+        self.data.lock().unwrap().insert_line(line);
     }
 
     pub fn line_range(&self) -> Range<usize> {
-        let data = self.data.lock().unwrap();
-        if data.is_empty() {
-            0..0
-        } else {
-            data.front().unwrap().line_number..(data.back().unwrap().line_number + 1)
-        }
+        self.data.lock().unwrap().line_range()
     }
 
     pub fn get_line(&self, line_number: usize) -> Option<Arc<OutputLine>> {
+        self.data.lock().unwrap().get_line(line_number)
+    }
+
+    pub fn get_range_of_lines(&self, range: Range<usize>) -> Vec<Arc<OutputLine>> {
+        self.data.lock().unwrap().get_range_of_lines(range)
+    }
+
+    pub fn get_last_lines(&self, n: usize) -> Vec<Arc<OutputLine>> {
         let data = self.data.lock().unwrap();
-        if data.is_empty() {
+        let mut range = data.line_range();
+        let n = n.min(range.len());
+        range.start = range.end - n;
+        data.get_range_of_lines(range)
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.data.lock().unwrap().capacity
+    }
+}
+
+#[derive(Debug)]
+struct LineStorage {
+    data: VecDeque<Arc<OutputLine>>,
+    capacity: usize,
+}
+
+impl LineStorage {
+    fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "Capacity should be positive");
+        Self {
+            data: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    fn insert_line(&mut self, line: Arc<OutputLine>) {
+        if !self.data.is_empty() {
+            assert_eq!(self.data.back().unwrap().line_number + 1, line.line_number);
+        } else {
+            assert_eq!(line.line_number, 0);
+        }
+        if self.data.len() >= self.capacity {
+            self.data.pop_front().expect("data shouldn't be empty");
+        }
+        self.data.push_back(line);
+    }
+
+    fn line_range(&self) -> Range<usize> {
+        if self.data.is_empty() {
+            0..0
+        } else {
+            self.data.front().unwrap().line_number..(self.data.back().unwrap().line_number + 1)
+        }
+    }
+
+    fn get_line(&self, line_number: usize) -> Option<Arc<OutputLine>> {
+        if self.data.is_empty() {
             return None;
         }
-        if line_number < data.front().unwrap().line_number
-            || line_number > data.back().unwrap().line_number
+        if line_number < self.data.front().unwrap().line_number
+            || line_number > self.data.back().unwrap().line_number
         {
             return None;
         }
-        data.get(line_number - data.front().unwrap().line_number)
+        self.data
+            .get(line_number - self.data.front().unwrap().line_number)
             .map(Arc::clone)
     }
 
-    pub fn get_line_range(&self, mut range: Range<usize>) -> Vec<Arc<OutputLine>> {
-        let data = self.data.lock().unwrap();
-        if data.is_empty()
+    fn get_range_of_lines(&self, mut range: Range<usize>) -> Vec<Arc<OutputLine>> {
+        if self.data.is_empty()
             || range.start > range.end
-            || range.end < data.front().unwrap().line_number
+            || range.end < self.data.front().unwrap().line_number
         {
             return Vec::new();
         }
-        let first_line_number = data.front().unwrap().line_number;
+        let first_line_number = self.data.front().unwrap().line_number;
         range.start = std::cmp::max(range.start, first_line_number);
-        range.end = std::cmp::min(range.end, data.back().unwrap().line_number + 1);
+        range.end = std::cmp::min(range.end, self.data.back().unwrap().line_number + 1);
         let range = (range.start - first_line_number)..(range.end - first_line_number);
         if range.start > range.end {
             return Vec::new();
         }
-        data.range(range).map(Arc::clone).collect()
-    }
-
-    pub fn get_last_lines(&self, n: usize) -> Vec<Arc<OutputLine>> {
-        let mut range = self.line_range();
-        let n = n.min(range.len());
-        range.start = range.end - n;
-        self.get_line_range(range)
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.capacity
+        self.data.range(range).map(Arc::clone).collect()
     }
 }
 
@@ -181,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn get_line_range() {
+    fn get_range_of_lines() {
         let ob = OutputBuffer::new(5);
         let make_line = |i| OutputLine {
             content: format!("line {i}"),
@@ -193,34 +219,34 @@ mod tests {
         // 5 6 7 8 9 is in the buffer
         #[allow(clippy::reversed_empty_ranges)]
         {
-            assert!(ob.get_line_range(2..1).is_empty());
+            assert!(ob.get_range_of_lines(2..1).is_empty());
         }
-        assert!(ob.get_line_range(1..4).is_empty());
+        assert!(ob.get_range_of_lines(1..4).is_empty());
         assert_eq!(
-            ob.get_line_range(5..6)
+            ob.get_range_of_lines(5..6)
                 .iter()
                 .map(|s| s.line_number)
                 .collect::<Vec<_>>(),
             [5]
         );
         assert_eq!(
-            ob.get_line_range(7..9)
+            ob.get_range_of_lines(7..9)
                 .iter()
                 .map(|s| s.line_number)
                 .collect::<Vec<_>>(),
             [7, 8]
         );
         assert_eq!(
-            ob.get_line_range(7..25)
+            ob.get_range_of_lines(7..25)
                 .iter()
                 .map(|s| s.line_number)
                 .collect::<Vec<_>>(),
             [7, 8, 9]
         );
-        assert!(ob.get_line_range(10..25).is_empty());
-        assert!(ob.get_line_range(20..25).is_empty());
-        assert!(ob.get_line_range(20..20).is_empty());
-        assert!(ob.get_line_range(7..7).is_empty());
+        assert!(ob.get_range_of_lines(10..25).is_empty());
+        assert!(ob.get_range_of_lines(20..25).is_empty());
+        assert!(ob.get_range_of_lines(20..20).is_empty());
+        assert!(ob.get_range_of_lines(7..7).is_empty());
     }
 
     #[test]
@@ -228,7 +254,7 @@ mod tests {
         let ob = OutputBuffer::new(1);
         assert!(ob.get_line(0).is_none());
         assert!(ob.get_line(1).is_none());
-        assert!(ob.get_line_range(0..5).is_empty());
+        assert!(ob.get_range_of_lines(0..5).is_empty());
         assert_eq!(ob.line_range(), 0..0);
     }
 
@@ -265,6 +291,38 @@ mod tests {
         );
         assert_eq!(ob.get_last_lines(3), output_lines);
         assert_eq!(ob.get_last_lines(4), output_lines);
+    }
+
+    #[test]
+    fn get_last_lines_returns_last_n_lines_after_old_lines_dropped() {
+        let ob = OutputBuffer::new(3);
+        ob.insert_line(
+            OutputLine {
+                content: "line 0".into(),
+                line_number: 0,
+            }
+            .into(),
+        );
+        let output_lines: Vec<Arc<_>> = (1..4)
+            .map(|i| {
+                OutputLine {
+                    content: format!("line {i}"),
+                    line_number: i,
+                }
+                .into()
+            })
+            .collect();
+
+        for o in &output_lines {
+            ob.insert_line(o.clone());
+        }
+
+        assert_eq!(ob.get_last_lines(1), [output_lines[2].clone()]);
+        assert_eq!(
+            ob.get_last_lines(2),
+            [output_lines[1].clone(), output_lines[2].clone()]
+        );
+        assert_eq!(ob.get_last_lines(3), output_lines);
     }
 
     #[test]
