@@ -118,7 +118,7 @@ pub struct TaskSendSignalParams {
 #[serde(deny_unknown_fields)]
 pub struct TaskGetOutputParams {
     pub task_id: TaskId,
-    pub from_line: usize,
+    pub from_line: Option<usize>,
     pub lines_number: usize,
 }
 
@@ -306,7 +306,7 @@ mod tests {
             panic!("Invalid request body");
         };
         assert_eq!(params.task_id.0, 456);
-        assert_eq!(params.from_line, 789);
+        assert_eq!(params.from_line, Some(789));
         assert_eq!(params.lines_number, 324);
     }
 

@@ -97,20 +97,22 @@ impl Client {
     pub async fn get_output(
         &mut self,
         task_id: usize,
-        from_line: usize,
+        from_line: Option<usize>,
         lines_number: usize,
     ) -> Result<()> {
         let id = self.next_id();
-        let json = json!({
+        let mut json = json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": "task.get_output",
             "params": {
                 "task_id": task_id,
-                "from_line": from_line,
                 "lines_number": lines_number
             }
         });
+        if let Some(from_line) = from_line {
+            json["params"]["from_line"] = from_line.into();
+        }
         self.send_json(&json).await
     }
 

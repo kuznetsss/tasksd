@@ -86,7 +86,7 @@ pub struct TaskInfo {
     pub working_dir: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
 pub struct OutputLine {
     pub line: String,
     pub line_number: usize,
