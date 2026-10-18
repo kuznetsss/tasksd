@@ -67,7 +67,7 @@ async fn subscribe_subscribes_to_output() {
     assert_eq!(response.id, client.last_id());
     let task_id = response.result.task_id;
 
-    client.subscribe(task_id).await.unwrap();
+    client.subscribe(task_id, true).await.unwrap();
     let response: TaskSubscribeResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, client.last_id());
 
@@ -83,6 +83,39 @@ async fn subscribe_subscribes_to_output() {
         .check()
         .await
         .unwrap();
+
+    client.send_signal(task_id, 9).await.unwrap();
+
+    let last_id = client.last_id();
+    client
+        .expect_unordered()
+        .message(move |e: TaskExitNotification| e.params.task_id == task_id)
+        .message(move |r: TaskSendSignalResponse| r.id == last_id)
+        .check()
+        .await
+        .unwrap();
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_without_output_subscribes_only_to_exit_event() {
+    let (ctx, mut client) = running_app().await;
+
+    client.task_start("cat", &[], false).await.unwrap();
+
+    let response: TaskStartResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+    let task_id = response.result.task_id;
+
+    client.subscribe(task_id, false).await.unwrap();
+    let response: TaskSubscribeResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+
+    let input = "input 1\n";
+    client.send_input(task_id, input).await.unwrap();
+    let response: TaskSendInputResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
 
     client.send_signal(task_id, 9).await.unwrap();
 
@@ -123,7 +156,7 @@ async fn subscribe_to_already_running_task() {
     drop(client);
     let mut client = ctx.make_client().await;
 
-    client.subscribe(task_id).await.unwrap();
+    client.subscribe(task_id, true).await.unwrap();
     let response: TaskSubscribeResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, client.last_id());
 
@@ -148,7 +181,7 @@ async fn subscribe_to_already_running_task() {
 async fn subscribe_unsubscribe_non_existing_task() {
     let (ctx, mut client) = running_app().await;
 
-    client.subscribe(123).await.unwrap();
+    client.subscribe(123, true).await.unwrap();
 
     let err: ErrorResponse = client.read_struct().await.unwrap();
     assert_eq!(err.id.unwrap(), client.last_id());
@@ -175,7 +208,7 @@ async fn subscribe_unsubscribe_finished_task() {
     let exit: TaskExitNotification = client.read_struct().await.unwrap();
     assert_eq!(exit.params.task_id, task_id);
 
-    client.subscribe(task_id).await.unwrap();
+    client.subscribe(task_id, true).await.unwrap();
     let err: ErrorResponse = client.read_struct().await.unwrap();
     assert_eq!(err.id.unwrap(), client.last_id());
     assert_eq!(err.error.code, 5);
@@ -212,7 +245,7 @@ async fn subscribe_to_running_task_first_message_is_lag() {
 
     let mut new_client = ctx.make_client().await;
 
-    new_client.subscribe(task_id).await.unwrap();
+    new_client.subscribe(task_id, true).await.unwrap();
     let response: TaskSubscribeResponse = new_client.read_struct().await.unwrap();
     assert_eq!(response.id, new_client.last_id());
 

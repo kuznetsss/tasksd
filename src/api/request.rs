@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use rustix::process::Signal;
 use serde::{Deserialize, Deserializer};
 
@@ -46,8 +48,7 @@ impl RequestRaw {
             "task.send_input" => self.parse_params(RequestBody::TaskSendInput),
             "task.send_signal" => self.parse_params(RequestBody::TaskSendSignal),
             "task.start" => self.parse_params(RequestBody::TaskStart),
-            "task.subscribe" => self.parse_params(RequestBody::TaskSubscribe),
-            "task.unsubscribe" => self.parse_params(RequestBody::TaskUnsubscribe),
+            "task.set_subscribe" => self.parse_params(RequestBody::TaskSetSubscribe),
             unknown => Err(ResponseError::method_not_found(unknown).into_response(Some(self.id))),
         }
     }
@@ -77,8 +78,7 @@ pub enum RequestBody {
     TaskSendInput(TaskSendInputParams),
     TaskSendSignal(TaskSendSignalParams),
     TaskStart(TaskStartParams),
-    TaskSubscribe(TaskSubscribeParams),
-    TaskUnsubscribe(TaskSubscribeParams),
+    TaskSetSubscribe(TaskSetSubscribeParams),
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,13 +95,16 @@ pub struct TaskStartParams {
     pub args: Option<Vec<String>>,
     pub working_dir: Option<String>,
 
-    #[serde(default = "TaskStartParams::default_subscribe_to_output")]
-    pub subscribe_to_output: bool,
+    #[serde(
+        deserialize_with = "deserialize_events",
+        default = "TaskStartParams::default_subscribe_to_output"
+    )]
+    pub subscribe_to_events: HashSet<SubscribeEventType>,
 }
 
 impl TaskStartParams {
-    fn default_subscribe_to_output() -> bool {
-        true
+    fn default_subscribe_to_output() -> HashSet<SubscribeEventType> {
+        [SubscribeEventType::Output, SubscribeEventType::Exit].into()
     }
 }
 
@@ -124,8 +127,19 @@ pub struct TaskGetOutputParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TaskSubscribeParams {
+pub struct TaskSetSubscribeParams {
     pub task_id: TaskId,
+    #[serde(deserialize_with = "deserialize_events")]
+    pub events: HashSet<SubscribeEventType>,
+}
+
+type SubscribeEvents = HashSet<SubscribeEventType>;
+
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscribeEventType {
+    Exit,
+    Output,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,6 +167,20 @@ where
             serde::de::Unexpected::Signed(n as i64),
             &"a valid signal number",
         )),
+    }
+}
+
+fn deserialize_events<'de, D>(d: D) -> Result<HashSet<SubscribeEventType>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let result = HashSet::<SubscribeEventType>::deserialize(d)?;
+    if result.len() == 1 && result.contains(&SubscribeEventType::Output) {
+        Err(serde::de::Error::custom(
+            "subscribing only to output is not allowed",
+        ))
+    } else {
+        Ok(result)
     }
 }
 
@@ -241,7 +269,10 @@ mod tests {
         assert_eq!(body.executable, "ls");
         assert_eq!(body.args, None);
         assert_eq!(body.working_dir, Some("/tmp".to_string()));
-        assert!(body.subscribe_to_output);
+        assert_eq!(
+            body.subscribe_to_events,
+            [SubscribeEventType::Output, SubscribeEventType::Exit].into()
+        );
     }
 
     #[test]
@@ -311,39 +342,26 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_task_subscribe() {
+    fn deserialize_task_set_subscribe() {
         let json = json! {{
             "jsonrpc":"2.0",
             "id": 123,
-            "method": "task.subscribe",
+            "method": "task.set_subscribe",
             "params":{
                 "task_id": 456,
+                "events": ["exit", "output"]
             }
         }};
         let parsed = Request::parse(&json.to_string()).unwrap();
         assert_eq!(parsed.id, RequestId::Number(123));
-        let RequestBody::TaskSubscribe(params) = parsed.body else {
+        let RequestBody::TaskSetSubscribe(params) = parsed.body else {
             panic!("Invalid request body");
         };
         assert_eq!(params.task_id.0, 456);
-    }
-
-    #[test]
-    fn deserialize_task_unsubscribe() {
-        let json = json! {{
-            "jsonrpc":"2.0",
-            "id": 123,
-            "method": "task.unsubscribe",
-            "params":{
-                "task_id": 456,
-            }
-        }};
-        let parsed = Request::parse(&json.to_string()).unwrap();
-        assert_eq!(parsed.id, RequestId::Number(123));
-        let RequestBody::TaskUnsubscribe(params) = parsed.body else {
-            panic!("Invalid request body");
-        };
-        assert_eq!(params.task_id.0, 456);
+        assert_eq!(
+            params.events,
+            [SubscribeEventType::Exit, SubscribeEventType::Output].into()
+        );
     }
 
     #[test]

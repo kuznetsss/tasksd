@@ -143,7 +143,7 @@ impl Client {
         self.send_json(&json).await
     }
 
-    pub async fn subscribe(&mut self, task_id: usize) -> Result<()> {
+    pub async fn subscribe(&mut self, task_id: usize, subscribe_to_output: bool) -> Result<()> {
         let id = self.next_id();
         let json = json!({
             "jsonrpc": "2.0",
@@ -151,6 +151,7 @@ impl Client {
             "method": "task.subscribe",
             "params": {
                 "task_id": task_id,
+                "subscribe_to_output": subscribe_to_output
             }
         });
         self.send_json(&json).await

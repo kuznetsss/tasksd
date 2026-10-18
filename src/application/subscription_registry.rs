@@ -1,11 +1,12 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex, MutexGuard},
 };
 
 use tokio::task::AbortHandle;
 
 use crate::{
+    api::SubscribeEventType,
     application::{
         ApplicationError,
         subscriber::{Subscriber, SubscriberHandle},
@@ -37,30 +38,34 @@ impl SubscriptionRegistry {
         self.spawn_subscriber_impl(subs, task_id, subscriber)
     }
 
-    pub(in crate::application) fn subscribe_or_spawn(
+    pub(in crate::application) fn update_or_spawn_subscriber(
         &self,
         task_id: &TaskId,
+        events_to_subscribe: &HashSet<SubscribeEventType>,
         subscriber_builder: impl FnOnce() -> Result<Subscriber, ApplicationError>,
     ) -> Result<(), ApplicationError> {
         let subs = self.subs.lock().expect("Poisoned lock");
         if let Some(handle) = subs.get(task_id) {
-            handle.set_subscribe_to_output(true);
+            handle
+                .set_subscribe_to_output(events_to_subscribe.contains(&SubscribeEventType::Output));
             return Ok(());
         }
         self.spawn_subscriber_impl(subs, *task_id, subscriber_builder()?)?;
         Ok(())
     }
 
-    pub(in crate::application) fn unsubscribe(
+    pub(in crate::application) async fn stop_subscriber(
         &self,
         task_id: &TaskId,
     ) -> Result<(), ApplicationError> {
-        let subs = self.subs.lock().expect("Poisoned lock");
-        let handle = match subs.get(task_id) {
-            Some(h) => h,
-            None => return Err(TaskError::NotFound.into()),
+        let mut handle = {
+            let subs = self.subs.lock().expect("Poisoned lock");
+            match subs.get(task_id) {
+                Some(h) => h.clone(),
+                None => return Err(TaskError::NotFound.into()),
+            }
         };
-        handle.set_subscribe_to_output(false);
+        handle.stop().await;
         Ok(())
     }
 

@@ -173,7 +173,7 @@ async fn running_task_survives_client_disconnect() {
     drop(client);
     let mut client = ctx.make_client().await;
 
-    client.subscribe(task_id).await.unwrap();
+    client.subscribe(task_id, true).await.unwrap();
     let response: TaskSubscribeResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, client.last_id());
 
