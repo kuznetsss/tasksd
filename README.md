@@ -69,6 +69,8 @@ A few reasons:
       if it is not provided return the last `lines_number`
 - [x] `task.subscribe` should provide option `output` and by default only subscribe on exit event
     - [ ] set_subscribe integration tests
+    - [ ] create a new type for `HashSet<SubscriptionEventType>`
+    - [ ] update API.md
     - [ ] code review
 - [ ] Rearrange integration tests: one `it` (as integration tests) module containing common and all the tests. Rename base to basic tests
 - [ ] `task.exit` notification is sent before task is moved out of running map:
