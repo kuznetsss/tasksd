@@ -97,13 +97,13 @@ pub struct TaskStartParams {
 
     #[serde(
         deserialize_with = "deserialize_events",
-        default = "TaskStartParams::default_subscribe_to_output"
+        default = "TaskStartParams::default_subscribe_to_events"
     )]
     pub subscribe_to_events: HashSet<SubscribeEventType>,
 }
 
 impl TaskStartParams {
-    fn default_subscribe_to_output() -> HashSet<SubscribeEventType> {
+    fn default_subscribe_to_events() -> HashSet<SubscribeEventType> {
         [SubscribeEventType::Output, SubscribeEventType::Exit].into()
     }
 }

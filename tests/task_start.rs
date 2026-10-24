@@ -10,7 +10,7 @@ use tasksd::tasks::CHANNEL_CAPACITY;
 use crate::common::{
     api::{
         ErrorResponse, TaskExitNotification, TaskMissedOutputNotification, TaskOutputNotification,
-        TaskStartResponse, TaskStartResult,
+        TaskSendInputResponse, TaskSendSignalResponse, TaskStartResponse, TaskStartResult,
     },
     running_app,
 };
@@ -100,7 +100,6 @@ async fn start_task_string_request_id() {
             "params": {
                 "executable": "echo",
                 "args": ["hi"],
-                "subscribe_to_output": true
             }
     });
     client.send_json(&request).await.unwrap();
@@ -147,7 +146,6 @@ async fn start_task_custom_working_dir() {
                 "executable": "pwd",
                 "args": [],
                 "working_dir": dir,
-                "subscribe_to_output": true
             }
     });
     client.send_json(&request).await.unwrap();
@@ -181,7 +179,6 @@ async fn start_task_invalid_working_dir() {
                 "executable": "ls",
                 "args": [],
                 "working_dir": "/invalid/working/dir",
-                "subscribe_to_output": true
             }
     });
     client.send_json(&request).await.unwrap();
@@ -207,6 +204,62 @@ async fn start_task_not_subscribed_to_output() {
     assert_eq!(exit.params.task_id, task_id);
     assert_eq!(exit.params.exit_code, Some(0));
     assert_eq!(exit.params.signal, None);
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_task_not_subscribed_to_anything() {
+    let (ctx, mut client) = running_app().await;
+
+    let json = json!({
+        "jsonrpc": "2.0",
+        "id": 123,
+        "method": "task.start",
+        "params": {
+            "executable": "cat",
+            "args": [],
+            "subscribe_to_events": []
+        }
+    });
+    client.send_json(&json).await.unwrap();
+    let response: TaskStartResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, 123);
+    let task_id = response.result.task_id;
+
+    client.send_input(task_id, "some input\n").await.unwrap();
+    let response: TaskSendInputResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+
+    client.send_signal(task_id, 9).await.unwrap();
+    let response: TaskSendSignalResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, client.last_id());
+
+    client
+        .wait_for_task_list(|l| l.len() == 1 && l[0].status == "finished")
+        .await;
+
+    ctx.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_task_subscribed_to_output_only_returns_error() {
+    let (ctx, mut client) = running_app().await;
+
+    let json = json!({
+        "jsonrpc": "2.0",
+        "id": 123,
+        "method": "task.start",
+        "params": {
+            "executable": "ls",
+            "args": [],
+            "subscribe_to_events": ["output"]
+        }
+    });
+    client.send_json(&json).await.unwrap();
+    let response: ErrorResponse = client.read_struct().await.unwrap();
+    assert_eq!(response.id, Some(123));
+    assert_eq!(response.error.code, -32602);
 
     ctx.shutdown().await;
 }

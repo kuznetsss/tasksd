@@ -83,15 +83,17 @@ impl Handler {
         let task_events_stream = task
             .events_stream()
             .expect("Task couldn't exit while its gate is not dropped");
-        let subscriber = Subscriber::new(
-            self.connection_writer.clone(),
-            task_id,
-            &params.subscribe_to_events,
-            task_events_stream,
-            CreatingEvent::Start,
-        );
-        self.subscription_registry
-            .spawn_subscriber(task_id, subscriber)?;
+        if !params.subscribe_to_events.is_empty() {
+            let subscriber = Subscriber::new(
+                self.connection_writer.clone(),
+                task_id,
+                &params.subscribe_to_events,
+                task_events_stream,
+                CreatingEvent::Start,
+            );
+            self.subscription_registry
+                .spawn_subscriber(task_id, subscriber)?;
+        }
         let response_result = ResponseResult::StartTaskResult { task_id };
         Ok((response_result, gate))
     }

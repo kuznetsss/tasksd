@@ -66,6 +66,10 @@ impl Client {
         subscribe_to_output: bool,
     ) -> Result<()> {
         let id = self.next_id();
+        let mut subscribe_to_events = vec!["exit"];
+        if subscribe_to_output {
+            subscribe_to_events.push("output");
+        }
         let json = json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -73,7 +77,7 @@ impl Client {
             "params": {
                 "executable": executable,
                 "args": args,
-                "subscribe_to_output": subscribe_to_output
+                "subscribe_to_events": subscribe_to_events
             }
         });
 
