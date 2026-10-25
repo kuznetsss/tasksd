@@ -68,15 +68,14 @@ A few reasons:
 - [x] in `task.get_output` the parameter `from_line` should become optional:
       if it is not provided return the last `lines_number`
 - [x] `task.subscribe` should provide option `output` and by default only subscribe on exit event
-    - [x] set_subscribe integration tests
-    - [x] update API.md
-    - [x] create a new type for `HashSet<SubscriptionEventType>`
-    - [ ] code review
-- [ ] Rearrange integration tests: one `it` (as integration tests) module containing common and all the tests. Rename base to basic tests
+- [ ] Rarrange integration tests: one `it` (as integration tests) module containing common and all the tests. Rename base to basic tests
 - [ ] `task.exit` notification is sent before task is moved out of running map:
       - add a gate to the completion coroutine, when task is moved, gate opens
       - add wait for the gate in subscriber: if it gets an exit event it waits for the gate
       - update API.md
+      - related, not fixed by the gate: after the subscriber sends `task.exit` its entry stays
+        in `SubscriptionRegistry` until the coroutine removes it; a non-empty `task.set_subscribe`
+        in that window returns `{}` instead of error `5`
 - [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
 - [ ] Support graceful shutdown by `SIGTERM`
 - [ ] Switch output stream to Vec<u8>

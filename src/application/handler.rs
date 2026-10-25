@@ -83,7 +83,7 @@ impl Handler {
         let task_events_stream = task
             .events_stream()
             .expect("Task couldn't exit while its gate is not dropped");
-        if !params.subscribe_to_events.0.is_empty() {
+        if !params.subscribe_to_events.is_empty() {
             let subscriber = Subscriber::new(
                 self.connection_writer.clone(),
                 task_id,
@@ -132,18 +132,21 @@ impl Handler {
         &self,
         params: TaskSetSubscribeParams,
     ) -> Result<ResponseResult, ApplicationError> {
-        if params.events.0.is_empty() {
+        if params.events.is_empty() {
             match self
                 .subscription_registry
                 .stop_subscriber(&params.task_id)
                 .await
             {
                 Ok(_) => return Ok(ResponseResult::SubscribeResult {}),
-                Err(_) => match self.task_manager.find_task(params.task_id) {
-                    Some(AnyTask::Running(_)) => return Ok(ResponseResult::SubscribeResult {}),
-                    Some(AnyTask::Finished(_)) => return Err(TaskError::AlreadyExited.into()),
-                    None => return Err(TaskError::NotFound.into()),
-                },
+                Err(ApplicationError::TaskError(TaskError::NotFound)) => {
+                    match self.task_manager.find_task(params.task_id) {
+                        Some(AnyTask::Running(_)) => return Ok(ResponseResult::SubscribeResult {}),
+                        Some(AnyTask::Finished(_)) => return Err(TaskError::AlreadyExited.into()),
+                        None => return Err(TaskError::NotFound.into()),
+                    }
+                }
+                Err(e) => return Err(e),
             }
         }
 

@@ -129,21 +129,28 @@ pub struct TaskSetSubscribeParams {
     pub events: SubscribeEvents,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct SubscribeEvents(pub HashSet<SubscribeEventType>);
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(try_from = "HashSet<SubscribeEventType>")]
+pub struct SubscribeEvents(HashSet<SubscribeEventType>);
 
-impl<'de> Deserialize<'de> for SubscribeEvents {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let result = HashSet::<SubscribeEventType>::deserialize(deserializer)?;
-        if result.len() == 1 && result.contains(&SubscribeEventType::Output) {
-            Err(serde::de::Error::custom(
-                "subscribing only to output is not allowed",
-            ))
+impl SubscribeEvents {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn contains(&self, value: &SubscribeEventType) -> bool {
+        self.0.contains(value)
+    }
+}
+
+impl TryFrom<HashSet<SubscribeEventType>> for SubscribeEvents {
+    type Error = &'static str;
+
+    fn try_from(value: HashSet<SubscribeEventType>) -> Result<Self, Self::Error> {
+        if !(value.is_empty() || value.contains(&SubscribeEventType::Exit)) {
+            Err("subscribing only to output is not allowed")
         } else {
-            Ok(SubscribeEvents(result))
+            Ok(Self(value))
         }
     }
 }

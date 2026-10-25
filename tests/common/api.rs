@@ -30,26 +30,23 @@ pub struct TaskGetOutputResponse {
 #[derive(Debug, Deserialize)]
 pub struct TaskSendInputResponse {
     pub id: i64,
+    pub result: EmptyResult,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct TaskSetSubscribeResponse {
     pub id: i64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TaskUnsubscribeResponse {
-    pub id: i64,
+    pub result: EmptyResult,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ShutdownResponse {
     pub id: i64,
-    pub result: ShutdownResponseResult,
+    pub result: EmptyResult,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ShutdownResponseResult {}
+pub struct EmptyResult {}
 
 #[derive(Debug, Deserialize)]
 pub struct TaskListResponse {
