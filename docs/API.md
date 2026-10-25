@@ -6,9 +6,9 @@ socket it is started with. The client sends **requests** and receives
 the same connection.
 
 By default a task's output and exit notifications are delivered to the
-connection that started it. Any connection can also subscribe to a task's output
-with `task.subscribe`, even one it did not start or whose starting connection
-has since disconnected.
+connection that started it. Any connection can also subscribe to a running
+task's notifications with `task.set_subscribe`, even one it did not start or
+whose starting connection has since disconnected.
 
 ## Message framing
 
@@ -89,12 +89,12 @@ line by line, and programs that colourise conditionally will not.
 
 **Params**
 
-| Field                  | Type       | Required | Default | Description                                        |
-| ---------------------- | ---------- | -------- | ------- | -------------------------------------------------- |
-| `executable`           | string     | yes      |         | Program to run.                                    |
-| `args`                 | string[]   | no       | `[]`    | Arguments passed to the executable.                |
-| `working_dir`          | string     | no       | cwd     | Directory to run the task in.                      |
-| `subscribe_to_output`  | bool       | no       | `true`  | Whether to receive `task.output` notifications.    |
+| Field                 | Type     | Required | Default              | Description                                                     |
+| --------------------- | -------- | -------- | -------------------- | --------------------------------------------------------------- |
+| `executable`          | string   | yes      |                      | Program to run.                                                 |
+| `args`                | string[] | no       | `[]`                 | Arguments passed to the executable.                             |
+| `working_dir`         | string   | no       | cwd                  | Directory to run the task in.                                   |
+| `subscribe_to_events` | string[] | no       | `["output", "exit"]` | [Events](#subscription-events) to subscribe this connection to. |
 
 **Result**
 
@@ -130,7 +130,7 @@ argument is at fault, not why.
     "executable": "ls",
     "args": ["-la"],
     "working_dir": "/tmp",
-    "subscribe_to_output": true
+    "subscribe_to_events": ["exit"]
   }
 }
 
@@ -138,8 +138,11 @@ argument is at fault, not why.
 { "jsonrpc": "2.0", "id": 1, "result": { "task_id": 1 } }
 ```
 
-Regardless of `subscribe_to_output`, the client always receives the
-`task.exit` notification for tasks it started.
+`subscribe_to_events` follows the same rules as `events` in
+[`task.set_subscribe`](#taskset_subscribe): `["output"]` without `"exit"` is
+rejected with [`-32602` Invalid params](#standard-json-rpc-errors), and an empty
+array starts the task with no subscription at all, so the connection receives
+neither `task.output` nor `task.exit` for it unless it subscribes later.
 
 ### `task.send_signal`
 
@@ -276,25 +279,45 @@ Requesting a `task_id` that does not exist is rejected with
 }
 ```
 
-### `task.subscribe`
+### `task.set_subscribe`
 
-Start receiving `task.output` (and `task.missed_output`) notifications for a
-task. This works for a task started with `subscribe_to_output` set to `false`,
-a task whose output was paused with `task.unsubscribe`, and a task started by a
-different connection (even one that has since disconnected) — any running task
-can be subscribed to by its `task_id`.
+Set which notifications this connection receives for a task. The given `events`
+replace the connection's current subscription to the task rather than adding to
+it. This works for any running task, identified by its `task_id`: one this
+connection started (with any `subscribe_to_events`), one it subscribed to or
+unsubscribed from earlier, and one started by a different connection (even one
+that has since disconnected).
 
 Output line numbers continue from the task's current position, not from where
 the subscription began.
 
-Subscribing to a task that is already subscribed just (re)enables output
-delivery.
-
 **Params**
 
-| Field     | Type    | Required | Description                          |
-| --------- | ------- | -------- | ------------------------------------ |
-| `task_id` | integer | yes      | Id of the task to subscribe to.      |
+| Field     | Type     | Required | Description                                       |
+| --------- | -------- | -------- | ------------------------------------------------- |
+| `task_id` | integer  | yes      | Id of the task to change the subscription for.    |
+| `events`  | string[] | yes      | [Events](#subscription-events) to subscribe to.   |
+
+#### Subscription events
+
+| Event      | Notifications delivered                                                  |
+| ---------- | ------------------------------------------------------------------------ |
+| `"exit"`   | [`task.exit`](#taskexit)                                                 |
+| `"output"` | [`task.output`](#taskoutput), [`task.missed_output`](#taskmissed_output) |
+
+`events` is a set: order does not matter and duplicates are ignored. It accepts
+three meaningful values:
+
+- `["exit", "output"]`: receive output and the exit notification.
+- `["exit"]`: receive only the exit notification. On an existing subscription
+  this pauses output delivery; the task keeps running.
+- `[]`: unsubscribe completely. No further notifications for the task are sent
+  to this connection, not even `task.exit`. Any notifications the subscription
+  sends before it stops arrive ahead of the response.
+
+`"output"` without `"exit"` is rejected with
+[`-32602` Invalid params](#standard-json-rpc-errors), as is any unknown event
+name.
 
 **Result**
 
@@ -304,48 +327,31 @@ Subscribing to a task that does not exist is rejected with
 [`7` Task not found](#task-errors); subscribing to a task that has already
 exited is rejected with [`5` The task has already exited](#task-errors).
 
+Unsubscribing with `[]` succeeds whenever the connection has a subscription to
+the task. Without one it is a no-op that still succeeds if the task is running,
+and is rejected with [`5` The task has already exited](#task-errors) or
+[`7` Task not found](#task-errors) otherwise.
+
 **Example**
 
 ```json
-// → request
+// → request: pause output, keep the exit notification
 {
   "jsonrpc": "2.0",
   "id": 4,
-  "method": "task.subscribe",
-  "params": { "task_id": 1 }
+  "method": "task.set_subscribe",
+  "params": { "task_id": 1, "events": ["exit"] }
 }
 
 // ← response
 { "jsonrpc": "2.0", "id": 4, "result": {} }
-```
 
-### `task.unsubscribe`
-
-Stop receiving `task.output` / `task.missed_output` notifications for a task.
-The task keeps running and its `task.exit` notification is still delivered.
-
-**Params**
-
-| Field     | Type    | Required | Description                          |
-| --------- | ------- | -------- | ------------------------------------ |
-| `task_id` | integer | yes      | Id of the task to unsubscribe from.  |
-
-**Result**
-
-An empty object `{}`.
-
-Unsubscribing from a task with no active subscription is rejected with
-[`7` Task not found](#task-errors).
-
-**Example**
-
-```json
-// → request
+// → request: unsubscribe completely
 {
   "jsonrpc": "2.0",
   "id": 5,
-  "method": "task.unsubscribe",
-  "params": { "task_id": 1 }
+  "method": "task.set_subscribe",
+  "params": { "task_id": 1, "events": [] }
 }
 
 // ← response
@@ -603,8 +609,8 @@ Emitted for each line of output a subscribed task produces.
 
 Emitted when a subscribed task produces output faster than the client consumes
 it and some lines are dropped. It reports the gap so the client knows its view
-of the output is incomplete. Like `task.output`, it is only sent when the task
-was started with `subscribe_to_output` set to `true`.
+of the output is incomplete. Like `task.output`, it is only sent while the
+connection is subscribed to the `"output"` [event](#subscription-events).
 
 | Field       | Type    | Description                                                    |
 | ----------- | ------- | ------------------------------------------------------------- |
