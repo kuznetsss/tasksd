@@ -1,9 +1,6 @@
-use std::{
-    collections::HashSet,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use tokio::sync::{broadcast, watch};
@@ -11,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{
-    api::{Notification, NotificationBody, SubscribeEventType},
+    api::{Notification, NotificationBody, SubscribeEventType, SubscribeEvents},
     tasks::{OutputLine, TaskEvent, TaskEventsStream, TaskId},
     transport::{ConnectionWriter, TransportError},
 };
@@ -38,15 +35,15 @@ impl Subscriber {
     pub fn new(
         connection_writer: ConnectionWriter,
         task_id: TaskId,
-        subscribe_to_events: &HashSet<SubscribeEventType>,
+        subscribe_to_events: &SubscribeEvents,
         events: TaskEventsStream,
         creating_event: CreatingEvent,
     ) -> Self {
         assert!(
-            subscribe_to_events.contains(&SubscribeEventType::Exit),
+            subscribe_to_events.0.contains(&SubscribeEventType::Exit),
             "Subscriber always subscribes to exit events"
         );
-        let subscribe_to_output = subscribe_to_events.contains(&SubscribeEventType::Output);
+        let subscribe_to_output = subscribe_to_events.0.contains(&SubscribeEventType::Output);
         let (completion_sender, completion_receiver) = watch::channel(false);
         Self {
             connection_writer,

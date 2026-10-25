@@ -95,16 +95,13 @@ pub struct TaskStartParams {
     pub args: Option<Vec<String>>,
     pub working_dir: Option<String>,
 
-    #[serde(
-        deserialize_with = "deserialize_events",
-        default = "TaskStartParams::default_subscribe_to_events"
-    )]
-    pub subscribe_to_events: HashSet<SubscribeEventType>,
+    #[serde(default = "TaskStartParams::default_subscribe_to_events")]
+    pub subscribe_to_events: SubscribeEvents,
 }
 
 impl TaskStartParams {
-    fn default_subscribe_to_events() -> HashSet<SubscribeEventType> {
-        [SubscribeEventType::Output, SubscribeEventType::Exit].into()
+    fn default_subscribe_to_events() -> SubscribeEvents {
+        SubscribeEvents([SubscribeEventType::Output, SubscribeEventType::Exit].into())
     }
 }
 
@@ -129,11 +126,27 @@ pub struct TaskGetOutputParams {
 #[serde(deny_unknown_fields)]
 pub struct TaskSetSubscribeParams {
     pub task_id: TaskId,
-    #[serde(deserialize_with = "deserialize_events")]
-    pub events: HashSet<SubscribeEventType>,
+    pub events: SubscribeEvents,
 }
 
-type SubscribeEvents = HashSet<SubscribeEventType>;
+#[derive(Debug, PartialEq, Eq)]
+pub struct SubscribeEvents(pub HashSet<SubscribeEventType>);
+
+impl<'de> Deserialize<'de> for SubscribeEvents {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let result = HashSet::<SubscribeEventType>::deserialize(deserializer)?;
+        if result.len() == 1 && result.contains(&SubscribeEventType::Output) {
+            Err(serde::de::Error::custom(
+                "subscribing only to output is not allowed",
+            ))
+        } else {
+            Ok(SubscribeEvents(result))
+        }
+    }
+}
 
 #[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -167,20 +180,6 @@ where
             serde::de::Unexpected::Signed(n as i64),
             &"a valid signal number",
         )),
-    }
-}
-
-fn deserialize_events<'de, D>(d: D) -> Result<HashSet<SubscribeEventType>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let result = HashSet::<SubscribeEventType>::deserialize(d)?;
-    if result.len() == 1 && result.contains(&SubscribeEventType::Output) {
-        Err(serde::de::Error::custom(
-            "subscribing only to output is not allowed",
-        ))
-    } else {
-        Ok(result)
     }
 }
 
@@ -271,7 +270,7 @@ mod tests {
         assert_eq!(body.working_dir, Some("/tmp".to_string()));
         assert_eq!(
             body.subscribe_to_events,
-            [SubscribeEventType::Output, SubscribeEventType::Exit].into()
+            SubscribeEvents([SubscribeEventType::Output, SubscribeEventType::Exit].into())
         );
     }
 
@@ -360,7 +359,7 @@ mod tests {
         assert_eq!(params.task_id.0, 456);
         assert_eq!(
             params.events,
-            [SubscribeEventType::Exit, SubscribeEventType::Output].into()
+            SubscribeEvents([SubscribeEventType::Exit, SubscribeEventType::Output].into())
         );
     }
 

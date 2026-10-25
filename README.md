@@ -70,7 +70,7 @@ A few reasons:
 - [x] `task.subscribe` should provide option `output` and by default only subscribe on exit event
     - [x] set_subscribe integration tests
     - [x] update API.md
-    - [ ] create a new type for `HashSet<SubscriptionEventType>`
+    - [x] create a new type for `HashSet<SubscriptionEventType>`
     - [ ] code review
 - [ ] Rearrange integration tests: one `it` (as integration tests) module containing common and all the tests. Rename base to basic tests
 - [ ] `task.exit` notification is sent before task is moved out of running map:

@@ -83,7 +83,7 @@ impl Handler {
         let task_events_stream = task
             .events_stream()
             .expect("Task couldn't exit while its gate is not dropped");
-        if !params.subscribe_to_events.is_empty() {
+        if !params.subscribe_to_events.0.is_empty() {
             let subscriber = Subscriber::new(
                 self.connection_writer.clone(),
                 task_id,
@@ -132,7 +132,7 @@ impl Handler {
         &self,
         params: TaskSetSubscribeParams,
     ) -> Result<ResponseResult, ApplicationError> {
-        if params.events.is_empty() {
+        if params.events.0.is_empty() {
             match self
                 .subscription_registry
                 .stop_subscriber(&params.task_id)

@@ -1,12 +1,12 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Arc, Mutex, MutexGuard},
 };
 
 use tokio::task::AbortHandle;
 
 use crate::{
-    api::SubscribeEventType,
+    api::{SubscribeEventType, SubscribeEvents},
     application::{
         ApplicationError,
         subscriber::{Subscriber, SubscriberHandle},
@@ -41,13 +41,14 @@ impl SubscriptionRegistry {
     pub(in crate::application) fn update_or_spawn_subscriber(
         &self,
         task_id: &TaskId,
-        events_to_subscribe: &HashSet<SubscribeEventType>,
+        events_to_subscribe: &SubscribeEvents,
         subscriber_builder: impl FnOnce() -> Result<Subscriber, ApplicationError>,
     ) -> Result<(), ApplicationError> {
         let subs = self.subs.lock().expect("Poisoned lock");
         if let Some(handle) = subs.get(task_id) {
-            handle
-                .set_subscribe_to_output(events_to_subscribe.contains(&SubscribeEventType::Output));
+            handle.set_subscribe_to_output(
+                events_to_subscribe.0.contains(&SubscribeEventType::Output),
+            );
             return Ok(());
         }
         self.spawn_subscriber_impl(subs, *task_id, subscriber_builder()?)?;
