@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use tokio::sync::{broadcast, watch};
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -27,8 +27,6 @@ pub(in crate::application) struct Subscriber {
     last_seen_line: Option<usize>,
     creating_event: CreatingEvent,
     cancel: CancellationToken,
-    completion_sender: watch::Sender<bool>,
-    completion_receiver: watch::Receiver<bool>,
 }
 
 impl Subscriber {
@@ -40,11 +38,10 @@ impl Subscriber {
         creating_event: CreatingEvent,
     ) -> Self {
         assert!(
-            subscribe_to_events.0.contains(&SubscribeEventType::Exit),
+            subscribe_to_events.contains(&SubscribeEventType::Exit),
             "Subscriber always subscribes to exit events"
         );
-        let subscribe_to_output = subscribe_to_events.0.contains(&SubscribeEventType::Output);
-        let (completion_sender, completion_receiver) = watch::channel(false);
+        let subscribe_to_output = subscribe_to_events.contains(&SubscribeEventType::Output);
         Self {
             connection_writer,
             task_id,
@@ -53,8 +50,6 @@ impl Subscriber {
             last_seen_line: None,
             creating_event,
             cancel: CancellationToken::new(),
-            completion_sender,
-            completion_receiver,
         }
     }
 
@@ -62,7 +57,6 @@ impl Subscriber {
         SubscriberHandle {
             subscribe_to_output: self.subscribe_to_output.clone(),
             cancel: self.cancel.clone(),
-            completion_receiver: self.completion_receiver.clone(),
         }
     }
 
@@ -165,7 +159,6 @@ impl Subscriber {
 pub(in crate::application) struct SubscriberHandle {
     subscribe_to_output: Arc<AtomicBool>,
     cancel: CancellationToken,
-    completion_receiver: watch::Receiver<bool>,
 }
 
 impl SubscriberHandle {
@@ -173,9 +166,7 @@ impl SubscriberHandle {
         self.subscribe_to_output.store(v, Ordering::Relaxed);
     }
 
-    pub(in crate::application) async fn stop(&mut self) {
+    pub(in crate::application) fn stop(&self) {
         self.cancel.cancel();
-        // Error means already exited so ignoring it
-        let _ = self.completion_receiver.changed().await;
     }
 }

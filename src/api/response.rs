@@ -137,7 +137,6 @@ pub enum ResponseResult {
         lines: Vec<Arc<OutputLine>>,
     },
     SubscribeResult {},
-    UnsubscribeResult {},
     SendInputResult {},
     TaskList {
         #[serde(flatten)]
