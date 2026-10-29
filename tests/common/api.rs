@@ -33,7 +33,7 @@ pub struct TaskSendInputResponse {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct TaskSubscribeResponse {
+pub struct TaskSetSubscribeResponse {
     pub id: i64,
 }
 

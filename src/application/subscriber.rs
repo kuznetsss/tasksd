@@ -4,10 +4,11 @@ use std::sync::{
 };
 
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{
-    api::{Notification, NotificationBody},
+    api::{Notification, NotificationBody, SubscribeEventType, SubscribeEvents},
     tasks::{OutputLine, TaskEvent, TaskEventsStream, TaskId},
     transport::{ConnectionWriter, TransportError},
 };
@@ -25,39 +26,51 @@ pub(in crate::application) struct Subscriber {
     events: TaskEventsStream,
     last_seen_line: Option<usize>,
     creating_event: CreatingEvent,
+    cancel: CancellationToken,
 }
 
 impl Subscriber {
     pub fn new(
         connection_writer: ConnectionWriter,
         task_id: TaskId,
-        subscribe_to_output: bool,
+        subscribe_to_events: &SubscribeEvents,
         events: TaskEventsStream,
         creating_event: CreatingEvent,
     ) -> Self {
+        assert!(
+            subscribe_to_events.contains(&SubscribeEventType::Exit),
+            "Subscriber always subscribes to exit events"
+        );
+        let subscribe_to_output = subscribe_to_events.contains(&SubscribeEventType::Output);
         Self {
             connection_writer,
             task_id,
-            subscribe_to_output: Arc::new(AtomicBool::new(subscribe_to_output)),
+            subscribe_to_output: Arc::new(subscribe_to_output.into()),
             events,
             last_seen_line: None,
             creating_event,
+            cancel: CancellationToken::new(),
         }
     }
 
     pub fn handle(&self) -> SubscriberHandle {
         SubscriberHandle {
             subscribe_to_output: self.subscribe_to_output.clone(),
+            cancel: self.cancel.clone(),
         }
     }
 
     pub async fn run(mut self) {
         loop {
-            match self.events.recv().await {
+            let event = match self.cancel.run_until_cancelled(self.events.recv()).await {
+                Some(e) => e,
+                None => break,
+            };
+            match event {
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     if let Err(e) = self.on_lag(n as usize).await {
                         warn!("Error sending missed_output: {e}");
-                        return;
+                        break;
                     }
                 }
                 Err(broadcast::error::RecvError::Closed) => {
@@ -69,12 +82,12 @@ impl Subscriber {
                 Ok(TaskEvent::Output(line)) => {
                     if let Err(e) = self.on_output(line).await {
                         warn!("Error sending output: {e}");
-                        return;
+                        break;
                     }
                 }
                 Ok(TaskEvent::Exit(e)) => {
                     self.on_exit(e).await;
-                    return;
+                    break;
                 }
             }
         }
@@ -142,12 +155,18 @@ impl Subscriber {
     }
 }
 
+#[derive(Clone)]
 pub(in crate::application) struct SubscriberHandle {
     subscribe_to_output: Arc<AtomicBool>,
+    cancel: CancellationToken,
 }
 
 impl SubscriberHandle {
     pub(in crate::application) fn set_subscribe_to_output(&self, v: bool) {
         self.subscribe_to_output.store(v, Ordering::Relaxed);
+    }
+
+    pub(in crate::application) fn stop(&self) {
+        self.cancel.cancel();
     }
 }
