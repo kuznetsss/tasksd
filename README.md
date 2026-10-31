@@ -74,8 +74,11 @@ A few reasons:
       - add wait for the gate in subscriber: if it gets an exit event it waits for the gate
       - update API.md
       - related, not fixed by the gate: after the subscriber sends `task.exit` its entry stays
-        in `SubscriptionRegistry` until the coroutine removes it; a non-empty `task.set_subscribe`
-        in that window returns `{}` instead of error `5`
+        in `SubscriptionRegistry` until the coroutine removes it; any `task.set_subscribe`
+        in that window returns `{}` instead of error `5` (non-empty `events` hits the update
+        branch, `[]` stops the already-finishing subscriber and succeeds)
+      - enable `task_set_subscribe_when_task_has_finished` in `tests/task_set_subscribe.rs`
+        once both races are fixed
 - [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
 - [ ] Support graceful shutdown by `SIGTERM`
 - [ ] Switch output stream to Vec<u8>
