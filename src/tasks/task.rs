@@ -140,10 +140,12 @@ impl Task {
     }
 
     pub fn events_stream(&self) -> Result<TaskEventsStream, TaskError> {
+        // Ordering is important here. Creating stream first guarantees that stream will contain at lest exit event
+        let stream = self.events_stream.resubscribe();
         if self.has_exited() {
             return Err(TaskError::AlreadyExited);
         }
-        Ok(self.events_stream.resubscribe())
+        Ok(stream)
     }
 
     pub fn send_signal(&self, signal: rustix::process::Signal) -> Result<(), TaskError> {
