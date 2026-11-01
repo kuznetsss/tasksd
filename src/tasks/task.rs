@@ -244,7 +244,7 @@ impl Task {
     fn spawn_output_sending(
         internal_tasks: &WrappedTaskTracker,
         mut line_stream_rx: mpsc::Receiver<String>,
-        read_gate: TaskReadingGate,
+        mut read_gate: TaskReadingGate,
         mut on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
         events_tx: broadcast::Sender<TaskEvent>,
         output_buffer: Arc<OutputBuffer>,
@@ -308,7 +308,7 @@ impl Task {
     fn spawn_waiting_for_exit(
         internal_tasks: &WrappedTaskTracker,
         internal_on_exit_sender: watch::Sender<Option<ExitStatus>>,
-        read_gate: TaskReadingGate,
+        mut read_gate: TaskReadingGate,
         mut child: Child,
         span: Span,
     ) {

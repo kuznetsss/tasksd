@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use tokio::sync::watch;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[must_use]
 pub struct GateLock<Tag> {
     sender: watch::Sender<()>,
@@ -18,13 +18,14 @@ impl<Tag> GateLock<Tag> {
     }
 }
 
+#[derive(Debug)]
 pub struct Gate<Tag> {
     receiver: watch::Receiver<()>,
     tag_: PhantomData<Tag>,
 }
 
 impl<Tag> Gate<Tag> {
-    pub async fn wait(mut self) {
+    pub async fn wait(&mut self) {
         let _ = self.receiver.changed().await;
     }
 }
@@ -61,7 +62,7 @@ mod tests {
         }
         let events = Arc::new(Mutex::new(Vec::new()));
 
-        let (gate, lock) = gate::<Tag>();
+        let (mut gate, lock) = gate::<Tag>();
 
         let handle = tokio::spawn({
             let events = events.clone();

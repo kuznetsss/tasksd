@@ -75,27 +75,31 @@ impl Handler {
         &self,
         params: TaskStartParams,
     ) -> Result<(ResponseResult, TaskReadingGateLock), ApplicationError> {
-        let (task, task_id, gate) = self.task_manager.create_task(
+        let task_data = self.task_manager.create_task(
             params.executable,
             params.args.unwrap_or_default(),
             params.working_dir,
         )?;
-        let task_events_stream = task
+        let task_events_stream = task_data
+            .task
             .events_stream()
             .expect("Task couldn't exit while its gate is not dropped");
         if !params.subscribe_to_events.is_empty() {
             let subscriber = Subscriber::new(
                 self.connection_writer.clone(),
-                task_id,
+                task_data.task_id,
                 &params.subscribe_to_events,
                 task_events_stream,
                 CreatingEvent::Start,
+                task_data.exit_notification_gate,
             );
             self.subscription_registry
-                .spawn_subscriber(task_id, subscriber)?;
+                .spawn_subscriber(task_data.task_id, subscriber)?;
         }
-        let response_result = ResponseResult::StartTaskResult { task_id };
-        Ok((response_result, gate))
+        let response_result = ResponseResult::StartTaskResult {
+            task_id: task_data.task_id,
+        };
+        Ok((response_result, task_data.reading_gate_lock))
     }
 
     fn send_signal(
@@ -152,13 +156,14 @@ impl Handler {
 
         self.subscription_registry
             .update_or_spawn_subscriber(&params.task_id, &params.events, || {
-                let task = self.task_manager.get_running_task(params.task_id)?;
+                let task_data = self.task_manager.get_running_task_data(params.task_id)?;
                 Ok(Subscriber::new(
                     self.connection_writer.clone(),
                     params.task_id,
                     &params.events,
-                    task.events_stream()?,
+                    task_data.task.events_stream()?,
                     CreatingEvent::Subscribe,
+                    task_data.exit_notification_gate,
                 ))
             })
             .map(|_| ResponseResult::SubscribeResult {})
