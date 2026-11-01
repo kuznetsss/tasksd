@@ -3,9 +3,10 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use tokio::task::AbortHandle;
+use tokio::{sync::watch, task::AbortHandle};
 
 use crate::{
+    api::{SubscribeEventType, SubscribeEvents},
     application::{
         ApplicationError,
         subscriber::{Subscriber, SubscriberHandle},
@@ -16,8 +17,14 @@ use crate::{
 
 #[derive(Clone)]
 pub(in crate::application) struct SubscriptionRegistry {
-    subs: Arc<Mutex<HashMap<TaskId, SubscriberHandle>>>,
+    subs: Arc<Mutex<HashMap<TaskId, SubscriberEntry>>>,
     internal_coroutines: Arc<WrappedTaskTracker>,
+}
+
+#[derive(Clone)]
+struct SubscriberEntry {
+    handle: SubscriberHandle,
+    completion_receiver: watch::Receiver<bool>,
 }
 
 impl SubscriptionRegistry {
@@ -37,42 +44,53 @@ impl SubscriptionRegistry {
         self.spawn_subscriber_impl(subs, task_id, subscriber)
     }
 
-    pub(in crate::application) fn subscribe_or_spawn(
+    pub(in crate::application) fn update_or_spawn_subscriber(
         &self,
         task_id: &TaskId,
+        events_to_subscribe: &SubscribeEvents,
         subscriber_builder: impl FnOnce() -> Result<Subscriber, ApplicationError>,
     ) -> Result<(), ApplicationError> {
         let subs = self.subs.lock().expect("Poisoned lock");
-        if let Some(handle) = subs.get(task_id) {
-            handle.set_subscribe_to_output(true);
+        if let Some(entry) = subs.get(task_id) {
+            entry
+                .handle
+                .set_subscribe_to_output(events_to_subscribe.contains(&SubscribeEventType::Output));
             return Ok(());
         }
         self.spawn_subscriber_impl(subs, *task_id, subscriber_builder()?)?;
         Ok(())
     }
 
-    pub(in crate::application) fn unsubscribe(
+    pub(in crate::application) async fn stop_subscriber(
         &self,
         task_id: &TaskId,
     ) -> Result<(), ApplicationError> {
-        let subs = self.subs.lock().expect("Poisoned lock");
-        let handle = match subs.get(task_id) {
-            Some(h) => h,
-            None => return Err(TaskError::NotFound.into()),
+        let mut entry = {
+            let subs = self.subs.lock().expect("Poisoned lock");
+            match subs.get(task_id) {
+                Some(h) => h.clone(),
+                None => return Err(TaskError::NotFound.into()),
+            }
         };
-        handle.set_subscribe_to_output(false);
+        entry.handle.stop();
+        let _ = entry.completion_receiver.changed().await;
         Ok(())
     }
 
     /// Spawns subscriber with locked subs
     fn spawn_subscriber_impl(
         &self,
-        mut subs: MutexGuard<'_, HashMap<TaskId, SubscriberHandle>>,
+        mut subs: MutexGuard<'_, HashMap<TaskId, SubscriberEntry>>,
         task_id: TaskId,
         subscriber: Subscriber,
     ) -> Result<AbortHandle, ApplicationError> {
+        let (completion_sender, completion_receiver) = watch::channel(false);
+        let entry = SubscriberEntry {
+            handle: subscriber.handle(),
+            completion_receiver,
+        };
         assert!(
-            subs.insert(task_id, subscriber.handle()).is_none(),
+            subs.insert(task_id, entry).is_none(),
             "Duplicated subscriber for task {task_id}"
         );
         self.internal_coroutines
@@ -87,6 +105,7 @@ impl SubscriptionRegistry {
                             .is_some(),
                         "Missing subscriber handle for {task_id}"
                     );
+                    let _ = completion_sender.send(true);
                 }
             })
             .map_err(|_| ApplicationError::Shutdown)

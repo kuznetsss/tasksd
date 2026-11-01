@@ -3,8 +3,8 @@ use tracing::{info, warn};
 use crate::{
     api::{
         HelloParams, Request, RequestBody, Response, ResponseResult, TaskGetOutputParams,
-        TaskInfoParams, TaskSendInputParams, TaskSendSignalParams, TaskStartParams,
-        TaskSubscribeParams,
+        TaskInfoParams, TaskSendInputParams, TaskSendSignalParams, TaskSetSubscribeParams,
+        TaskStartParams,
     },
     application::{
         ShutdownTrigger,
@@ -49,9 +49,8 @@ impl Handler {
                 self.send_signal(params).map(|r| (r.into(), None))
             }
             RequestBody::TaskGetOutput(params) => self.get_output(params).map(|r| (r.into(), None)),
-            RequestBody::TaskSubscribe(params) => self.subscribe(params).map(|r| (r.into(), None)),
-            RequestBody::TaskUnsubscribe(params) => {
-                self.unsubscribe(params).map(|r| (r.into(), None))
+            RequestBody::TaskSetSubscribe(params) => {
+                self.set_subscribe(params).await.map(|r| (r.into(), None))
             }
             RequestBody::TaskSendInput(params) => {
                 self.send_input(params).await.map(|r| (r.into(), None))
@@ -84,15 +83,17 @@ impl Handler {
         let task_events_stream = task
             .events_stream()
             .expect("Task couldn't exit while its gate is not dropped");
-        let subscriber = Subscriber::new(
-            self.connection_writer.clone(),
-            task_id,
-            params.subscribe_to_output,
-            task_events_stream,
-            CreatingEvent::Start,
-        );
-        self.subscription_registry
-            .spawn_subscriber(task_id, subscriber)?;
+        if !params.subscribe_to_events.is_empty() {
+            let subscriber = Subscriber::new(
+                self.connection_writer.clone(),
+                task_id,
+                &params.subscribe_to_events,
+                task_events_stream,
+                CreatingEvent::Start,
+            );
+            self.subscription_registry
+                .spawn_subscriber(task_id, subscriber)?;
+        }
         let response_result = ResponseResult::StartTaskResult { task_id };
         Ok((response_result, gate))
     }
@@ -127,26 +128,40 @@ impl Handler {
         })
     }
 
-    fn subscribe(&self, params: TaskSubscribeParams) -> Result<ResponseResult, ApplicationError> {
+    async fn set_subscribe(
+        &self,
+        params: TaskSetSubscribeParams,
+    ) -> Result<ResponseResult, ApplicationError> {
+        if params.events.is_empty() {
+            match self
+                .subscription_registry
+                .stop_subscriber(&params.task_id)
+                .await
+            {
+                Ok(_) => return Ok(ResponseResult::SubscribeResult {}),
+                Err(ApplicationError::TaskError(TaskError::NotFound)) => {
+                    match self.task_manager.find_task(params.task_id) {
+                        Some(AnyTask::Running(_)) => return Ok(ResponseResult::SubscribeResult {}),
+                        Some(AnyTask::Finished(_)) => return Err(TaskError::AlreadyExited.into()),
+                        None => return Err(TaskError::NotFound.into()),
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
         self.subscription_registry
-            .subscribe_or_spawn(&params.task_id, || {
-                // Create new subscriber
+            .update_or_spawn_subscriber(&params.task_id, &params.events, || {
                 let task = self.task_manager.get_running_task(params.task_id)?;
                 Ok(Subscriber::new(
                     self.connection_writer.clone(),
                     params.task_id,
-                    true,
+                    &params.events,
                     task.events_stream()?,
                     CreatingEvent::Subscribe,
                 ))
             })
             .map(|_| ResponseResult::SubscribeResult {})
-    }
-
-    fn unsubscribe(&self, params: TaskSubscribeParams) -> Result<ResponseResult, ApplicationError> {
-        self.subscription_registry
-            .unsubscribe(&params.task_id)
-            .map(|_| ResponseResult::UnsubscribeResult {})
     }
 
     async fn send_input(

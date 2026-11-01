@@ -66,6 +66,10 @@ impl Client {
         subscribe_to_output: bool,
     ) -> Result<()> {
         let id = self.next_id();
+        let mut subscribe_to_events = vec!["exit"];
+        if subscribe_to_output {
+            subscribe_to_events.push("output");
+        }
         let json = json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -73,7 +77,7 @@ impl Client {
             "params": {
                 "executable": executable,
                 "args": args,
-                "subscribe_to_output": subscribe_to_output
+                "subscribe_to_events": subscribe_to_events
             }
         });
 
@@ -143,27 +147,27 @@ impl Client {
         self.send_json(&json).await
     }
 
-    pub async fn subscribe(&mut self, task_id: usize) -> Result<()> {
+    pub async fn set_subscribe(
+        &mut self,
+        task_id: usize,
+        subscribe_to_output: bool,
+        subscribe_to_exit: bool,
+    ) -> Result<()> {
         let id = self.next_id();
+        let mut events = Vec::new();
+        if subscribe_to_output {
+            events.push("output");
+        }
+        if subscribe_to_exit {
+            events.push("exit");
+        }
         let json = json!({
             "jsonrpc": "2.0",
             "id": id,
-            "method": "task.subscribe",
+            "method": "task.set_subscribe",
             "params": {
                 "task_id": task_id,
-            }
-        });
-        self.send_json(&json).await
-    }
-
-    pub async fn unsubscribe(&mut self, task_id: usize) -> Result<()> {
-        let id = self.next_id();
-        let json = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "task.unsubscribe",
-            "params": {
-                "task_id": task_id,
+                "events": events
             }
         });
         self.send_json(&json).await

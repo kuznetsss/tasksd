@@ -4,7 +4,7 @@ use crate::common::{
     TestContextBuilder,
     api::{
         ErrorResponse, HelloResponse, TaskExitNotification, TaskSendSignalResponse,
-        TaskStartResponse, TaskSubscribeResponse,
+        TaskSetSubscribeResponse, TaskStartResponse,
     },
     running_app,
 };
@@ -173,8 +173,8 @@ async fn running_task_survives_client_disconnect() {
     drop(client);
     let mut client = ctx.make_client().await;
 
-    client.subscribe(task_id).await.unwrap();
-    let response: TaskSubscribeResponse = client.read_struct().await.unwrap();
+    client.set_subscribe(task_id, true, true).await.unwrap();
+    let response: TaskSetSubscribeResponse = client.read_struct().await.unwrap();
     assert_eq!(response.id, client.last_id());
 
     let signal = 9;
