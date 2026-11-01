@@ -1,5 +1,3 @@
-mod common;
-
 use std::{collections::HashMap, io::Write};
 
 use rustix::path::Arg;

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod api;
 mod client;
 mod test_context;
