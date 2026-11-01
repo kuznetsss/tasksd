@@ -8,10 +8,10 @@ use std::{
 
 use crate::{
     api::TaskExitStatus,
-    tasks::output_buffer::OutputBuffer,
     tasks::{
-        finished_task::FinishedTask, info::TaskInfo, recent_finished_tasks::RecentFinishedTasks,
-        task::TaskReadingGate, task_error::TaskError,
+        finished_task::FinishedTask, info::TaskInfo, output_buffer::OutputBuffer,
+        recent_finished_tasks::RecentFinishedTasks, task::TaskReadingGateLock,
+        task_error::TaskError,
     },
     utils::tracker::{PanicHandler, WrappedTaskTracker},
 };
@@ -83,7 +83,7 @@ impl TaskManager {
         executable: impl Into<String>,
         args: Vec<String>,
         working_dir: Option<String>,
-    ) -> Result<(Arc<Task>, TaskId, TaskReadingGate), TaskError> {
+    ) -> Result<(Arc<Task>, TaskId, TaskReadingGateLock), TaskError> {
         let lock = self.completion_coroutines.lock().unwrap();
         // TODO: should be shutdown error
         let completion_coroutines = lock.as_ref().ok_or(TaskError::AlreadyExited)?;
@@ -258,7 +258,7 @@ mod tests {
             exe: &str,
             args: &[&str],
             working_dir: Option<String>,
-        ) -> Result<(Arc<Task>, TaskId, TaskReadingGate), TaskError> {
+        ) -> Result<(Arc<Task>, TaskId, TaskReadingGateLock), TaskError> {
             self.create_task(
                 exe,
                 args.iter().map(|s| s.to_string()).collect(),

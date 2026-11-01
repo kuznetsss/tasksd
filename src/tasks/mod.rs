@@ -4,6 +4,7 @@ mod output_buffer;
 // TODO bring back when pty task is added
 //mod pty;
 //mod pty_reader;
+mod gate;
 mod recent_finished_tasks;
 mod sender;
 mod task;
@@ -12,6 +13,6 @@ mod task_manager;
 
 pub use info::TaskInfo;
 pub use sender::{CHANNEL_CAPACITY, OutputLine, TaskEvent, TaskEventsStream};
-pub use task::TaskReadingGate;
+pub use task::TaskReadingGateLock;
 pub use task_error::TaskError;
 pub use task_manager::{AnyTask, TaskEntry, TaskId, TaskList, TaskManager, TaskStatus};

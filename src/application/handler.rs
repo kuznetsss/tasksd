@@ -12,7 +12,7 @@ use crate::{
         subscriber::{CreatingEvent, Subscriber},
         subscription_registry::SubscriptionRegistry,
     },
-    tasks::{AnyTask, TaskEntry, TaskError, TaskManager, TaskReadingGate},
+    tasks::{AnyTask, TaskEntry, TaskError, TaskManager, TaskReadingGateLock},
     transport::ConnectionWriter,
 };
 
@@ -74,7 +74,7 @@ impl Handler {
     fn start_task(
         &self,
         params: TaskStartParams,
-    ) -> Result<(ResponseResult, TaskReadingGate), ApplicationError> {
+    ) -> Result<(ResponseResult, TaskReadingGateLock), ApplicationError> {
         let (task, task_id, gate) = self.task_manager.create_task(
             params.executable,
             params.args.unwrap_or_default(),
