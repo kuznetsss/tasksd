@@ -9,8 +9,6 @@ use crate::common::{
     running_app,
 };
 
-mod common;
-
 #[tokio::test]
 async fn invalid_unix_socket() {
     let invalid_path = "/proc/invalid_path";

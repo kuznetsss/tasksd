@@ -68,7 +68,7 @@ A few reasons:
 - [x] in `task.get_output` the parameter `from_line` should become optional:
       if it is not provided return the last `lines_number`
 - [x] `task.subscribe` should provide option `output` and by default only subscribe on exit event
-- [ ] Rarrange integration tests: one `it` (as integration tests) module containing common and all the tests. Rename base to basic tests
+- [x] Rearrange integration tests: one `it` (as integration tests) module containing common and all the tests. Rename base to basic tests
 - [ ] `task.exit` notification is sent before task is moved out of running map:
       - add a gate to the completion coroutine, when task is moved, gate opens
       - add wait for the gate in subscriber: if it gets an exit event it waits for the gate
@@ -77,7 +77,7 @@ A few reasons:
         in `SubscriptionRegistry` until the coroutine removes it; any `task.set_subscribe`
         in that window returns `{}` instead of error `5` (non-empty `events` hits the update
         branch, `[]` stops the already-finishing subscriber and succeeds)
-      - enable `task_set_subscribe_when_task_has_finished` in `tests/task_set_subscribe.rs`
+      - enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
         once both races are fixed
 - [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
 - [ ] Support graceful shutdown by `SIGTERM`

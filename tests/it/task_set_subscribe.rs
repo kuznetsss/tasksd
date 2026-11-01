@@ -8,8 +8,6 @@ use crate::common::{
     running_app,
 };
 
-mod common;
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn task_set_subscribe_stop_subscriber_success() {
     let (ctx, mut client) = running_app().await;

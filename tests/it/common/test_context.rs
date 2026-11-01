@@ -95,3 +95,9 @@ impl TestContextBuilder {
         })
     }
 }
+
+impl Default for TestContextBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}

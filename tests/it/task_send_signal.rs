@@ -1,5 +1,3 @@
-mod common;
-
 use crate::common::{
     api::{ErrorResponse, TaskExitNotification, TaskSendSignalResponse, TaskStartResponse},
     running_app,

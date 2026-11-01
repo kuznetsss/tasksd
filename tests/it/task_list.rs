@@ -1,5 +1,3 @@
-mod common;
-
 use std::env::current_dir;
 
 use crate::common::{
