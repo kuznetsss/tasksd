@@ -14,7 +14,7 @@ mod task_registry;
 
 pub use info::TaskInfo;
 pub use sender::{CHANNEL_CAPACITY, OutputLine, TaskEvent, TaskEventsStream};
-pub use task::TaskReadingGateLock;
+pub use task::TaskReadingGateGuard;
 pub use task_error::TaskError;
 pub use task_manager::{AnyTask, TaskEntry, TaskId, TaskList, TaskManager, TaskStatus};
 pub use task_registry::TaskExitNotificationGate;

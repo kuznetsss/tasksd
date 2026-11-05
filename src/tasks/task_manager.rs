@@ -12,9 +12,9 @@ use crate::{
         gate::gate,
         info::TaskInfo,
         output_buffer::OutputBuffer,
-        task::TaskReadingGateLock,
+        task::TaskReadingGateGuard,
         task_error::TaskError,
-        task_registry::{RunningTaskEntry, SomeTask, TaskExitNotificationGate, TaskRegistry},
+        task_registry::{RunningTaskEntry, TaskExitNotificationGate, TaskRef, TaskRegistry},
     },
     utils::tracker::{PanicHandler, WrappedTaskTracker},
 };
@@ -39,10 +39,10 @@ pub struct TaskManager {
 }
 
 #[derive(Debug)]
-pub struct TaskCreationData {
+pub struct CreatedTaskData {
     pub task: Arc<Task>,
     pub task_id: TaskId,
-    pub reading_gate_lock: TaskReadingGateLock,
+    pub reading_gate_lock: TaskReadingGateGuard,
     pub exit_notification_gate: TaskExitNotificationGate,
 }
 
@@ -62,12 +62,12 @@ impl AnyTask {
 }
 
 #[derive(Debug)]
-pub struct RunningTaskData {
+pub struct RunningTaskHandle {
     pub task: Arc<Task>,
     pub exit_notification_gate: TaskExitNotificationGate,
 }
 
-impl From<&RunningTaskEntry> for RunningTaskData {
+impl From<&RunningTaskEntry> for RunningTaskHandle {
     fn from(value: &RunningTaskEntry) -> Self {
         Self {
             task: value.task.clone(),
@@ -94,7 +94,7 @@ impl TaskManager {
         executable: impl Into<String>,
         args: Vec<String>,
         working_dir: Option<String>,
-    ) -> Result<TaskCreationData, TaskError> {
+    ) -> Result<CreatedTaskData, TaskError> {
         let lock = self.completion_coroutines.lock().unwrap();
         // TODO: should be shutdown error
         let completion_coroutines = lock.as_ref().ok_or(TaskError::AlreadyExited)?;
@@ -113,13 +113,13 @@ impl TaskManager {
         let (task, reading_gate_lock) = Task::new(task_info, self.task_output_buffer_capacity)?;
         let (exit_notification_gate, exit_notification_gate_lock) = gate();
         let task = Arc::new(task);
-        self.tasks.write().expect("RwLock is poisoned").add(
+        self.tasks.write().expect("RwLock is poisoned").add_running(
             task_id,
             task.clone(),
             exit_notification_gate_lock,
         );
         self.spawn_task_completion(completion_coroutines, task.clone(), task_id);
-        Ok(TaskCreationData {
+        Ok(CreatedTaskData {
             task,
             task_id,
             reading_gate_lock,
@@ -128,23 +128,23 @@ impl TaskManager {
     }
 
     pub fn get_running_task(&self, id: TaskId) -> Result<Arc<Task>, TaskError> {
-        self.get_running_task_data(id).map(|e| e.task)
+        self.get_running_task_handle(id).map(|e| e.task)
     }
 
-    pub fn get_running_task_data(&self, id: TaskId) -> Result<RunningTaskData, TaskError> {
+    pub fn get_running_task_handle(&self, id: TaskId) -> Result<RunningTaskHandle, TaskError> {
         let tasks = self.tasks.read().unwrap();
-        match tasks.get_task(&id) {
-            Some(SomeTask::Running(task_data)) => Ok(task_data.into()),
-            Some(SomeTask::Finished(_)) => Err(TaskError::AlreadyExited),
+        match tasks.get(&id) {
+            Some(TaskRef::Running(task_data)) => Ok(task_data.into()),
+            Some(TaskRef::Finished(_)) => Err(TaskError::AlreadyExited),
             None => Err(TaskError::NotFound),
         }
     }
 
     pub fn find_task(&self, id: TaskId) -> Option<AnyTask> {
         let tasks = self.tasks.read().unwrap();
-        tasks.get_task(&id).map(|task| match task {
-            SomeTask::Running(td) => AnyTask::Running(td.task.clone()),
-            SomeTask::Finished(f) => AnyTask::Finished(f.clone()),
+        tasks.get(&id).map(|task| match task {
+            TaskRef::Running(td) => AnyTask::Running(td.task.clone()),
+            TaskRef::Finished(f) => AnyTask::Finished(f.clone()),
         })
     }
 
@@ -158,21 +158,21 @@ impl TaskManager {
 
     pub fn send_signal_to_all_tasks(&self, signal: rustix::process::Signal) {
         let tasks = self.tasks.read().unwrap();
-        for task in tasks.running().values() {
-            let _ = task.task.send_signal(signal);
+        for (_, task_entry) in tasks.iter_running() {
+            let _ = task_entry.task.send_signal(signal);
         }
     }
 
     pub fn task_list(&self) -> TaskList {
         let tasks = self.tasks.read().unwrap();
         let mut list = TaskList {
-            tasks: Vec::with_capacity(tasks.running().len() + tasks.finished().len()),
+            tasks: Vec::with_capacity(tasks.iter_running().len() + tasks.iter_finished().len()),
         };
-        for (&task_id, task_data) in tasks.running().iter() {
-            let entry = TaskEntry::running(&task_data.task, task_id);
+        for (&task_id, task_entry) in tasks.iter_running() {
+            let entry = TaskEntry::running(&task_entry.task, task_id);
             list.tasks.push(entry);
         }
-        for (&task_id, task) in tasks.finished().iter() {
+        for (&task_id, task) in tasks.iter_finished() {
             let entry = TaskEntry::finished(task, task_id);
             list.tasks.push(entry);
         }
@@ -191,7 +191,7 @@ impl TaskManager {
                 async move {
                     let finished_task = task.join().await;
                     let mut tasks = this.tasks.write().unwrap();
-                    tasks.move_task_to_finished(task_id, finished_task);
+                    tasks.mark_finished(task_id, finished_task);
                 }
             })
             .expect("Should never happen because of mutex");
@@ -272,7 +272,7 @@ mod tests {
             exe: &str,
             args: &[&str],
             working_dir: Option<String>,
-        ) -> Result<TaskCreationData, TaskError> {
+        ) -> Result<CreatedTaskData, TaskError> {
             self.create_task(
                 exe,
                 args.iter().map(|s| s.to_string()).collect(),
@@ -292,7 +292,7 @@ mod tests {
     #[tokio::test]
     async fn create_task_success() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let TaskCreationData {
+        let CreatedTaskData {
             task,
             reading_gate_lock,
             ..
@@ -326,7 +326,7 @@ mod tests {
             .unwrap()
             .to_owned();
 
-        let TaskCreationData {
+        let CreatedTaskData {
             task,
             reading_gate_lock,
             ..
@@ -344,7 +344,7 @@ mod tests {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let mut task_ids = HashSet::new();
         for _ in 0..3 {
-            let TaskCreationData { task_id, .. } = tm.spawn("ls", &[], None).unwrap();
+            let CreatedTaskData { task_id, .. } = tm.spawn("ls", &[], None).unwrap();
             assert!(task_ids.insert(task_id));
         }
         tokio::time::timeout(Duration::from_secs(1), tm.join())
@@ -357,7 +357,7 @@ mod tests {
 
     async fn wait_for_tasks_to_finish(tm: &TaskManager) {
         tokio::time::timeout(Duration::from_secs(1), async {
-            while !tm.tasks.read().unwrap().running().is_empty() {
+            while tm.tasks.read().unwrap().iter_running().len() != 0 {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         })
@@ -368,7 +368,7 @@ mod tests {
     #[tokio::test]
     async fn get_running_task_works_correctly() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let TaskCreationData { task, task_id, .. } = tm.spawn("cat", &[], None).unwrap();
+        let CreatedTaskData { task, task_id, .. } = tm.spawn("cat", &[], None).unwrap();
         assert!(Arc::ptr_eq(&task, &tm.get_running_task(task_id).unwrap()));
 
         task.send_signal(Signal::KILL).unwrap();
@@ -377,13 +377,13 @@ mod tests {
             .unwrap();
         wait_for_tasks_to_finish(&tm).await;
         assert_matches!(
-            tm.get_running_task_data(task_id),
+            tm.get_running_task_handle(task_id),
             Err(TaskError::AlreadyExited)
         );
 
         let non_existing_id = TaskId(123);
         assert_matches!(
-            tm.get_running_task_data(non_existing_id),
+            tm.get_running_task_handle(non_existing_id),
             Err(TaskError::NotFound)
         );
         tm.join().await;
@@ -392,7 +392,7 @@ mod tests {
     #[tokio::test]
     async fn find_task_works_correctly() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let TaskCreationData { task, task_id, .. } = tm.spawn("cat", &[], None).unwrap();
+        let CreatedTaskData { task, task_id, .. } = tm.spawn("cat", &[], None).unwrap();
         assert_matches!(tm.find_task(task_id), Some(AnyTask::Running(t)) if Arc::ptr_eq(&task, &t));
 
         task.send_signal(Signal::KILL).unwrap();
@@ -435,8 +435,8 @@ mod tests {
     #[tokio::test]
     async fn output_buffer_capacity_passed_to_task() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let TaskCreationData { task_id, .. } = tm.spawn("cat", &[], None).unwrap();
-        let task = tm.get_running_task_data(task_id).unwrap().task;
+        let CreatedTaskData { task_id, .. } = tm.spawn("cat", &[], None).unwrap();
+        let task = tm.get_running_task_handle(task_id).unwrap().task;
         assert_eq!(task.output_buffer().capacity(), TASK_OUTPUT_BUFFER_CAPACITY);
         task.send_signal(Signal::TERM).unwrap();
         tm.join().await;
@@ -445,7 +445,7 @@ mod tests {
     #[tokio::test]
     async fn task_list_returns_list_of_tasks() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let TaskCreationData { task, task_id, .. } = tm.spawn("cat", &[], None).unwrap();
+        let CreatedTaskData { task, task_id, .. } = tm.spawn("cat", &[], None).unwrap();
         let list = tm.task_list();
         assert_eq!(list.tasks.len(), 1);
         assert_eq!(list.tasks[0].task_id, task_id);
@@ -473,7 +473,7 @@ mod tests {
     #[tokio::test]
     async fn task_entry_constructors() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
-        let TaskCreationData { task, task_id, .. } = tm.spawn("ls", &[], None).unwrap();
+        let CreatedTaskData { task, task_id, .. } = tm.spawn("ls", &[], None).unwrap();
 
         let entry = TaskEntry::running(&task, task_id);
         assert!(Arc::ptr_eq(&entry.info, &task.info()));

@@ -12,7 +12,7 @@ use crate::{
         subscriber::{CreatingEvent, Subscriber},
         subscription_registry::SubscriptionRegistry,
     },
-    tasks::{AnyTask, TaskEntry, TaskError, TaskManager, TaskReadingGateLock},
+    tasks::{AnyTask, TaskEntry, TaskError, TaskManager, TaskReadingGateGuard},
     transport::ConnectionWriter,
 };
 
@@ -74,7 +74,7 @@ impl Handler {
     fn start_task(
         &self,
         params: TaskStartParams,
-    ) -> Result<(ResponseResult, TaskReadingGateLock), ApplicationError> {
+    ) -> Result<(ResponseResult, TaskReadingGateGuard), ApplicationError> {
         let task_data = self.task_manager.create_task(
             params.executable,
             params.args.unwrap_or_default(),
@@ -156,7 +156,7 @@ impl Handler {
 
         self.subscription_registry
             .update_or_spawn_subscriber(&params.task_id, &params.events, || {
-                let task_data = self.task_manager.get_running_task_data(params.task_id)?;
+                let task_data = self.task_manager.get_running_task_handle(params.task_id)?;
                 Ok(Subscriber::new(
                     self.connection_writer.clone(),
                     params.task_id,

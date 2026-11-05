@@ -4,12 +4,12 @@ use tokio::sync::watch;
 
 #[derive(Debug)]
 #[must_use]
-pub struct GateLock<Tag> {
+pub struct GateGuard<Tag> {
     sender: watch::Sender<()>,
     tag_: PhantomData<Tag>,
 }
 
-impl<Tag> GateLock<Tag> {
+impl<Tag> GateGuard<Tag> {
     pub fn gate(&self) -> Gate<Tag> {
         Gate {
             receiver: self.sender.subscribe(),
@@ -30,14 +30,14 @@ impl<Tag> Gate<Tag> {
     }
 }
 
-pub(in crate::tasks) fn gate<Tag>() -> (Gate<Tag>, GateLock<Tag>) {
+pub(in crate::tasks) fn gate<Tag>() -> (Gate<Tag>, GateGuard<Tag>) {
     let (sender, receiver) = watch::channel(());
     (
         Gate {
             receiver,
             tag_: Default::default(),
         },
-        GateLock {
+        GateGuard {
             sender,
             tag_: Default::default(),
         },

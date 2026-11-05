@@ -43,7 +43,9 @@ impl RecentFinishedTasks {
         self.id_to_task.contains_key(id)
     }
 
-    pub(in crate::tasks) fn iter(&self) -> impl Iterator<Item = (&TaskId, &Arc<FinishedTask>)> {
+    pub(in crate::tasks) fn iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&TaskId, &Arc<FinishedTask>)> {
         self.recent_tasks.iter().map(|id| {
             self.id_to_task
                 .get_key_value(id)

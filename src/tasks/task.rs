@@ -16,7 +16,7 @@ use crate::{
     tasks::{
         OutputLine, TaskEventsStream,
         finished_task::FinishedTask,
-        gate::{Gate, GateLock, gate},
+        gate::{Gate, GateGuard, gate},
         info::TaskInfo,
         output_buffer::OutputBuffer,
         sender::{TaskEvent, TaskSender},
@@ -29,7 +29,7 @@ use crate::{
 pub struct TaskReadingTag;
 
 type TaskReadingGate = Gate<TaskReadingTag>;
-pub type TaskReadingGateLock = GateLock<TaskReadingTag>;
+pub type TaskReadingGateGuard = GateGuard<TaskReadingTag>;
 
 /// Representation of a running child process.
 /// All the output of the child process is captured into [`OutputBuffer`].
@@ -54,7 +54,7 @@ impl Task {
     pub(in crate::tasks) fn new(
         info: TaskInfo,
         output_buffer_capacity: usize,
-    ) -> Result<(Self, TaskReadingGateLock), TaskError> {
+    ) -> Result<(Self, TaskReadingGateGuard), TaskError> {
         let span = info_span!( "task",
                     executable = info.executable,
                     args = ?info.args);
@@ -370,7 +370,7 @@ mod tests {
         executable: impl Into<String>,
         args: &[&str],
         working_dir: impl Into<PathBuf>,
-    ) -> Result<(Task, TaskReadingGateLock), TaskError> {
+    ) -> Result<(Task, TaskReadingGateGuard), TaskError> {
         let info = TaskInfo {
             executable: executable.into(),
             args: args.iter().map(|&s| String::from(s)).collect(),
