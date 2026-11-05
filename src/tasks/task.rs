@@ -66,7 +66,7 @@ impl Task {
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
         let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
 
-        let (gate, gate_lock) = gate();
+        let (gate, gate_guard) = gate();
 
         let mut child = Self::spawn_child_process(&info)
             .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
@@ -102,7 +102,7 @@ impl Task {
         Self::spawn_waiting_for_exit(
             &internal_tasks,
             sender.exit_tx,
-            gate_lock.gate(),
+            gate_guard.gate(),
             child,
             span.clone(),
         );
@@ -117,7 +117,7 @@ impl Task {
             events_stream,
         };
 
-        Ok((task, gate_lock))
+        Ok((task, gate_guard))
     }
 
     pub fn info(&self) -> Arc<TaskInfo> {

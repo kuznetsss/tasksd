@@ -110,19 +110,19 @@ impl TaskManager {
                 .map(PathBuf::from)
                 .unwrap_or(current_dir().map_err(|_| TaskError::InvalidDirectory)?),
         };
-        let (task, reading_gate_lock) = Task::new(task_info, self.task_output_buffer_capacity)?;
-        let (exit_notification_gate, exit_notification_gate_lock) = gate();
+        let (task, reading_gate_guard) = Task::new(task_info, self.task_output_buffer_capacity)?;
+        let (exit_notification_gate, exit_notification_gate_guard) = gate();
         let task = Arc::new(task);
         self.tasks.write().expect("RwLock is poisoned").add_running(
             task_id,
             task.clone(),
-            exit_notification_gate_lock,
+            exit_notification_gate_guard,
         );
         self.spawn_task_completion(completion_coroutines, task.clone(), task_id);
         Ok(CreatedTaskData {
             task,
             task_id,
-            reading_gate_lock,
+            reading_gate_lock: reading_gate_guard,
             exit_notification_gate,
         })
     }

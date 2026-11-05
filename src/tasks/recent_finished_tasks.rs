@@ -177,4 +177,14 @@ mod tests {
         assert_matches!(it.next(), Some((id, t)) if id == &id3 && Arc::ptr_eq(t, &task3));
         assert_matches!(it.next(), None);
     }
+
+    #[test]
+    fn contains_task_works() {
+        let mut ft = RecentFinishedTasks::new(10);
+        let (id, task) = make_finished_task(1);
+        ft.insert(id, task);
+
+        assert!(ft.contains_task(&id));
+        assert!(!ft.contains_task(&TaskId(123)));
+    }
 }

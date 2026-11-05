@@ -81,3 +81,93 @@ impl TaskRegistry {
         self.finished.get(task_id).map(TaskRef::Finished)
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::{assert_matches, env::current_dir, task::Poll};
+
+    use futures::FutureExt;
+
+    use super::*;
+    use crate::tasks::{TaskInfo, gate::gate};
+
+    fn make_task() -> (Arc<Task>, TaskExitNotificationGateGuard) {
+        let task_info = TaskInfo {
+            executable: "ls".into(),
+            args: Vec::new(),
+            working_dir: current_dir().unwrap(),
+        };
+        let (task, _) = Task::new(task_info, 1000).unwrap();
+        let (_, exit_notification_gate_guard) = gate();
+        (Arc::new(task), exit_notification_gate_guard)
+    }
+
+    #[tokio::test]
+    async fn add_running_adds_task_to_running() {
+        let mut tr = TaskRegistry::new(10);
+        let (task, gate_guard) = make_task();
+        let task_id = TaskId(123);
+
+        tr.add_running(task_id, task.clone(), gate_guard);
+
+        assert_eq!(tr.iter_running().len(), 1);
+        assert_eq!(tr.iter_finished().len(), 0);
+        assert_matches!(tr.get(&task_id), Some(TaskRef::Running(td)) if Arc::ptr_eq(&task, &td.task));
+        task.join().await;
+    }
+
+    #[tokio::test]
+    async fn mark_finished_moves_task_to_finished() {
+        let mut tr = TaskRegistry::new(10);
+        let (task, gate_guard) = make_task();
+        let task_id = TaskId(123);
+
+        tr.add_running(task_id, task.clone(), gate_guard);
+        let finished_task = task.join().await;
+        tr.mark_finished(task_id, finished_task);
+
+        assert_eq!(tr.iter_running().len(), 0);
+        assert_eq!(tr.iter_finished().len(), 1);
+        assert_matches!(tr.get(&task_id), Some(TaskRef::Finished(_)));
+    }
+
+    #[tokio::test]
+    async fn mark_finished_opens_task_gate() {
+        let mut tr = TaskRegistry::new(10);
+        let (task, gate_guard) = make_task();
+        let task_id = TaskId(123);
+
+        let mut gate_handle = tokio::spawn({
+            let mut gate = gate_guard.gate();
+            async move {
+                gate.wait().await;
+            }
+        });
+        let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut poll_handle = async || {
+            tokio::task::yield_now().await;
+            gate_handle.poll_unpin(&mut ctx)
+        };
+
+        tokio::task::yield_now().await;
+        assert_matches!(poll_handle().await, Poll::Pending);
+
+        tr.add_running(task_id, task.clone(), gate_guard);
+        assert_matches!(poll_handle().await, Poll::Pending);
+
+        let finished_task = task.join().await;
+        assert_matches!(poll_handle().await, Poll::Pending);
+
+        tr.mark_finished(task_id, finished_task);
+        assert_matches!(poll_handle().await, Poll::Ready(_));
+    }
+
+    #[test]
+    fn empty_task_registry() {
+        let tr = TaskRegistry::new(10);
+        assert_eq!(tr.iter_running().len(), 0);
+        assert_eq!(tr.iter_finished().len(), 0);
+        assert_matches!(tr.get(&TaskId(123)), None);
+    }
+}
