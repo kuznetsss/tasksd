@@ -16,6 +16,7 @@ use crate::{
     tasks::{
         OutputLine, TaskEventsStream,
         finished_task::FinishedTask,
+        gate::{Gate, GateGuard, gate},
         info::TaskInfo,
         output_buffer::OutputBuffer,
         sender::{TaskEvent, TaskSender},
@@ -24,17 +25,11 @@ use crate::{
     utils::tracker::{PanicHandler, WrappedTaskTracker},
 };
 
-/// Gate of task event reading.
-/// Dropping gate allows task to begin reading from PTY and waiting for exit.
 #[derive(Debug)]
-#[must_use]
-pub struct TaskReadingGate(watch::Sender<Option<()>>);
+pub struct TaskReadingTag;
 
-impl Drop for TaskReadingGate {
-    fn drop(&mut self) {
-        self.0.send(Some(())).expect("Gate shouldn't outlive Task");
-    }
-}
+type TaskReadingGate = Gate<TaskReadingTag>;
+pub type TaskReadingGateGuard = GateGuard<TaskReadingTag>;
 
 /// Representation of a running child process.
 /// All the output of the child process is captured into [`OutputBuffer`].
@@ -59,7 +54,7 @@ impl Task {
     pub(in crate::tasks) fn new(
         info: TaskInfo,
         output_buffer_capacity: usize,
-    ) -> Result<(Self, TaskReadingGate), TaskError> {
+    ) -> Result<(Self, TaskReadingGateGuard), TaskError> {
         let span = info_span!( "task",
                     executable = info.executable,
                     args = ?info.args);
@@ -71,7 +66,7 @@ impl Task {
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
         let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
 
-        let (read_guard_tx, read_guard_rx) = watch::channel(None);
+        let (gate, gate_guard) = gate();
 
         let mut child = Self::spawn_child_process(&info)
             .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
@@ -96,7 +91,7 @@ impl Task {
         Self::spawn_output_sending(
             &internal_tasks,
             line_stream_rx,
-            read_guard_rx,
+            gate,
             sender.exit_tx.subscribe(),
             sender.events_tx,
             output_buffer.clone(),
@@ -107,7 +102,7 @@ impl Task {
         Self::spawn_waiting_for_exit(
             &internal_tasks,
             sender.exit_tx,
-            read_guard_tx.subscribe(),
+            gate_guard.gate(),
             child,
             span.clone(),
         );
@@ -122,7 +117,7 @@ impl Task {
             events_stream,
         };
 
-        Ok((task, TaskReadingGate(read_guard_tx)))
+        Ok((task, gate_guard))
     }
 
     pub fn info(&self) -> Arc<TaskInfo> {
@@ -140,10 +135,12 @@ impl Task {
     }
 
     pub fn events_stream(&self) -> Result<TaskEventsStream, TaskError> {
+        // Ordering is important here. Creating stream first guarantees that stream will contain at lest exit event
+        let stream = self.events_stream.resubscribe();
         if self.has_exited() {
             return Err(TaskError::AlreadyExited);
         }
-        Ok(self.events_stream.resubscribe())
+        Ok(stream)
     }
 
     pub fn send_signal(&self, signal: rustix::process::Signal) -> Result<(), TaskError> {
@@ -247,7 +244,7 @@ impl Task {
     fn spawn_output_sending(
         internal_tasks: &WrappedTaskTracker,
         mut line_stream_rx: mpsc::Receiver<String>,
-        mut read_guard_rx: watch::Receiver<Option<()>>,
+        mut read_gate: TaskReadingGate,
         mut on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
         events_tx: broadcast::Sender<TaskEvent>,
         output_buffer: Arc<OutputBuffer>,
@@ -256,7 +253,7 @@ impl Task {
         internal_tasks
             .spawn(
                 async move {
-                    let _ = read_guard_rx.changed().await;
+                    let _ = read_gate.wait().await;
                     let mut line_number = 0;
 
                     while let Some(line) = line_stream_rx.recv().await {
@@ -311,14 +308,14 @@ impl Task {
     fn spawn_waiting_for_exit(
         internal_tasks: &WrappedTaskTracker,
         internal_on_exit_sender: watch::Sender<Option<ExitStatus>>,
-        mut guard_rx: watch::Receiver<Option<()>>,
+        mut read_gate: TaskReadingGate,
         mut child: Child,
         span: Span,
     ) {
         internal_tasks
             .spawn(
                 async move {
-                    let _ = guard_rx.changed().await;
+                    let _ = read_gate.wait().await;
                     let exit_status = child
                         .wait()
                         .await
@@ -373,7 +370,7 @@ mod tests {
         executable: impl Into<String>,
         args: &[&str],
         working_dir: impl Into<PathBuf>,
-    ) -> Result<(Task, TaskReadingGate), TaskError> {
+    ) -> Result<(Task, TaskReadingGateGuard), TaskError> {
         let info = TaskInfo {
             executable: executable.into(),
             args: args.iter().map(|&s| String::from(s)).collect(),
@@ -787,19 +784,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(task.has_exited());
-    }
-
-    #[tokio::test]
-    async fn dropping_task_reading_gate_sends() {
-        let (tx, mut rx) = watch::channel(None);
-        let gate = TaskReadingGate(tx);
-        assert!(!rx.has_changed().unwrap());
-        drop(gate);
-        tokio::time::timeout(Duration::from_secs(1), rx.changed())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(rx.borrow().unwrap(), ());
     }
 
     #[test]

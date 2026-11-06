@@ -72,13 +72,17 @@ A few reasons:
 - [ ] `task.exit` notification is sent before task is moved out of running map:
       - add a gate to the completion coroutine, when task is moved, gate opens
       - add wait for the gate in subscriber: if it gets an exit event it waits for the gate
-      - update API.md
-      - related, not fixed by the gate: after the subscriber sends `task.exit` its entry stays
-        in `SubscriptionRegistry` until the coroutine removes it; any `task.set_subscribe`
-        in that window returns `{}` instead of error `5` (non-empty `events` hits the update
-        branch, `[]` stops the already-finishing subscriber and succeeds)
-      - enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
-        once both races are fixed
+        WIP:
+          - [ ] TaskManager::get_running_task() should return task + gate so we could create subscriber
+          - [ ] Better names for all the added structures
+          - [ ] update API.md
+          - [ ] code review
+- [ ] Related, not fixed by the gate: after the subscriber sends `task.exit` its entry stays
+    in `SubscriptionRegistry` until the coroutine removes it; any `task.set_subscribe`
+    in that window returns `{}` instead of error `5` (non-empty `events` hits the update
+    branch, `[]` stops the already-finishing subscriber and succeeds)
+- [ ] Enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
+    once both races are fixed
 - [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
 - [ ] Support graceful shutdown by `SIGTERM`
 - [ ] Switch output stream to Vec<u8>
