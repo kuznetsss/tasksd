@@ -47,34 +47,19 @@ pub(in crate::tasks) fn gate<Tag>() -> (Gate<Tag>, GateGuard<Tag>) {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::sync::{Arc, Mutex};
-
     use super::*;
 
-    struct Tag;
-
     #[tokio::test]
-    async fn dropping_lock_unlock_gate() {
-        #[derive(Debug, PartialEq, Eq)]
-        enum Event {
-            Drop,
-            Unlock,
-        }
-        let events = Arc::new(Mutex::new(Vec::new()));
+    async fn dropping_guard_unlocks_gate() {
+        struct Tag;
+        let (mut gate, guard) = gate::<Tag>();
 
-        let (mut gate, lock) = gate::<Tag>();
-
-        let handle = tokio::spawn({
-            let events = events.clone();
-            async move {
-                gate.wait().await;
-                events.lock().unwrap().push(Event::Unlock);
-            }
+        let mut handle = tokio_test::task::spawn(async move {
+            gate.wait().await;
         });
-        tokio::task::yield_now().await;
-        drop(lock);
-        events.lock().unwrap().push(Event::Drop);
-        handle.await.unwrap();
-        assert_eq!(*events.lock().unwrap(), [Event::Drop, Event::Unlock]);
+        assert!(handle.poll().is_pending());
+        drop(guard);
+        assert!(handle.is_woken());
+        assert!(handle.poll().is_ready());
     }
 }

@@ -99,7 +99,7 @@ impl Handler {
         let response_result = ResponseResult::StartTaskResult {
             task_id: task_data.task_id,
         };
-        Ok((response_result, task_data.reading_gate_lock))
+        Ok((response_result, task_data.reading_gate_guard))
     }
 
     fn send_signal(

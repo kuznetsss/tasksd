@@ -6,6 +6,7 @@ use crate::tasks::{
     gate::{Gate, GateGuard},
     recent_finished_tasks::RecentFinishedTasks,
     task::Task,
+    task_manager::RunningTaskHandle,
 };
 
 #[derive(Debug)]
@@ -17,7 +18,16 @@ type TaskExitNotificationGateGuard = GateGuard<TaskExitNotificationTag>;
 #[derive(Debug)]
 pub(in crate::tasks) struct RunningTaskEntry {
     pub(in crate::tasks) task: Arc<Task>,
-    pub(in crate::tasks) exit_notification_gate_lock: TaskExitNotificationGateGuard,
+    pub(in crate::tasks) exit_notification_gate_guard: TaskExitNotificationGateGuard,
+}
+
+impl RunningTaskEntry {
+    pub(in crate::tasks) fn handle(&self) -> RunningTaskHandle {
+        RunningTaskHandle {
+            task: self.task.clone(),
+            exit_notification_gate: self.exit_notification_gate_guard.gate(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -50,7 +60,7 @@ impl TaskRegistry {
             task_id,
             RunningTaskEntry {
                 task,
-                exit_notification_gate_lock,
+                exit_notification_gate_guard: exit_notification_gate_lock,
             },
         );
     }
@@ -85,9 +95,7 @@ impl TaskRegistry {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::{assert_matches, env::current_dir, task::Poll};
-
-    use futures::FutureExt;
+    use std::{assert_matches, env::current_dir, time::Duration};
 
     use super::*;
     use crate::tasks::{TaskInfo, gate::gate};
@@ -138,29 +146,26 @@ mod tests {
         let (task, gate_guard) = make_task();
         let task_id = TaskId(123);
 
-        let mut gate_handle = tokio::spawn({
+        let mut gate_future = tokio_test::task::spawn({
             let mut gate = gate_guard.gate();
             async move {
                 gate.wait().await;
             }
         });
-        let mut ctx = std::task::Context::from_waker(std::task::Waker::noop());
-        let mut poll_handle = async || {
-            tokio::task::yield_now().await;
-            gate_handle.poll_unpin(&mut ctx)
-        };
 
-        tokio::task::yield_now().await;
-        assert_matches!(poll_handle().await, Poll::Pending);
+        assert!(gate_future.poll().is_pending());
 
         tr.add_running(task_id, task.clone(), gate_guard);
-        assert_matches!(poll_handle().await, Poll::Pending);
+        assert!(gate_future.poll().is_pending());
 
-        let finished_task = task.join().await;
-        assert_matches!(poll_handle().await, Poll::Pending);
+        let finished_task = tokio::time::timeout(Duration::from_secs(1), task.join())
+            .await
+            .unwrap();
+        assert!(gate_future.poll().is_pending());
 
         tr.mark_finished(task_id, finished_task);
-        assert_matches!(poll_handle().await, Poll::Ready(_));
+        assert!(gate_future.is_woken());
+        assert!(gate_future.poll().is_ready());
     }
 
     #[test]

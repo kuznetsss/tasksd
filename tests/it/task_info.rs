@@ -43,15 +43,6 @@ async fn task_info_returns_info_of_finished_task() {
     assert_eq!(exit.params.task_id, task_id);
     assert_eq!(exit.params.exit_code.unwrap(), 0);
 
-    // Wait for the task to appear in finished to make sure it is finished
-    client
-        .wait_for_task_list(|l| {
-            l.iter()
-                .find(|t| t.task_id == task_id && t.status == "finished")
-                .is_some()
-        })
-        .await;
-
     client.task_info(task_id).await.unwrap();
     let task_info: TaskInfoResponse = client.read_struct().await.unwrap();
     assert_eq!(task_info.id, client.last_id());
