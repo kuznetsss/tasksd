@@ -9,7 +9,7 @@ use tracing::warn;
 
 use crate::{
     api::{Notification, NotificationBody, SubscribeEventType, SubscribeEvents},
-    tasks::{OutputLine, TaskEvent, TaskEventsStream, TaskId},
+    tasks::{OutputLine, TaskEvent, TaskEventsStream, TaskExitNotificationGate, TaskId},
     transport::{ConnectionWriter, TransportError},
 };
 
@@ -27,6 +27,7 @@ pub(in crate::application) struct Subscriber {
     last_seen_line: Option<usize>,
     creating_event: CreatingEvent,
     cancel: CancellationToken,
+    exit_notification_gate: TaskExitNotificationGate,
 }
 
 impl Subscriber {
@@ -36,6 +37,7 @@ impl Subscriber {
         subscribe_to_events: &SubscribeEvents,
         events: TaskEventsStream,
         creating_event: CreatingEvent,
+        exit_notification_gate: TaskExitNotificationGate,
     ) -> Self {
         assert!(
             subscribe_to_events.contains(&SubscribeEventType::Exit),
@@ -50,6 +52,7 @@ impl Subscriber {
             last_seen_line: None,
             creating_event,
             cancel: CancellationToken::new(),
+            exit_notification_gate,
         }
     }
 
@@ -144,6 +147,15 @@ impl Subscriber {
     }
 
     async fn on_exit(&mut self, status: std::process::ExitStatus) {
+        if self
+            .cancel
+            .run_until_cancelled(self.exit_notification_gate.wait())
+            .await
+            .is_none()
+        {
+            return;
+        }
+
         let notification: Notification = NotificationBody::task_exit(self.task_id, status).into();
         if let Err(e) = self
             .connection_writer

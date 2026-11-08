@@ -1,7 +1,7 @@
 use std::env::current_dir;
 
 use crate::common::{
-    api::{TaskExitNotification, TaskStartResponse},
+    api::{TaskExitNotification, TaskListResponse, TaskStartResponse},
     running_app,
 };
 
@@ -23,9 +23,10 @@ async fn task_list_returns_list_of_tasks() {
     assert_eq!(response.id, client.last_id());
     let running_task_id = response.result.task_id;
 
-    let list = client
-        .wait_for_task_list(|l| l.iter().filter(|t| t.status == "finished").count() == 1)
-        .await;
+    client.task_list().await.unwrap();
+    let list: TaskListResponse = client.read_struct().await.unwrap();
+    assert_eq!(list.id, client.last_id());
+    let list = list.result.tasks;
 
     assert_eq!(list.len(), 2);
     let running_task_entry = &list.iter().find(|t| t.status == "running").unwrap();

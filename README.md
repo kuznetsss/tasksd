@@ -69,16 +69,31 @@ A few reasons:
       if it is not provided return the last `lines_number`
 - [x] `task.subscribe` should provide option `output` and by default only subscribe on exit event
 - [x] Rearrange integration tests: one `it` (as integration tests) module containing common and all the tests. Rename base to basic tests
-- [ ] `task.exit` notification is sent before task is moved out of running map:
+- [x] `task.exit` notification is sent before task is moved out of running map:
       - add a gate to the completion coroutine, when task is moved, gate opens
       - add wait for the gate in subscriber: if it gets an exit event it waits for the gate
-      - update API.md
-      - related, not fixed by the gate: after the subscriber sends `task.exit` its entry stays
-        in `SubscriptionRegistry` until the coroutine removes it; any `task.set_subscribe`
-        in that window returns `{}` instead of error `5` (non-empty `events` hits the update
-        branch, `[]` stops the already-finishing subscriber and succeeds)
-      - enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
-        once both races are fixed
+- [ ] Related, not fixed by the gate: after the subscriber sends `task.exit` its entry stays
+    in `SubscriptionRegistry` until the coroutine removes it; any `task.set_subscribe`
+    in that window returns `{}` instead of error `5` (non-empty `events` hits the update
+    branch, `[]` stops the already-finishing subscriber and succeeds)
+- [ ] Enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
+    once both races are fixed
+- [ ] Refactor event-ordering gates: make `Task` gate-free, keep a single gate in the application layer
+      - [ ] `Task::new` returns the initial events receiver (subscribed before any sending starts)
+            instead of the caller calling `events_stream()` afterwards: `resubscribe()` starts at the
+            current tail, so the reading gate is what currently prevents a silent gap
+      - [ ] Remove `TaskReadingGateGuard` from `Task`: output sending and child reaping no longer wait on it
+            (a slow client currently stalls the child: response write blocks -> gate closed -> pipes fill)
+      - [ ] Drop the `.expect("Task couldn't exit while its gate is not dropped")` in `Handler::start_task`
+      - [ ] "Response before notifications" moves to the application layer: register the subscriber in
+            `SubscriptionRegistry` before writing the response (requests run concurrently, a `set_subscribe`
+            can race), but `Subscriber::run` waits on a start gate the handler releases after `write`
+      - [ ] Remove `TaskExitNotificationGate`: derive running/finished status from the task's own exit watch
+            (running entry with `has_exited()` reports `Finished`), add a sync exit-status accessor;
+            the `running` -> `finished` move becomes housekeeping only
+      - [ ] Accept/verify: `tasks.list` may report finished slightly before `task.exit` arrives
+      - [ ] Tests: no lost output lines when sending starts before the subscriber runs; overflow before
+            the start gate opens yields `missed_output` from line 0
 - [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
 - [ ] Support graceful shutdown by `SIGTERM`
 - [ ] Switch output stream to Vec<u8>

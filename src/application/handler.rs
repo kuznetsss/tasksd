@@ -12,7 +12,7 @@ use crate::{
         subscriber::{CreatingEvent, Subscriber},
         subscription_registry::SubscriptionRegistry,
     },
-    tasks::{AnyTask, TaskEntry, TaskError, TaskManager, TaskReadingGate},
+    tasks::{AnyTask, TaskEntry, TaskError, TaskManager, TaskReadingGateGuard},
     transport::ConnectionWriter,
 };
 
@@ -74,28 +74,32 @@ impl Handler {
     fn start_task(
         &self,
         params: TaskStartParams,
-    ) -> Result<(ResponseResult, TaskReadingGate), ApplicationError> {
-        let (task, task_id, gate) = self.task_manager.create_task(
+    ) -> Result<(ResponseResult, TaskReadingGateGuard), ApplicationError> {
+        let task_info = self.task_manager.create_task(
             params.executable,
             params.args.unwrap_or_default(),
             params.working_dir,
         )?;
-        let task_events_stream = task
+        let task_events_stream = task_info
+            .task
             .events_stream()
             .expect("Task couldn't exit while its gate is not dropped");
         if !params.subscribe_to_events.is_empty() {
             let subscriber = Subscriber::new(
                 self.connection_writer.clone(),
-                task_id,
+                task_info.task_id,
                 &params.subscribe_to_events,
                 task_events_stream,
                 CreatingEvent::Start,
+                task_info.exit_notification_gate,
             );
             self.subscription_registry
-                .spawn_subscriber(task_id, subscriber)?;
+                .spawn_subscriber(task_info.task_id, subscriber)?;
         }
-        let response_result = ResponseResult::StartTaskResult { task_id };
-        Ok((response_result, gate))
+        let response_result = ResponseResult::StartTaskResult {
+            task_id: task_info.task_id,
+        };
+        Ok((response_result, task_info.reading_gate_guard))
     }
 
     fn send_signal(
@@ -152,13 +156,14 @@ impl Handler {
 
         self.subscription_registry
             .update_or_spawn_subscriber(&params.task_id, &params.events, || {
-                let task = self.task_manager.get_running_task(params.task_id)?;
+                let task_info = self.task_manager.get_running_task_handle(params.task_id)?;
                 Ok(Subscriber::new(
                     self.connection_writer.clone(),
                     params.task_id,
                     &params.events,
-                    task.events_stream()?,
+                    task_info.task.events_stream()?,
                     CreatingEvent::Subscribe,
+                    task_info.exit_notification_gate,
                 ))
             })
             .map(|_| ResponseResult::SubscribeResult {})

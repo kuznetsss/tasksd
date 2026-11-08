@@ -35,11 +35,13 @@ impl RecentFinishedTasks {
         self.recent_tasks.push_back(id);
     }
 
-    pub(in crate::tasks) fn get(&self, id: &TaskId) -> Option<Arc<FinishedTask>> {
-        self.id_to_task.get(id).map(Arc::clone)
+    pub(in crate::tasks) fn get(&self, id: &TaskId) -> Option<&Arc<FinishedTask>> {
+        self.id_to_task.get(id)
     }
 
-    pub(in crate::tasks) fn iter(&self) -> impl Iterator<Item = (&TaskId, &Arc<FinishedTask>)> {
+    pub(in crate::tasks) fn iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&TaskId, &Arc<FinishedTask>)> {
         self.recent_tasks.iter().map(|id| {
             self.id_to_task
                 .get_key_value(id)
