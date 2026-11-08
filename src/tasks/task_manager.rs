@@ -375,16 +375,65 @@ mod tests {
             .await
             .unwrap();
         wait_for_tasks_to_finish(&tm).await;
-        assert_matches!(
-            tm.get_running_task_handle(task_id),
-            Err(TaskError::AlreadyExited)
-        );
+        assert_matches!(tm.get_running_task(task_id), Err(TaskError::AlreadyExited));
 
         let non_existing_id = TaskId(123);
         assert_matches!(
-            tm.get_running_task_handle(non_existing_id),
+            tm.get_running_task(non_existing_id),
             Err(TaskError::NotFound)
         );
+        tm.join().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn get_running_task_handle_returns_task_gate() {
+        let tm = Arc::new(TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY));
+        let CreatedTaskInfo { task, task_id, .. } = tm.spawn("cat", &[], None).unwrap();
+        let mut handle = tm.get_running_task_handle(task_id).unwrap();
+
+        let gate_future = tokio::spawn({
+            let tm = tm.clone();
+            async move {
+                handle.exit_notification_gate.wait().await;
+                assert_matches!(tm.find_task(task_id).unwrap(), AnyTask::Finished(_));
+            }
+        });
+
+        task.send_signal(Signal::KILL).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), gate_future)
+            .await
+            .unwrap()
+            .unwrap();
+
+        tm.join().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn task_is_finished_when_task_gate_is_open() {
+        let tm = Arc::new(TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY));
+        let CreatedTaskInfo {
+            task,
+            task_id,
+            mut exit_notification_gate,
+            ..
+        } = tm.spawn("cat", &[], None).unwrap();
+
+        let gate_future = tokio::spawn({
+            let tm = tm.clone();
+            async move {
+                exit_notification_gate.wait().await;
+                assert_matches!(tm.find_task(task_id).unwrap(), AnyTask::Finished(_));
+            }
+        });
+
+        task.send_signal(Signal::KILL).unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), gate_future)
+            .await
+            .unwrap()
+            .unwrap();
+
         tm.join().await;
     }
 

@@ -39,10 +39,6 @@ impl RecentFinishedTasks {
         self.id_to_task.get(id)
     }
 
-    pub(in crate::tasks) fn contains_task(&self, id: &TaskId) -> bool {
-        self.id_to_task.contains_key(id)
-    }
-
     pub(in crate::tasks) fn iter(
         &self,
     ) -> impl ExactSizeIterator<Item = (&TaskId, &Arc<FinishedTask>)> {
@@ -176,15 +172,5 @@ mod tests {
         assert_matches!(it.next(), Some((id, t)) if id == &id2 && Arc::ptr_eq(t, &task2));
         assert_matches!(it.next(), Some((id, t)) if id == &id3 && Arc::ptr_eq(t, &task3));
         assert_matches!(it.next(), None);
-    }
-
-    #[test]
-    fn contains_task_works() {
-        let mut ft = RecentFinishedTasks::new(10);
-        let (id, task) = make_finished_task(1);
-        ft.insert(id, task);
-
-        assert!(ft.contains_task(&id));
-        assert!(!ft.contains_task(&TaskId(123)));
     }
 }

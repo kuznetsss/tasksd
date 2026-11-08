@@ -147,7 +147,15 @@ impl Subscriber {
     }
 
     async fn on_exit(&mut self, status: std::process::ExitStatus) {
-        self.exit_notification_gate.wait().await;
+        if self
+            .cancel
+            .run_until_cancelled(self.exit_notification_gate.wait())
+            .await
+            .is_none()
+        {
+            return;
+        }
+
         let notification: Notification = NotificationBody::task_exit(self.task_id, status).into();
         if let Err(e) = self
             .connection_writer

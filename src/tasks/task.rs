@@ -253,7 +253,7 @@ impl Task {
         internal_tasks
             .spawn(
                 async move {
-                    let _ = read_gate.wait().await;
+                    read_gate.wait().await;
                     let mut line_number = 0;
 
                     while let Some(line) = line_stream_rx.recv().await {
@@ -315,7 +315,7 @@ impl Task {
         internal_tasks
             .spawn(
                 async move {
-                    let _ = read_gate.wait().await;
+                    read_gate.wait().await;
                     let exit_status = child
                         .wait()
                         .await

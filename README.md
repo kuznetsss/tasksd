@@ -69,15 +69,9 @@ A few reasons:
       if it is not provided return the last `lines_number`
 - [x] `task.subscribe` should provide option `output` and by default only subscribe on exit event
 - [x] Rearrange integration tests: one `it` (as integration tests) module containing common and all the tests. Rename base to basic tests
-- [ ] `task.exit` notification is sent before task is moved out of running map:
+- [x] `task.exit` notification is sent before task is moved out of running map:
       - add a gate to the completion coroutine, when task is moved, gate opens
       - add wait for the gate in subscriber: if it gets an exit event it waits for the gate
-        WIP:
-          - [x] TaskManager::get_running_task() should return task + gate so we could create subscriber
-          - [x] Better names for all the added structures
-          - [ ] Tests for updated task_manager
-          - [ ] update API.md
-          - [ ] code review
 - [ ] Related, not fixed by the gate: after the subscriber sends `task.exit` its entry stays
     in `SubscriptionRegistry` until the coroutine removes it; any `task.set_subscribe`
     in that window returns `{}` instead of error `5` (non-empty `events` hits the update

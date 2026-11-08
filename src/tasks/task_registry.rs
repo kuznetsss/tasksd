@@ -54,13 +54,13 @@ impl TaskRegistry {
         &mut self,
         task_id: TaskId,
         task: Arc<Task>,
-        exit_notification_gate_lock: TaskExitNotificationGateGuard,
+        exit_notification_gate_guard: TaskExitNotificationGateGuard,
     ) {
         self.running.insert(
             task_id,
             RunningTaskEntry {
                 task,
-                exit_notification_gate_guard: exit_notification_gate_lock,
+                exit_notification_gate_guard,
             },
         );
     }
@@ -85,8 +85,8 @@ impl TaskRegistry {
     }
 
     pub(in crate::tasks) fn get(&self, task_id: &TaskId) -> Option<TaskRef<'_>> {
-        if let Some(task_data) = self.running.get(task_id) {
-            return Some(TaskRef::Running(task_data));
+        if let Some(task_entry) = self.running.get(task_id) {
+            return Some(TaskRef::Running(task_entry));
         }
         self.finished.get(task_id).map(TaskRef::Finished)
     }
