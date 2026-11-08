@@ -421,12 +421,12 @@ the other methods). The order of `tasks` is unspecified and may differ between
 calls; clients that want a stable order should sort by `task_id`, which is
 assigned in start order.
 
-A task's `status` flips from `running` to `finished` shortly after it
-terminates, and that transition is not synchronised with the
-[`task.exit`](#taskexit) notification. A `task.list` issued immediately after
-receiving `task.exit` for a task may still report it as `running`; it reports
-`finished` on a later call. Clients that need to observe the transition should
-re-request rather than assume the notification has already taken effect.
+A task's `status` flips from `running` to `finished` before the
+[`task.exit`](#taskexit) notification for it is sent. A `task.list` issued after
+receiving `task.exit` for a task always reports it as `finished` (unless it has
+since aged out of the 100-entry window). The converse does not hold: a
+`task.list` may report a task as `finished` before the connection has received
+its `task.exit`.
 
 `tasks` may be empty. A daemon with no tasks at all still answers with a result
 rather than an error.
@@ -647,9 +647,10 @@ Emitted once when a task terminates.
 The two fields are the same pair carried by a finished
 [task entry](#task-entry).
 
-Receiving this notification does not guarantee that [`task.list`](#tasklist) or
-[`task.info`](#taskinfo) already report the task as `finished`; see `task.list`
-for details.
+By the time this notification is sent, the task is already `finished`: a
+[`task.list`](#tasklist) or [`task.info`](#taskinfo) request issued after
+receiving it reports the task as `finished` with the same exit fields. See
+`task.list` for details.
 
 ### `shutting_down`
 
