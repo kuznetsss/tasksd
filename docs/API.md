@@ -313,7 +313,9 @@ three meaningful values:
   this pauses output delivery; the task keeps running.
 - `[]`: unsubscribe completely. No further notifications for the task are sent
   to this connection, not even `task.exit`. Any notifications the subscription
-  sends before it stops arrive ahead of the response.
+  sends before it stops arrive ahead of the response. The one exception is an
+  unsubscribe that races with the task's exit: it may succeed and still be
+  followed by a single `task.exit` for the task.
 
 `"output"` without `"exit"` is rejected with
 [`-32602` Invalid params](#standard-json-rpc-errors), as is any unknown event
@@ -651,6 +653,11 @@ By the time this notification is sent, the task is already `finished`: a
 [`task.list`](#tasklist) or [`task.info`](#taskinfo) request issued after
 receiving it reports the task as `finished` with the same exit fields. See
 `task.list` for details.
+
+Receiving `task.exit` also ends the connection's subscription to the task: a
+[`task.set_subscribe`](#taskset_subscribe) request issued after it, with any
+`events` including `[]`, is rejected with
+[`5` The task has already exited](#task-errors).
 
 ### `shutting_down`
 

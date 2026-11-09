@@ -97,7 +97,7 @@ impl SubscriptionRegistry {
             .spawn({
                 let subs = self.subs.clone();
                 async move {
-                    subscriber.run().await;
+                    let exit_event = subscriber.run().await;
                     assert!(
                         subs.lock()
                             .expect("Poisoned mutex")
@@ -105,6 +105,10 @@ impl SubscriptionRegistry {
                             .is_some(),
                         "Missing subscriber handle for {task_id}"
                     );
+                    // Sending notification only after removing Subscriber from subs so it is not available after exit notification is sent
+                    if let Some(e) = exit_event {
+                        e.send().await;
+                    }
                     let _ = completion_sender.send(true);
                 }
             })

@@ -63,17 +63,18 @@ impl Subscriber {
         }
     }
 
-    pub async fn run(mut self) {
-        loop {
+    #[must_use]
+    pub async fn run(mut self) -> Option<ExitEvent> {
+        let exit_status = loop {
             let event = match self.cancel.run_until_cancelled(self.events.recv()).await {
                 Some(e) => e,
-                None => break,
+                None => break None,
             };
             match event {
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     if let Err(e) = self.on_lag(n as usize).await {
                         warn!("Error sending missed_output: {e}");
-                        break;
+                        break None;
                     }
                 }
                 Err(broadcast::error::RecvError::Closed) => {
@@ -85,15 +86,21 @@ impl Subscriber {
                 Ok(TaskEvent::Output(line)) => {
                     if let Err(e) = self.on_output(line).await {
                         warn!("Error sending output: {e}");
-                        break;
+                        break None;
                     }
                 }
                 Ok(TaskEvent::Exit(e)) => {
-                    self.on_exit(e).await;
-                    break;
+                    break Some(e);
                 }
             }
-        }
+        };
+        exit_status.map(|s| ExitEvent {
+            task_id: self.task_id,
+            status: s,
+            exit_notification_gate: self.exit_notification_gate,
+            connection_writer: self.connection_writer,
+            cancel: self.cancel,
+        })
     }
 
     async fn on_output(&mut self, line: std::sync::Arc<OutputLine>) -> Result<(), TransportError> {
@@ -145,26 +152,6 @@ impl Subscriber {
             .write(&notification.to_json_string())
             .await
     }
-
-    async fn on_exit(&mut self, status: std::process::ExitStatus) {
-        if self
-            .cancel
-            .run_until_cancelled(self.exit_notification_gate.wait())
-            .await
-            .is_none()
-        {
-            return;
-        }
-
-        let notification: Notification = NotificationBody::task_exit(self.task_id, status).into();
-        if let Err(e) = self
-            .connection_writer
-            .write(&notification.to_json_string())
-            .await
-        {
-            warn!("Error writing on_exit notification: {e}");
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -180,5 +167,34 @@ impl SubscriberHandle {
 
     pub(in crate::application) fn stop(&self) {
         self.cancel.cancel();
+    }
+}
+
+#[must_use]
+pub(in crate::application) struct ExitEvent {
+    task_id: TaskId,
+    status: std::process::ExitStatus,
+    exit_notification_gate: TaskExitNotificationGate,
+    connection_writer: ConnectionWriter,
+    cancel: CancellationToken,
+}
+
+impl ExitEvent {
+    pub(in crate::application) async fn send(mut self) {
+        self.cancel
+            .run_until_cancelled(async {
+                self.exit_notification_gate.wait().await;
+                let notification: Notification =
+                    NotificationBody::task_exit(self.task_id, self.status).into();
+
+                if let Err(e) = self
+                    .connection_writer
+                    .write(&notification.to_json_string())
+                    .await
+                {
+                    warn!("Error writing on_exit notification: {e}");
+                }
+            })
+            .await;
     }
 }
