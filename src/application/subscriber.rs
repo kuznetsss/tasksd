@@ -181,23 +181,20 @@ pub(in crate::application) struct ExitEvent {
 
 impl ExitEvent {
     pub(in crate::application) async fn send(mut self) {
-        if self
-            .cancel
-            .run_until_cancelled(self.exit_notification_gate.wait())
-            .await
-            .is_none()
-        {
-            return;
-        }
-        let notification: Notification =
-            NotificationBody::task_exit(self.task_id, self.status).into();
+        self.cancel
+            .run_until_cancelled(async {
+                self.exit_notification_gate.wait().await;
+                let notification: Notification =
+                    NotificationBody::task_exit(self.task_id, self.status).into();
 
-        if let Err(e) = self
-            .connection_writer
-            .write(&notification.to_json_string())
-            .await
-        {
-            warn!("Error writing on_exit notification: {e}");
-        }
+                if let Err(e) = self
+                    .connection_writer
+                    .write(&notification.to_json_string())
+                    .await
+                {
+                    warn!("Error writing on_exit notification: {e}");
+                }
+            })
+            .await;
     }
 }

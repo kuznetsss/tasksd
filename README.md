@@ -72,11 +72,11 @@ A few reasons:
 - [x] `task.exit` notification is sent before task is moved out of running map:
       - add a gate to the completion coroutine, when task is moved, gate opens
       - add wait for the gate in subscriber: if it gets an exit event it waits for the gate
-- [ ] Related, not fixed by the gate: after the subscriber sends `task.exit` its entry stays
+- [x] Related, not fixed by the gate: after the subscriber sends `task.exit` its entry stays
     in `SubscriptionRegistry` until the coroutine removes it; any `task.set_subscribe`
     in that window returns `{}` instead of error `5` (non-empty `events` hits the update
     branch, `[]` stops the already-finishing subscriber and succeeds)
-- [ ] Enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
+- [x] Enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
     once both races are fixed
 - [ ] Refactor event-ordering gates: make `Task` gate-free, keep a single gate in the application layer
       - [ ] `Task::new` returns the initial events receiver (subscribed before any sending starts)
