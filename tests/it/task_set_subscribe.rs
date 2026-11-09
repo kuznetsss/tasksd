@@ -71,8 +71,6 @@ async fn task_set_subscribe_stop_subscriber_when_no_subscriber() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "the test is flaky due to a race between task exit notification
-    and internal processes of task manager and subscription registry"]
 async fn task_set_subscribe_when_task_has_finished() {
     let (ctx, mut client) = running_app().await;
 
