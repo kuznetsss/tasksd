@@ -30,7 +30,7 @@ impl<Tag> Gate<Tag> {
     }
 }
 
-pub(in crate::tasks) fn gate<Tag>() -> (Gate<Tag>, GateGuard<Tag>) {
+pub fn gate<Tag>() -> (Gate<Tag>, GateGuard<Tag>) {
     let (sender, receiver) = watch::channel(());
     (
         Gate {

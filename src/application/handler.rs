@@ -9,10 +9,10 @@ use crate::{
     application::{
         ShutdownTrigger,
         error::ApplicationError,
-        subscriber::{CreatingEvent, Subscriber},
+        subscriber::{CreatingEvent, Subscriber, SubscriberSendingGateGuard},
         subscription_registry::SubscriptionRegistry,
     },
-    tasks::{AnyTask, TaskEntry, TaskError, TaskManager, TaskReadingGateGuard},
+    tasks::{AnyTask, TaskEntry, TaskError, TaskManager},
     transport::ConnectionWriter,
 };
 
@@ -41,7 +41,7 @@ impl Handler {
     }
 
     pub(in crate::application) async fn handle_request(&self, request: Request) {
-        let (response_body, task_reading_gate) = match request.body {
+        let (response_body, sending_gate_guard) = match request.body {
             RequestBody::TaskStart(params) => self
                 .start_task(params)
                 .map(|(response, guard)| (response.into(), Some(guard))),
@@ -68,38 +68,36 @@ impl Handler {
         }
         // Dropping after sending response to keep the order of messages:
         // response then task events
-        drop(task_reading_gate);
+        drop(sending_gate_guard);
     }
 
     fn start_task(
         &self,
         params: TaskStartParams,
-    ) -> Result<(ResponseResult, TaskReadingGateGuard), ApplicationError> {
+    ) -> Result<(ResponseResult, Option<SubscriberSendingGateGuard>), ApplicationError> {
         let task_info = self.task_manager.create_task(
             params.executable,
             params.args.unwrap_or_default(),
             params.working_dir,
         )?;
-        let task_events_stream = task_info
-            .task
-            .events_stream()
-            .expect("Task couldn't exit while its gate is not dropped");
+        let mut guard = None;
         if !params.subscribe_to_events.is_empty() {
-            let subscriber = Subscriber::new(
+            let (subscriber, sending_gate_guard) = Subscriber::new(
                 self.connection_writer.clone(),
                 task_info.task_id,
                 &params.subscribe_to_events,
-                task_events_stream,
+                task_info.events_stream,
                 CreatingEvent::Start,
                 task_info.exit_notification_gate,
             );
+            guard = Some(sending_gate_guard);
             self.subscription_registry
                 .spawn_subscriber(task_info.task_id, subscriber)?;
         }
         let response_result = ResponseResult::StartTaskResult {
             task_id: task_info.task_id,
         };
-        Ok((response_result, task_info.reading_gate_guard))
+        Ok((response_result, guard))
     }
 
     fn send_signal(
@@ -157,14 +155,15 @@ impl Handler {
         self.subscription_registry
             .update_or_spawn_subscriber(&params.task_id, &params.events, || {
                 let task_info = self.task_manager.get_running_task_handle(params.task_id)?;
-                Ok(Subscriber::new(
+                let (subscriber, _) = Subscriber::new(
                     self.connection_writer.clone(),
                     params.task_id,
                     &params.events,
                     task_info.task.events_stream()?,
                     CreatingEvent::Subscribe,
                     task_info.exit_notification_gate,
-                ))
+                );
+                Ok(subscriber)
             })
             .map(|_| ResponseResult::SubscribeResult {})
     }

@@ -16,7 +16,6 @@ use crate::{
     tasks::{
         OutputLine, TaskEventsStream,
         finished_task::FinishedTask,
-        gate::{Gate, GateGuard, gate},
         info::TaskInfo,
         output_buffer::OutputBuffer,
         sender::{TaskEvent, TaskSender},
@@ -24,12 +23,6 @@ use crate::{
     },
     utils::tracker::{PanicHandler, WrappedTaskTracker},
 };
-
-#[derive(Debug)]
-pub struct TaskReadingTag;
-
-type TaskReadingGate = Gate<TaskReadingTag>;
-pub type TaskReadingGateGuard = GateGuard<TaskReadingTag>;
 
 /// Representation of a running child process.
 /// All the output of the child process is captured into [`OutputBuffer`].
@@ -54,19 +47,19 @@ impl Task {
     pub(in crate::tasks) fn new(
         info: TaskInfo,
         output_buffer_capacity: usize,
-    ) -> Result<(Self, TaskReadingGateGuard), TaskError> {
+    ) -> Result<(Self, TaskEventsStream), TaskError> {
         let span = info_span!( "task",
                     executable = info.executable,
                     args = ?info.args);
         let _entered = span.enter();
 
         let sender = TaskSender::new();
+        let events_stream = sender.events_tx.subscribe();
+        let another_events_stream = events_stream.resubscribe();
 
         let info = Arc::new(info);
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
         let output_buffer = Arc::new(OutputBuffer::new(output_buffer_capacity));
-
-        let (gate, gate_guard) = gate();
 
         let mut child = Self::spawn_child_process(&info)
             .inspect_err(|e| warn!("Error spawning child process: {e}"))?;
@@ -78,7 +71,6 @@ impl Task {
         let stderr = child.stderr.take().expect("Child should have stderr");
         let stdin = child.stdin.take().expect("Child should have stdin");
 
-        let events_stream = sender.events_tx.subscribe();
         let (line_stream_tx, line_stream_rx) = mpsc::channel(Self::OUTPUT_LINE_CHANNEL_SIZE);
         Self::spawn_output_reading(
             &internal_tasks,
@@ -91,7 +83,6 @@ impl Task {
         Self::spawn_output_sending(
             &internal_tasks,
             line_stream_rx,
-            gate,
             sender.exit_tx.subscribe(),
             sender.events_tx,
             output_buffer.clone(),
@@ -99,13 +90,7 @@ impl Task {
         );
 
         let exit_rx = sender.exit_tx.subscribe();
-        Self::spawn_waiting_for_exit(
-            &internal_tasks,
-            sender.exit_tx,
-            gate_guard.gate(),
-            child,
-            span.clone(),
-        );
+        Self::spawn_waiting_for_exit(&internal_tasks, sender.exit_tx, child, span.clone());
 
         let task = Self {
             info,
@@ -117,7 +102,7 @@ impl Task {
             events_stream,
         };
 
-        Ok((task, gate_guard))
+        Ok((task, another_events_stream))
     }
 
     pub fn info(&self) -> Arc<TaskInfo> {
@@ -244,7 +229,6 @@ impl Task {
     fn spawn_output_sending(
         internal_tasks: &WrappedTaskTracker,
         mut line_stream_rx: mpsc::Receiver<String>,
-        mut read_gate: TaskReadingGate,
         mut on_exit_receiver: watch::Receiver<Option<ExitStatus>>,
         events_tx: broadcast::Sender<TaskEvent>,
         output_buffer: Arc<OutputBuffer>,
@@ -253,7 +237,6 @@ impl Task {
         internal_tasks
             .spawn(
                 async move {
-                    read_gate.wait().await;
                     let mut line_number = 0;
 
                     while let Some(line) = line_stream_rx.recv().await {
@@ -308,14 +291,12 @@ impl Task {
     fn spawn_waiting_for_exit(
         internal_tasks: &WrappedTaskTracker,
         internal_on_exit_sender: watch::Sender<Option<ExitStatus>>,
-        mut read_gate: TaskReadingGate,
         mut child: Child,
         span: Span,
     ) {
         internal_tasks
             .spawn(
                 async move {
-                    read_gate.wait().await;
                     let exit_status = child
                         .wait()
                         .await
@@ -370,7 +351,7 @@ mod tests {
         executable: impl Into<String>,
         args: &[&str],
         working_dir: impl Into<PathBuf>,
-    ) -> Result<(Task, TaskReadingGateGuard), TaskError> {
+    ) -> Result<(Task, TaskEventsStream), TaskError> {
         let info = TaskInfo {
             executable: executable.into(),
             args: args.iter().map(|&s| String::from(s)).collect(),
@@ -437,9 +418,7 @@ mod tests {
     #[tokio::test]
     async fn new_success() {
         let msg = "test";
-        let (task, gate) = make_task("echo", &[msg], current_dir().unwrap()).unwrap();
-        let events = task.events_stream().unwrap();
-        drop(gate);
+        let (task, events) = make_task("echo", &[msg], current_dir().unwrap()).unwrap();
         task.join().await;
         let events = collect_events(events);
         assert_eq!(events.len(), 2);
@@ -449,9 +428,7 @@ mod tests {
 
     #[tokio::test]
     async fn output_lines_are_contiguous() {
-        let (task, gate) = make_task("echo", &["line1\nline2"], current_dir().unwrap()).unwrap();
-        let events = task.events_stream().unwrap();
-        drop(gate);
+        let (task, events) = make_task("echo", &["line1\nline2"], current_dir().unwrap()).unwrap();
         task.join().await;
         let output_lines = collect_output(events);
         assert_eq!(output_lines.len(), 2);
@@ -506,7 +483,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn events_stream_returns_error_after_exit_() {
+    async fn events_stream_returns_error_after_exit() {
         let (task, _) = make_task("ls", &[], current_dir().unwrap()).unwrap();
         task.wait().await;
         let err = task.events_stream().unwrap_err();
@@ -531,9 +508,8 @@ mod tests {
     #[tokio::test]
     async fn events_stream_returns_error_after_exit_events_based() {
         // This test checks that events_stream() will return error after Exit event was published
-        let (task, guard) = make_task("echo", &["-n", "hello"], current_dir().unwrap()).unwrap();
-        let mut events = task.events_stream().unwrap();
-        drop(guard);
+        let (task, mut events) =
+            make_task("echo", &["-n", "hello"], current_dir().unwrap()).unwrap();
         let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
             .await
             .unwrap()
@@ -583,7 +559,7 @@ mod tests {
         tmp_file.flush().unwrap();
 
         let captured_output = Arc::new(Mutex::new(Vec::new()));
-        let (task, guard) = make_task(
+        let (task, mut events) = make_task(
             "cat",
             &[tmp_file.path().to_str().unwrap()],
             current_dir().unwrap(),
@@ -591,7 +567,6 @@ mod tests {
         .unwrap();
 
         let subscriber_handle = tokio::spawn({
-            let mut events = task.events_stream().unwrap();
             let captured_output = captured_output.clone();
             async move {
                 while let Ok(e) = events.recv().await {
@@ -601,7 +576,6 @@ mod tests {
                 }
             }
         });
-        drop(guard);
         let output_buffer = task.output_buffer().clone();
         task.join().await;
         tokio::time::timeout(Duration::from_secs(1), subscriber_handle)
@@ -696,7 +670,7 @@ mod tests {
             .unwrap();
         tmp_file.flush().unwrap();
 
-        let (task, gate) = make_task(
+        let (task, mut events) = make_task(
             "cat",
             &[tmp_file.path().as_str().unwrap()],
             current_dir().unwrap(),
@@ -705,7 +679,6 @@ mod tests {
 
         let captured_events = Arc::new(Mutex::new(Vec::new()));
         let subscriber_handle = tokio::spawn({
-            let mut events = task.events_stream().unwrap();
             let captured_events = captured_events.clone();
             async move {
                 while let Ok(e) = events.recv().await {
@@ -713,7 +686,6 @@ mod tests {
                 }
             }
         });
-        drop(gate);
         task.join().await;
         tokio::time::timeout(Duration::from_secs(1), subscriber_handle)
             .await
@@ -736,54 +708,6 @@ mod tests {
         task.wait().await;
         assert!(task.has_exited());
         task.join().await;
-    }
-
-    #[tokio::test]
-    async fn task_reading_gate_gates_events_sending() {
-        let (task, gate) = make_task("echo", &["hello"], current_dir().unwrap()).unwrap();
-        let mut events = task.events_stream().unwrap();
-        let handle = tokio::spawn(async move {
-            task.join().await;
-        });
-
-        tokio::task::yield_now().await;
-        assert!(!handle.is_finished());
-        assert!(events.try_recv().is_err());
-
-        drop(gate);
-        handle.await.unwrap();
-        assert!(events.try_recv().is_ok());
-    }
-
-    #[tokio::test]
-    async fn task_doesnt_exit_while_gate_exists() {
-        let tmp_dir = tempfile::tempdir().unwrap();
-        let tmp_file = tmp_dir.path().join("tmp_file");
-        let tmp_file_path = tmp_file.as_str().unwrap();
-        let (task, gate) = make_task("touch", &[tmp_file_path], current_dir().unwrap()).unwrap();
-        let task = Arc::new(task);
-        let handle = tokio::spawn({
-            let task = task.clone();
-            async move {
-                task.join().await;
-            }
-        });
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while !tmp_file.exists() {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
-
-        assert!(!task.has_exited());
-        assert!(!handle.is_finished());
-        drop(gate);
-        tokio::time::timeout(Duration::from_secs(1), handle)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(task.has_exited());
     }
 
     #[test]
