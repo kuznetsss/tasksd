@@ -78,7 +78,8 @@ A few reasons:
     branch, `[]` stops the already-finishing subscriber and succeeds)
 - [x] Enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
     once both races are fixed
-- [x] Refactor event-ordering gates: make `Task` gate-free, keep a single gate in the application layer
+- [x] Refactor event-ordering gates: make `Task` gate-free
+- [ ] Maybe refactor to remove TaskExitNotificationGate
 - [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
 - [ ] Support graceful shutdown by `SIGTERM`
 - [ ] Switch output stream to Vec<u8>
@@ -95,6 +96,7 @@ A few reasons:
       This will prevent tasksd from hanging on detached grand child processes
       but it will stop capturing detached process' output
 - [ ] Separate stdout and stderr in output notifications and in `OutputBuffer`
+- [ ] Unit tests for `application`
 
 Future ideas:
 - Tasks chains

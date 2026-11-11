@@ -55,7 +55,7 @@ impl Task {
 
         let sender = TaskSender::new();
         let events_stream = sender.events_tx.subscribe();
-        let another_events_stream = events_stream.resubscribe();
+        let events_stream_to_return = events_stream.resubscribe();
 
         let info = Arc::new(info);
         let internal_tasks = WrappedTaskTracker::new(PanicHandler::new_aborting());
@@ -102,7 +102,7 @@ impl Task {
             events_stream,
         };
 
-        Ok((task, another_events_stream))
+        Ok((task, events_stream_to_return))
     }
 
     pub fn info(&self) -> Arc<TaskInfo> {
