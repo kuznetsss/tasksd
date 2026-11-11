@@ -1,12 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
-use crate::tasks::{
-    TaskId,
-    finished_task::FinishedTask,
-    gate::{Gate, GateGuard},
-    recent_finished_tasks::RecentFinishedTasks,
-    task::Task,
-    task_manager::RunningTaskHandle,
+use crate::{
+    tasks::{
+        TaskId, finished_task::FinishedTask, recent_finished_tasks::RecentFinishedTasks,
+        task::Task, task_manager::RunningTaskHandle,
+    },
+    utils::gate::{Gate, GateGuard},
 };
 
 #[derive(Debug)]
@@ -98,7 +97,7 @@ mod tests {
     use std::{assert_matches, env::current_dir, time::Duration};
 
     use super::*;
-    use crate::tasks::{TaskInfo, gate::gate};
+    use crate::{tasks::TaskInfo, utils::gate::gate};
 
     fn make_task() -> (Arc<Task>, TaskExitNotificationGateGuard) {
         let task_info = TaskInfo {

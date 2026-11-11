@@ -8,15 +8,17 @@ use std::{
 use crate::{
     api::TaskExitStatus,
     tasks::{
+        TaskEventsStream,
         finished_task::FinishedTask,
-        gate::gate,
         info::TaskInfo,
         output_buffer::OutputBuffer,
-        task::TaskReadingGateGuard,
         task_error::TaskError,
         task_registry::{RunningTaskEntry, TaskExitNotificationGate, TaskRef, TaskRegistry},
     },
-    utils::tracker::{PanicHandler, WrappedTaskTracker},
+    utils::{
+        gate::gate,
+        tracker::{PanicHandler, WrappedTaskTracker},
+    },
 };
 
 use super::task::Task;
@@ -42,7 +44,7 @@ pub struct TaskManager {
 pub struct CreatedTaskInfo {
     pub task: Arc<Task>,
     pub task_id: TaskId,
-    pub reading_gate_guard: TaskReadingGateGuard,
+    pub events_stream: TaskEventsStream,
     pub exit_notification_gate: TaskExitNotificationGate,
 }
 
@@ -101,7 +103,7 @@ impl TaskManager {
                 .map(PathBuf::from)
                 .unwrap_or(current_dir().map_err(|_| TaskError::InvalidDirectory)?),
         };
-        let (task, reading_gate_guard) = Task::new(task_info, self.task_output_buffer_capacity)?;
+        let (task, events_stream) = Task::new(task_info, self.task_output_buffer_capacity)?;
         let (exit_notification_gate, exit_notification_gate_guard) = gate();
         let task = Arc::new(task);
         self.tasks.write().expect("RwLock is poisoned").add_running(
@@ -113,7 +115,7 @@ impl TaskManager {
         Ok(CreatedTaskInfo {
             task,
             task_id,
-            reading_gate_guard,
+            events_stream,
             exit_notification_gate,
         })
     }
@@ -292,15 +294,11 @@ mod tests {
     async fn create_task_success() {
         let tm = TaskManager::new(TASK_OUTPUT_BUFFER_CAPACITY);
         let CreatedTaskInfo {
-            task,
-            reading_gate_guard,
-            ..
+            mut events_stream, ..
         } = tm.spawn("echo", &["-n", "hello\nworld"], None).unwrap();
-        let mut events = task.events_stream().unwrap();
-        drop(reading_gate_guard);
         tm.join().await;
 
-        let events: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        let events: Vec<_> = std::iter::from_fn(|| events_stream.try_recv().ok()).collect();
         assert_eq!(events.len(), 3);
         assert_matches!(&events[0], TaskEvent::Output(s) if s.content == "hello\n");
         assert_matches!(&events[1], TaskEvent::Output(s) if s.content == "world");
@@ -326,15 +324,11 @@ mod tests {
             .to_owned();
 
         let CreatedTaskInfo {
-            task,
-            reading_gate_guard,
-            ..
+            mut events_stream, ..
         } = tm.spawn("pwd", &[], Some(dir.clone())).unwrap();
-        let mut events = task.events_stream().unwrap();
-        drop(reading_gate_guard);
 
         tm.join().await;
-        let event = events.recv().await.unwrap();
+        let event = events_stream.recv().await.unwrap();
         assert_matches!(event, TaskEvent::Output(s) if s.content == format!("{dir}\n"));
     }
 

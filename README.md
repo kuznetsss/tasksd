@@ -78,22 +78,8 @@ A few reasons:
     branch, `[]` stops the already-finishing subscriber and succeeds)
 - [x] Enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
     once both races are fixed
-- [ ] Refactor event-ordering gates: make `Task` gate-free, keep a single gate in the application layer
-      - [ ] `Task::new` returns the initial events receiver (subscribed before any sending starts)
-            instead of the caller calling `events_stream()` afterwards: `resubscribe()` starts at the
-            current tail, so the reading gate is what currently prevents a silent gap
-      - [ ] Remove `TaskReadingGateGuard` from `Task`: output sending and child reaping no longer wait on it
-            (a slow client currently stalls the child: response write blocks -> gate closed -> pipes fill)
-      - [ ] Drop the `.expect("Task couldn't exit while its gate is not dropped")` in `Handler::start_task`
-      - [ ] "Response before notifications" moves to the application layer: register the subscriber in
-            `SubscriptionRegistry` before writing the response (requests run concurrently, a `set_subscribe`
-            can race), but `Subscriber::run` waits on a start gate the handler releases after `write`
-      - [ ] Remove `TaskExitNotificationGate`: derive running/finished status from the task's own exit watch
-            (running entry with `has_exited()` reports `Finished`), add a sync exit-status accessor;
-            the `running` -> `finished` move becomes housekeeping only
-      - [ ] Accept/verify: `tasks.list` may report finished slightly before `task.exit` arrives
-      - [ ] Tests: no lost output lines when sending starts before the subscriber runs; overflow before
-            the start gate opens yields `missed_output` from line 0
+- [x] Refactor event-ordering gates: make `Task` gate-free
+- [ ] Maybe refactor to remove TaskExitNotificationGate
 - [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
 - [ ] Support graceful shutdown by `SIGTERM`
 - [ ] Switch output stream to Vec<u8>
@@ -110,6 +96,7 @@ A few reasons:
       This will prevent tasksd from hanging on detached grand child processes
       but it will stop capturing detached process' output
 - [ ] Separate stdout and stderr in output notifications and in `OutputBuffer`
+- [ ] Unit tests for `application`
 
 Future ideas:
 - Tasks chains

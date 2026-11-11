@@ -11,7 +11,14 @@ use crate::{
     api::{Notification, NotificationBody, SubscribeEventType, SubscribeEvents},
     tasks::{OutputLine, TaskEvent, TaskEventsStream, TaskExitNotificationGate, TaskId},
     transport::{ConnectionWriter, TransportError},
+    utils::gate::{Gate, GateGuard, gate},
 };
+
+#[derive(Debug)]
+pub struct SubscriberSendingTag;
+
+type SubscriberSendingGate = Gate<SubscriberSendingTag>;
+pub type SubscriberSendingGateGuard = GateGuard<SubscriberSendingTag>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::application) enum CreatingEvent {
@@ -28,6 +35,7 @@ pub(in crate::application) struct Subscriber {
     creating_event: CreatingEvent,
     cancel: CancellationToken,
     exit_notification_gate: TaskExitNotificationGate,
+    sending_gate: SubscriberSendingGate,
 }
 
 impl Subscriber {
@@ -38,22 +46,27 @@ impl Subscriber {
         events: TaskEventsStream,
         creating_event: CreatingEvent,
         exit_notification_gate: TaskExitNotificationGate,
-    ) -> Self {
+    ) -> (Self, SubscriberSendingGateGuard) {
         assert!(
             subscribe_to_events.contains(&SubscribeEventType::Exit),
             "Subscriber always subscribes to exit events"
         );
         let subscribe_to_output = subscribe_to_events.contains(&SubscribeEventType::Output);
-        Self {
-            connection_writer,
-            task_id,
-            subscribe_to_output: Arc::new(subscribe_to_output.into()),
-            events,
-            last_seen_line: None,
-            creating_event,
-            cancel: CancellationToken::new(),
-            exit_notification_gate,
-        }
+        let (gate, guard) = gate();
+        (
+            Self {
+                connection_writer,
+                task_id,
+                subscribe_to_output: Arc::new(subscribe_to_output.into()),
+                events,
+                last_seen_line: None,
+                creating_event,
+                cancel: CancellationToken::new(),
+                exit_notification_gate,
+                sending_gate: gate,
+            },
+            guard,
+        )
     }
 
     pub fn handle(&self) -> SubscriberHandle {
@@ -65,6 +78,7 @@ impl Subscriber {
 
     #[must_use]
     pub async fn run(mut self) -> Option<ExitEvent> {
+        self.sending_gate.wait().await;
         let exit_status = loop {
             let event = match self.cancel.run_until_cancelled(self.events.recv()).await {
                 Some(e) => e,
