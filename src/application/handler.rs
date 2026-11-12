@@ -44,14 +44,15 @@ impl Handler {
         let (response_body, sending_gate_guard) = match request.body {
             RequestBody::TaskStart(params) => self
                 .start_task(params)
-                .map(|(response, guard)| (response.into(), Some(guard))),
+                .map(|(response, guard)| (response.into(), guard)),
             RequestBody::TaskSendSignal(params) => {
                 self.send_signal(params).map(|r| (r.into(), None))
             }
             RequestBody::TaskGetOutput(params) => self.get_output(params).map(|r| (r.into(), None)),
-            RequestBody::TaskSetSubscribe(params) => {
-                self.set_subscribe(params).await.map(|r| (r.into(), None))
-            }
+            RequestBody::TaskSetSubscribe(params) => self
+                .set_subscribe(params)
+                .await
+                .map(|(r, guard)| (r.into(), guard)),
             RequestBody::TaskSendInput(params) => {
                 self.send_input(params).await.map(|r| (r.into(), None))
             }
@@ -133,17 +134,19 @@ impl Handler {
     async fn set_subscribe(
         &self,
         params: TaskSetSubscribeParams,
-    ) -> Result<ResponseResult, ApplicationError> {
+    ) -> Result<(ResponseResult, Option<SubscriberSendingGateGuard>), ApplicationError> {
         if params.events.is_empty() {
             match self
                 .subscription_registry
                 .stop_subscriber(&params.task_id)
                 .await
             {
-                Ok(_) => return Ok(ResponseResult::SubscribeResult {}),
+                Ok(_) => return Ok((ResponseResult::SubscribeResult {}, None)),
                 Err(ApplicationError::TaskError(TaskError::NotFound)) => {
                     match self.task_manager.find_task(params.task_id) {
-                        Some(AnyTask::Running(_)) => return Ok(ResponseResult::SubscribeResult {}),
+                        Some(AnyTask::Running(_)) => {
+                            return Ok((ResponseResult::SubscribeResult {}, None));
+                        }
                         Some(AnyTask::Finished(_)) => return Err(TaskError::AlreadyExited.into()),
                         None => return Err(TaskError::NotFound.into()),
                     }
@@ -155,7 +158,7 @@ impl Handler {
         self.subscription_registry
             .update_or_spawn_subscriber(&params.task_id, &params.events, || {
                 let task_info = self.task_manager.get_running_task_handle(params.task_id)?;
-                let (subscriber, _) = Subscriber::new(
+                let (subscriber, guard) = Subscriber::new(
                     self.connection_writer.clone(),
                     params.task_id,
                     &params.events,
@@ -163,9 +166,9 @@ impl Handler {
                     CreatingEvent::Subscribe,
                     task_info.exit_notification_gate,
                 );
-                Ok(subscriber)
+                Ok((subscriber, guard))
             })
-            .map(|_| ResponseResult::SubscribeResult {})
+            .map(|guard| (ResponseResult::SubscribeResult {}, guard))
     }
 
     async fn send_input(
