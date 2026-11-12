@@ -9,7 +9,7 @@ use crate::{
     api::{SubscribeEventType, SubscribeEvents},
     application::{
         ApplicationError,
-        subscriber::{Subscriber, SubscriberHandle},
+        subscriber::{Subscriber, SubscriberHandle, SubscriberSendingGateGuard},
     },
     tasks::{TaskError, TaskId},
     utils::tracker::WrappedTaskTracker,
@@ -48,17 +48,21 @@ impl SubscriptionRegistry {
         &self,
         task_id: &TaskId,
         events_to_subscribe: &SubscribeEvents,
-        subscriber_builder: impl FnOnce() -> Result<Subscriber, ApplicationError>,
-    ) -> Result<(), ApplicationError> {
+        subscriber_builder: impl FnOnce() -> Result<
+            (Subscriber, SubscriberSendingGateGuard),
+            ApplicationError,
+        >,
+    ) -> Result<Option<SubscriberSendingGateGuard>, ApplicationError> {
         let subs = self.subs.lock().expect("Poisoned lock");
         if let Some(entry) = subs.get(task_id) {
             entry
                 .handle
                 .set_subscribe_to_output(events_to_subscribe.contains(&SubscribeEventType::Output));
-            return Ok(());
+            return Ok(None);
         }
-        self.spawn_subscriber_impl(subs, *task_id, subscriber_builder()?)?;
-        Ok(())
+        let (subscriber, guard) = subscriber_builder()?;
+        self.spawn_subscriber_impl(subs, *task_id, subscriber)?;
+        Ok(Some(guard))
     }
 
     pub(in crate::application) async fn stop_subscriber(
