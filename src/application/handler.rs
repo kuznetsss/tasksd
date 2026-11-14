@@ -44,18 +44,21 @@ impl Handler {
         let (response_body, sending_gate_guard) = match request.body {
             RequestBody::TaskStart(params) => self
                 .start_task(params)
+                .await
                 .map(|(response, guard)| (response.into(), guard)),
-            RequestBody::TaskSendSignal(params) => {
-                self.send_signal(params).map(|r| (r.into(), None))
-            }
+            RequestBody::TaskSendSignal(params) => self
+                .send_signal(params)
+                .await
+                .map(|(r, guard)| (r.into(), guard)),
             RequestBody::TaskGetOutput(params) => self.get_output(params).map(|r| (r.into(), None)),
             RequestBody::TaskSetSubscribe(params) => self
                 .set_subscribe(params)
                 .await
                 .map(|(r, guard)| (r.into(), guard)),
-            RequestBody::TaskSendInput(params) => {
-                self.send_input(params).await.map(|r| (r.into(), None))
-            }
+            RequestBody::TaskSendInput(params) => self
+                .send_input(params)
+                .await
+                .map(|(r, guard)| (r.into(), guard)),
             RequestBody::TaskList(_) => Ok((self.task_list().into(), None)),
             RequestBody::TaskInfo(params) => self.task_info(params).map(|r| (r.into(), None)),
             RequestBody::Hello(params) => Ok((self.hello(params).into(), None)),
@@ -72,7 +75,7 @@ impl Handler {
         drop(sending_gate_guard);
     }
 
-    fn start_task(
+    async fn start_task(
         &self,
         params: TaskStartParams,
     ) -> Result<(ResponseResult, Option<SubscriberSendingGateGuard>), ApplicationError> {
@@ -83,7 +86,7 @@ impl Handler {
         )?;
         let mut guard = None;
         if !params.subscribe_to_events.is_empty() {
-            let (subscriber, sending_gate_guard) = Subscriber::new(
+            let subscriber = Subscriber::new(
                 self.connection_writer.clone(),
                 task_info.task_id,
                 &params.subscribe_to_events,
@@ -91,9 +94,10 @@ impl Handler {
                 CreatingEvent::Start,
                 task_info.exit_notification_gate,
             );
-            guard = Some(sending_gate_guard);
+            guard = Some(subscriber.sending_guard().await);
             self.subscription_registry
-                .spawn_subscriber(task_info.task_id, subscriber)?;
+                .spawn_subscriber(task_info.task_id, subscriber)
+                .await?;
         }
         let response_result = ResponseResult::StartTaskResult {
             task_id: task_info.task_id,
@@ -101,15 +105,19 @@ impl Handler {
         Ok((response_result, guard))
     }
 
-    fn send_signal(
+    async fn send_signal(
         &self,
         params: TaskSendSignalParams,
-    ) -> Result<ResponseResult, ApplicationError> {
+    ) -> Result<(ResponseResult, Option<SubscriberSendingGateGuard>), ApplicationError> {
+        let guard = self
+            .subscription_registry
+            .subscriber_sending_gate_guard(&params.task_id)
+            .await;
         self.task_manager
             .get_running_task(params.task_id)
             .and_then(|task| {
                 task.send_signal(params.signal)
-                    .map(|_| ResponseResult::SendSignalResult {})
+                    .map(move |_| (ResponseResult::SendSignalResult {}, guard))
             })
             .map_err(Into::into)
     }
@@ -158,7 +166,7 @@ impl Handler {
         self.subscription_registry
             .update_or_spawn_subscriber(&params.task_id, &params.events, || {
                 let task_info = self.task_manager.get_running_task_handle(params.task_id)?;
-                let (subscriber, guard) = Subscriber::new(
+                let subscriber = Subscriber::new(
                     self.connection_writer.clone(),
                     params.task_id,
                     &params.events,
@@ -166,18 +174,23 @@ impl Handler {
                     CreatingEvent::Subscribe,
                     task_info.exit_notification_gate,
                 );
-                Ok((subscriber, guard))
+                Ok(subscriber)
             })
+            .await
             .map(|guard| (ResponseResult::SubscribeResult {}, guard))
     }
 
     async fn send_input(
         &self,
         params: TaskSendInputParams,
-    ) -> Result<ResponseResult, ApplicationError> {
+    ) -> Result<(ResponseResult, Option<SubscriberSendingGateGuard>), ApplicationError> {
+        let guard = self
+            .subscription_registry
+            .subscriber_sending_gate_guard(&params.task_id)
+            .await;
         let task = self.task_manager.get_running_task(params.task_id)?;
         task.write_to_stdin(params.input.as_bytes()).await?;
-        Ok(ResponseResult::SendInputResult {})
+        Ok((ResponseResult::SendInputResult {}, guard))
     }
 
     fn hello(&self, params: HelloParams) -> ResponseResult {

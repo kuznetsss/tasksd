@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::{sync::watch, task::AbortHandle};
 
@@ -17,11 +14,10 @@ use crate::{
 
 #[derive(Clone)]
 pub(in crate::application) struct SubscriptionRegistry {
-    subs: Arc<Mutex<HashMap<TaskId, SubscriberEntry>>>,
+    subs: Arc<tokio::sync::Mutex<HashMap<TaskId, SubscriberEntry>>>,
     internal_coroutines: Arc<WrappedTaskTracker>,
 }
 
-#[derive(Clone)]
 struct SubscriberEntry {
     handle: SubscriberHandle,
     completion_receiver: watch::Receiver<bool>,
@@ -35,32 +31,29 @@ impl SubscriptionRegistry {
         }
     }
 
-    pub(in crate::application) fn spawn_subscriber(
+    pub(in crate::application) async fn spawn_subscriber(
         &self,
         task_id: TaskId,
         subscriber: Subscriber,
     ) -> Result<AbortHandle, ApplicationError> {
-        let subs = self.subs.lock().expect("Poisoned mutex");
+        let subs = self.subs.lock().await;
         self.spawn_subscriber_impl(subs, task_id, subscriber)
     }
 
-    pub(in crate::application) fn update_or_spawn_subscriber(
+    pub(in crate::application) async fn update_or_spawn_subscriber(
         &self,
         task_id: &TaskId,
         events_to_subscribe: &SubscribeEvents,
-        subscriber_builder: impl FnOnce() -> Result<
-            (Subscriber, SubscriberSendingGateGuard),
-            ApplicationError,
-        >,
+        subscriber_builder: impl FnOnce() -> Result<Subscriber, ApplicationError>,
     ) -> Result<Option<SubscriberSendingGateGuard>, ApplicationError> {
-        let subs = self.subs.lock().expect("Poisoned lock");
+        let subs = self.subs.lock().await;
         if let Some(entry) = subs.get(task_id) {
-            entry
-                .handle
-                .set_subscribe_to_output(events_to_subscribe.contains(&SubscribeEventType::Output));
-            return Ok(None);
+            let mut lock = entry.handle.lock().await;
+            lock.set_subscribe_to_output(events_to_subscribe.contains(&SubscribeEventType::Output));
+            return Ok(Some(lock.into_gate_guard()));
         }
-        let (subscriber, guard) = subscriber_builder()?;
+        let subscriber = subscriber_builder()?;
+        let guard = subscriber.sending_guard().await;
         self.spawn_subscriber_impl(subs, *task_id, subscriber)?;
         Ok(Some(guard))
     }
@@ -69,22 +62,34 @@ impl SubscriptionRegistry {
         &self,
         task_id: &TaskId,
     ) -> Result<(), ApplicationError> {
-        let mut entry = {
-            let subs = self.subs.lock().expect("Poisoned lock");
+        let mut completion_receiver = {
+            let subs = self.subs.lock().await;
             match subs.get(task_id) {
-                Some(h) => h.clone(),
+                Some(h) => {
+                    h.handle.stop();
+                    h.completion_receiver.clone()
+                }
                 None => return Err(TaskError::NotFound.into()),
             }
         };
-        entry.handle.stop();
-        let _ = entry.completion_receiver.changed().await;
+        let _ = completion_receiver.changed().await;
         Ok(())
+    }
+
+    pub(in crate::application) async fn subscriber_sending_gate_guard(
+        &self,
+        task_id: &TaskId,
+    ) -> Option<SubscriberSendingGateGuard> {
+        match self.subs.lock().await.get(task_id) {
+            Some(entry) => Some(entry.handle.gate_guard().await),
+            None => None,
+        }
     }
 
     /// Spawns subscriber with locked subs
     fn spawn_subscriber_impl(
         &self,
-        mut subs: MutexGuard<'_, HashMap<TaskId, SubscriberEntry>>,
+        mut subs: tokio::sync::MutexGuard<'_, HashMap<TaskId, SubscriberEntry>>,
         task_id: TaskId,
         subscriber: Subscriber,
     ) -> Result<AbortHandle, ApplicationError> {
@@ -103,10 +108,7 @@ impl SubscriptionRegistry {
                 async move {
                     let exit_event = subscriber.run().await;
                     assert!(
-                        subs.lock()
-                            .expect("Poisoned mutex")
-                            .remove(&task_id)
-                            .is_some(),
+                        subs.lock().await.remove(&task_id).is_some(),
                         "Missing subscriber handle for {task_id}"
                     );
                     // Sending notification only after removing Subscriber from subs so it is not available after exit notification is sent
