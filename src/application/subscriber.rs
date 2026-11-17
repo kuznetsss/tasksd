@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -11,14 +8,7 @@ use crate::{
     api::{Notification, NotificationBody, SubscribeEventType, SubscribeEvents},
     tasks::{OutputLine, TaskEvent, TaskEventsStream, TaskExitNotificationGate, TaskId},
     transport::{ConnectionWriter, TransportError},
-    utils::gate::{Gate, GateGuard, gate},
 };
-
-#[derive(Debug)]
-pub struct SubscriberSendingTag;
-
-type SubscriberSendingGate = Gate<SubscriberSendingTag>;
-pub type SubscriberSendingGateGuard = GateGuard<SubscriberSendingTag>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::application) enum CreatingEvent {
@@ -27,16 +17,22 @@ pub(in crate::application) enum CreatingEvent {
 }
 
 pub(in crate::application) struct Subscriber {
-    connection_writer: ConnectionWriter,
+    writer_fields: WriterFieldsMutex,
     task_id: TaskId,
-    subscribe_to_output: Arc<AtomicBool>,
     events: TaskEventsStream,
     last_seen_line: Option<usize>,
     creating_event: CreatingEvent,
     cancel: CancellationToken,
     exit_notification_gate: TaskExitNotificationGate,
-    sending_gate: SubscriberSendingGate,
 }
+
+struct WriterFields {
+    connection_writer: ConnectionWriter,
+    subscribe_to_output: bool,
+}
+type WriterFieldsMutex = Arc<tokio::sync::Mutex<WriterFields>>;
+
+pub struct SubscriberSendingGateGuard(tokio::sync::OwnedMutexGuard<WriterFields>);
 
 impl Subscriber {
     pub fn new(
@@ -46,39 +42,41 @@ impl Subscriber {
         events: TaskEventsStream,
         creating_event: CreatingEvent,
         exit_notification_gate: TaskExitNotificationGate,
-    ) -> (Self, SubscriberSendingGateGuard) {
+    ) -> Self {
         assert!(
             subscribe_to_events.contains(&SubscribeEventType::Exit),
             "Subscriber always subscribes to exit events"
         );
         let subscribe_to_output = subscribe_to_events.contains(&SubscribeEventType::Output);
-        let (gate, guard) = gate();
-        (
-            Self {
-                connection_writer,
-                task_id,
-                subscribe_to_output: Arc::new(subscribe_to_output.into()),
-                events,
-                last_seen_line: None,
-                creating_event,
-                cancel: CancellationToken::new(),
-                exit_notification_gate,
-                sending_gate: gate,
-            },
-            guard,
-        )
+        let writer_fields = tokio::sync::Mutex::new(WriterFields {
+            connection_writer,
+            subscribe_to_output,
+        })
+        .into();
+        Self {
+            writer_fields,
+            task_id,
+            events,
+            last_seen_line: None,
+            creating_event,
+            cancel: CancellationToken::new(),
+            exit_notification_gate,
+        }
+    }
+
+    pub async fn sending_guard(&self) -> SubscriberSendingGateGuard {
+        SubscriberSendingGateGuard(self.writer_fields.clone().lock_owned().await)
     }
 
     pub fn handle(&self) -> SubscriberHandle {
         SubscriberHandle {
-            subscribe_to_output: self.subscribe_to_output.clone(),
+            writer_fields: self.writer_fields.clone(),
             cancel: self.cancel.clone(),
         }
     }
 
     #[must_use]
     pub async fn run(mut self) -> Option<ExitEvent> {
-        self.sending_gate.wait().await;
         let exit_status = loop {
             let event = match self.cancel.run_until_cancelled(self.events.recv()).await {
                 Some(e) => e,
@@ -112,7 +110,7 @@ impl Subscriber {
             task_id: self.task_id,
             status: s,
             exit_notification_gate: self.exit_notification_gate,
-            connection_writer: self.connection_writer,
+            writer_fields: self.writer_fields,
             cancel: self.cancel,
         })
     }
@@ -127,11 +125,13 @@ impl Subscriber {
         }
 
         self.last_seen_line = Some(line.line_number);
-        if !self.subscribe_to_output.load(Ordering::Relaxed) {
+        let writer_fields = self.writer_fields.lock().await;
+        if !writer_fields.subscribe_to_output {
             return Ok(());
         }
         let notification: Notification = NotificationBody::task_output(self.task_id, line).into();
-        self.connection_writer
+        writer_fields
+            .connection_writer
             .write(&notification.to_json_string())
             .await
     }
@@ -152,7 +152,8 @@ impl Subscriber {
             .map(|l| l + number_of_missed_lines)
             .or_else(|| Some(number_of_missed_lines - 1));
 
-        if !self.subscribe_to_output.load(Ordering::Relaxed) {
+        let writer_fields = self.writer_fields.lock().await;
+        if !writer_fields.subscribe_to_output {
             return Ok(());
         }
         let notification: Notification = NotificationBody::task_missed_output(
@@ -162,7 +163,8 @@ impl Subscriber {
         )
         .into();
 
-        self.connection_writer
+        writer_fields
+            .connection_writer
             .write(&notification.to_json_string())
             .await
     }
@@ -170,17 +172,37 @@ impl Subscriber {
 
 #[derive(Clone)]
 pub(in crate::application) struct SubscriberHandle {
-    subscribe_to_output: Arc<AtomicBool>,
+    writer_fields: Arc<tokio::sync::Mutex<WriterFields>>,
     cancel: CancellationToken,
 }
 
 impl SubscriberHandle {
-    pub(in crate::application) fn set_subscribe_to_output(&self, v: bool) {
-        self.subscribe_to_output.store(v, Ordering::Relaxed);
-    }
-
     pub(in crate::application) fn stop(&self) {
         self.cancel.cancel();
+    }
+
+    pub(in crate::application) async fn lock(&self) -> SubscriberHandleLock {
+        SubscriberHandleLock {
+            writer_fields: self.writer_fields.clone().lock_owned().await,
+        }
+    }
+
+    pub(in crate::application) async fn gate_guard(&self) -> SubscriberSendingGateGuard {
+        SubscriberSendingGateGuard(self.writer_fields.clone().lock_owned().await)
+    }
+}
+
+pub(in crate::application) struct SubscriberHandleLock {
+    writer_fields: tokio::sync::OwnedMutexGuard<WriterFields>,
+}
+
+impl SubscriberHandleLock {
+    pub(in crate::application) fn set_subscribe_to_output(&mut self, v: bool) {
+        self.writer_fields.subscribe_to_output = v;
+    }
+
+    pub(in crate::application) fn into_gate_guard(self) -> SubscriberSendingGateGuard {
+        SubscriberSendingGateGuard(self.writer_fields)
     }
 }
 
@@ -189,7 +211,7 @@ pub(in crate::application) struct ExitEvent {
     task_id: TaskId,
     status: std::process::ExitStatus,
     exit_notification_gate: TaskExitNotificationGate,
-    connection_writer: ConnectionWriter,
+    writer_fields: WriterFieldsMutex,
     cancel: CancellationToken,
 }
 
@@ -202,6 +224,9 @@ impl ExitEvent {
                     NotificationBody::task_exit(self.task_id, self.status).into();
 
                 if let Err(e) = self
+                    .writer_fields
+                    .lock()
+                    .await
                     .connection_writer
                     .write(&notification.to_json_string())
                     .await

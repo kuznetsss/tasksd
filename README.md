@@ -79,6 +79,11 @@ A few reasons:
 - [x] Enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
     once both races are fixed
 - [x] Refactor event-ordering gates: make `Task` gate-free
+- [ ] Add guarantee that while we are processing request no notification is sent:
+      - put subscribe_to_output and connection_writer into a tokio::sync::Mutex
+      - GateGuard becomes a holder of a lock of that mutex
+      - most of api's handlers now should take the GateGuard to provide the guarantee
+      - shutdown should be handled differently
 - [ ] Maybe refactor to remove TaskExitNotificationGate
 - [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
 - [ ] Support graceful shutdown by `SIGTERM`
