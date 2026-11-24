@@ -79,8 +79,10 @@ A few reasons:
 - [x] Enable `task_set_subscribe_when_task_has_finished` in `tests/it/task_set_subscribe.rs`
     once both races are fixed
 - [x] Refactor event-ordering gates: make `Task` gate-free
-- [ ] Maybe refactor to remove TaskExitNotificationGate
 - [ ] shutdown period cli option - when to shutdown if there are no tasks running and no clients connected
+    - Create an events stream in TaskManager providing update of the number of tasks running
+    - Same for Application providing stream of the number of running sessions
+    - Shutdown timer consumes both streams
 - [ ] Support graceful shutdown by `SIGTERM`
 - [ ] Switch output stream to Vec<u8>
 - [ ] Use `thiserror` crate
